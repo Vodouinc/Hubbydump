@@ -121,23 +121,28 @@ func _update_shadow_size() -> void:
 		calculated_size = Vector2(10.0, 5.0)
 		return
 
-	# 4. Buildings & Base
+	# 4. Buildings & Base (Sized properly to cast beyond the sprite bases)
 	if parent.is_in_group("buildings") or parent.is_in_group("base"):
 		if "building_type" in parent:
 			var b_type = int(parent.get("building_type"))
 			match b_type:
 				0: # BARRICADE
-					calculated_size = Vector2(30.0, 16.0)
+					calculated_size = Vector2(46.0, 22.0)
+					ground_offset = Vector2(0.0, 6.0)
 				1: # GENERATOR
-					calculated_size = Vector2(34.0, 18.0)
+					calculated_size = Vector2(56.0, 26.0)
+					ground_offset = Vector2(0.0, 6.0)
 				2: # TURRET
-					calculated_size = Vector2(28.0, 14.0)
+					calculated_size = Vector2(48.0, 22.0)
+					ground_offset = Vector2(0.0, 6.0)
 				3: # MANUFACTORUM
-					calculated_size = Vector2(38.0, 20.0)
+					calculated_size = Vector2(68.0, 32.0)
+					ground_offset = Vector2(0.0, 8.0)
 				_:
-					calculated_size = Vector2(30.0, 16.0)
-		elif parent.name.begins_with("Base"):
-			calculated_size = Vector2(65.0, 35.0)
+					calculated_size = Vector2(46.0, 22.0)
+		elif parent.name.begins_with("Base") or parent.is_in_group("base"):
+			calculated_size = Vector2(110.0, 52.0)
+			ground_offset = Vector2(0.0, 10.0)
 		return
 
 	calculated_size = Vector2(14.0, 7.0)

@@ -42,7 +42,16 @@ func trigger_attack_fx() -> void:
 	attack_flash = 1.0
 	queue_redraw()
 
-func _draw(): 
+# In UnitSprite.gd, update _draw():
+func _draw():
+	# 1. Subtle Player Command Halo (Makes unit stand out from structures)
+	var parent_node = get_parent()
+	if parent_node and parent_node.is_in_group("players"):
+		var aura_pulse = 0.5 + sin(anim_time * 3.0) * 0.2
+		draw_arc(Vector2.ZERO, 19.0, 0, TAU, 24, Color(0.15, 0.9, 1.0, 0.35 * aura_pulse), 1.5)
+		draw_circle(Vector2(0, 19), 2.0, Color(0.15, 0.9, 1.0, 0.8)) # Cardinal pointer
+
+	# 2. Draw unit visuals
 	match unit_type: 
 		UnitType.ADMECH_TECHPRIEST: 
 			_draw_tech_priest() 

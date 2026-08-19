@@ -64,36 +64,38 @@ var spawn_lane_angles: Array[float] = []
 var spawn_serial: int = 0
 var objective_count: int = 0
  
-# UI Elements
-@onready var hud_root: Control = $UI
-@onready var lobby_panel: Control = $ClassSelectUI
-@onready var host_button: Button = $HostButton
-@onready var join_button: Button = $JoinButton
-@onready var ip_input: LineEdit = $IPInput
-@onready var ui_layer: CanvasLayer = $UI
-@onready var spawner: MultiplayerSpawner = $MultiplayerSpawner
-@onready var resource_label: Label = $ResourceLabel
-@onready var game_over_panel: PanelContainer = $GameOverUI/PanelContainer
- 
-# Wave & Game Over UI Elements
-@onready var game_over_ui: Control = $GameOverUI
-@onready var title_label: Label = $GameOverUI/PanelContainer/TitleLabel
-@onready var subtitle_label: Label = $GameOverUI/PanelContainer/SubtitleLabel
-@onready var restart_button: Button = $GameOverUI/PanelContainer/VBoxContainer/RestartButton
-@onready var wave_info_label: Label = $WaveInfoLabel
-@onready var top_bar: Control = $TopBar
- 
-# Procedural Background Drawing Node Reference (Inside GameOverUI)
-@onready var bg_drawing_node: Control = $GameOverUI/BackgroundDrawingNode
- 
-# Class Selection UI Elements
-@onready var techpriest_button: Button = $TechPriestButton
-@onready var skitarii_button: Button = $SkitariiButton
-@onready var ready_button: Button = $ReadyButton
-@onready var class_label: Label = $SelectedClassLabel
-@onready var roster_label: Label = $RosterLabel
-@onready var session_label: Label = $SessionLabel
- 
+# --------------------------------------------------
+# UI & NETWORK NODE REFERENCES (Using % Unique Names)
+# --------------------------------------------------
+@onready var ui_layer: CanvasLayer = get_node_or_null("UI")
+@onready var hud_root: Control = get_node_or_null("%RootControl")
+@onready var spawner: MultiplayerSpawner = get_node_or_null("MultiplayerSpawner")
+
+# Lobby & Connection UI
+@onready var lobby_panel: Control = get_node_or_null("%ClassSelectUI")
+@onready var host_button: Button = get_node_or_null("%HostButton")
+@onready var join_button: Button = get_node_or_null("%JoinButton")
+@onready var ip_input: LineEdit = get_node_or_null("%IPInput")
+@onready var resource_label: Label = get_node_or_null("%ResourceLabel")
+@onready var top_bar: Control = get_node_or_null("%TopBar")
+@onready var wave_info_label: Label = get_node_or_null("%WaveInfoLabel")
+
+# Game Over UI
+@onready var game_over_ui: Control = get_node_or_null("%GameOverUI")
+@onready var game_over_panel: PanelContainer = get_node_or_null("%GameOverPanel")
+@onready var title_label: Label = get_node_or_null("%TitleLabel")
+@onready var subtitle_label: Label = get_node_or_null("%SubtitleLabel")
+@onready var restart_button: Button = get_node_or_null("%RestartButton")
+@onready var bg_drawing_node: Control = get_node_or_null("%BackgroundDrawingNode")
+
+# Class Selection Buttons & Info
+@onready var techpriest_button: Button = get_node_or_null("%TechPriestButton")
+@onready var skitarii_button: Button = get_node_or_null("%SkitariiButton")
+@onready var ready_button: Button = get_node_or_null("%ReadyButton")
+@onready var class_label: Label = get_node_or_null("%SelectedClassLabel")
+@onready var roster_label: Label = get_node_or_null("%RosterLabel")
+@onready var session_label: Label = get_node_or_null("%SessionLabel")
+
 # Navigation Node Reference
 @onready var nav_region: NavigationRegion2D = get_node_or_null("NavigationRegion2D")
  
@@ -219,23 +221,43 @@ func _sync_lobby_loadout():
 func _show_lobby_ui():
 	match_started = false
 	is_ready = false
-	if lobby_panel:
-		lobby_panel.show()
-	if top_bar:
-		top_bar.hide()
+	
+	# Show all lobby elements
+	if lobby_panel: lobby_panel.show()
 	if host_button: host_button.show()
 	if join_button: join_button.show()
 	if ip_input: ip_input.show()
+	if techpriest_button: techpriest_button.show()
+	if skitarii_button: skitarii_button.show()
+	if ready_button: ready_button.show()
+	if class_label: class_label.show()
+	if roster_label: roster_label.show()
+	if session_label: session_label.show()
+	
+	if top_bar: top_bar.hide()
+	
 	_update_ready_button()
 	_update_class_ui()
 	_refresh_lobby_roster()
- 
+
 func _hide_lobby_ui():
 	_clear_class_preview()
-	if lobby_panel:
-		lobby_panel.hide()
-	if top_bar:
-		top_bar.show()
+	
+	# Hide all lobby UI elements cleanly
+	if lobby_panel: lobby_panel.hide()
+	if host_button: host_button.hide()
+	if join_button: join_button.hide()
+	if ip_input: ip_input.hide()
+	if techpriest_button: techpriest_button.hide()
+	if skitarii_button: skitarii_button.hide()
+	if ready_button: ready_button.hide()
+	if class_label: class_label.hide()
+	if roster_label: roster_label.hide()
+	if session_label: session_label.hide()
+	
+	# Show gameplay HUD
+	if top_bar: top_bar.show()
+
  
 func _set_session_text(message: String) -> void:
 	if session_label:
@@ -306,11 +328,15 @@ func _try_start_match() -> void:
 	var ids := _session_peer_ids()
 	if ids.is_empty():
 		return
+		
+	# Verify that every player in the session has clicked READY
 	for id in ids:
 		if not player_ready.get(id, false):
 			_set_session_text("Waiting on the cadre to Ready.")
 			return
-		_begin_match()
+			
+	# Start match ONLY when everyone is ready
+	_begin_match()
  
 func _session_peer_ids() -> Array[int]:
 	var ids: Array[int] = [1]
@@ -379,7 +405,11 @@ func _on_join_pressed():
  
 func spawn_player(peer_id: int):
 	if not multiplayer.is_server(): return
-	if has_node(str(peer_id)): return
+	
+	# Guard against spawning duplicates if the player already exists
+	for p in get_tree().get_nodes_in_group("players"):
+		if p.name == str(peer_id):
+			return
 	
 	var chosen_class = player_classes.get(peer_id, CharacterClass.SKITARII_MARSHAL)
 	var spawn_data = {
@@ -387,7 +417,8 @@ func spawn_player(peer_id: int):
 		"peer_id": peer_id,
 		"class": chosen_class
 	}
-	spawner.spawn(spawn_data)
+	if spawner:
+		spawner.spawn(spawn_data)
  
 @rpc("any_peer", "call_local", "reliable")
 func select_class(chosen_class: int):
@@ -811,7 +842,7 @@ func sync_resources(scrap: int, requisition: int):
 	scrap_amount = scrap
 	requisition_amount = requisition
 	if resource_label:
-		resource_label.text = "SCRAP  %d      REQ  %d" % [scrap_amount, requisition_amount]
+		resource_label.text = "⚙ SCRAP: %d      ⚡ REQUISITION: %d" % [scrap_amount, requisition_amount]
  
 @rpc("call_local", "reliable")
 func sync_wave_info(wave_number: int, message: String):

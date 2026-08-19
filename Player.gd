@@ -20,6 +20,12 @@ var attack_cooldown: float = 0.4
 var bullet_damage: int = 20
 var can_attack: bool = true
 
+# --- SERVO-SKULL CONFIGURATION ---
+var active_servo_skulls: Array = []
+const MAX_SERVO_SKULLS: int = 2          # Maximum active skulls at once
+const SERVO_SKULL_SCRAP_COST: int = 20   # Must match AbilityHUD.gd
+const SERVO_SKULL_REQ_COST: int = 10     # Must match AbilityHUD.gd
+
 # --- MELEE ATTACK ANIMATION & HITBOX STATE ---
 var is_attacking_anim: bool = false
 var attack_progress: float = 0.0
@@ -88,7 +94,7 @@ func _ready():
 			camera.enabled = true
 			camera.make_current()
 			
-		var hud = get_node_or_null("/root/Main/UI/AbilityHUD")
+		var hud = get_tree().get_first_node_in_group("ability_hud")
 		if hud and hud.has_method("setup_hud_for_player"):
 			hud.setup_hud_for_player(self)
 	else:
@@ -150,7 +156,7 @@ func apply_class_stats():
 		health_bar.setup(current_health, max_health)
 
 	if is_multiplayer_authority():
-		var hud = get_node_or_null("/root/Main/UI/AbilityHUD")
+		var hud = get_tree().get_first_node_in_group("ability_hud")
 		if hud and hud.has_method("update_hud_layout"):
 			hud.update_hud_layout()
 
@@ -524,16 +530,39 @@ func request_upgrade_bodyguards():
 				
 @rpc("any_peer", "call_local", "reliable")
 func request_spawn_servo_skull():
-	if current_class == PlayerClass.MELEE and multiplayer.is_server():
-		var main_node = get_parent()
-		if main_node and "spawner" in main_node:
+	if current_class != PlayerClass.MELEE or not multiplayer.is_server():
+		return
+
+	# Clean up any destroyed / freed skulls from the array
+	active_servo_skulls = active_servo_skulls.filter(func(s): return is_instance_valid(s))
+	
+	# 1. Enforce Max Limit
+	if active_servo_skulls.size() >= MAX_SERVO_SKULLS:
+		print("[Servo-Skull] Max active skulls reached (%d/%d)!" % [active_servo_skulls.size(), MAX_SERVO_SKULLS])
+		return
+
+	var main_node = get_parent()
+	if not main_node or not ("scrap_amount" in main_node and "requisition_amount" in main_node):
+		return
+
+	# 2. Enforce Resource Cost Check
+	if main_node.scrap_amount >= SERVO_SKULL_SCRAP_COST and main_node.requisition_amount >= SERVO_SKULL_REQ_COST:
+		# Deduct resources
+		main_node.scrap_amount -= SERVO_SKULL_SCRAP_COST
+		main_node.requisition_amount -= SERVO_SKULL_REQ_COST
+		main_node.rpc("sync_resources", main_node.scrap_amount, main_node.requisition_amount)
+
+		# 3. Spawn the Servo-Skull
+		if "spawner" in main_node and main_node.spawner:
 			var skull_data = {
 				"type": "servo_skull",
 				"name": "ServoSkull_" + str(name) + "_" + str(randi()),
 				"position": global_position + Vector2(30, -30),
 				"owner_id": name.to_int()
 			}
-			main_node.spawner.spawn(skull_data)
+			var new_skull = main_node.spawner.spawn(skull_data)
+			if new_skull:
+				active_servo_skulls.append(new_skull)
 
 @rpc("any_peer", "call_local", "reliable")
 func request_upgrade_damage():
@@ -569,7 +598,7 @@ func sync_damage_upgrade(new_level: int, new_damage: int):
 	damage_upgrade_level = new_level
 	bullet_damage = new_damage
 	if is_multiplayer_authority():
-		var hud = get_node_or_null("/root/Main/UI/AbilityHUD")
+		var hud = get_tree().get_first_node_in_group("ability_hud")
 		if hud and hud.has_method("update_hud_layout"):
 			hud.update_hud_layout()
 
@@ -607,7 +636,7 @@ func sync_speed_upgrade(new_level: int, new_speed: float):
 	speed_upgrade_level = new_level
 	speed = new_speed
 	if is_multiplayer_authority():
-		var hud = get_node_or_null("/root/Main/UI/AbilityHUD")
+		var hud = get_tree().get_first_node_in_group("ability_hud")
 		if hud and hud.has_method("update_hud_layout"):
 			hud.update_hud_layout()
 
@@ -615,7 +644,7 @@ func sync_speed_upgrade(new_level: int, new_speed: float):
 func sync_bodyguard_level(new_level: int):
 	bodyguard_level = new_level
 	if is_multiplayer_authority():
-		var hud = get_node_or_null("/root/Main/UI/AbilityHUD")
+		var hud = get_tree().get_first_node_in_group("ability_hud")
 		if hud and hud.has_method("update_hud_layout"):
 			hud.update_hud_layout()
 

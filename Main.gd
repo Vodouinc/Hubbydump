@@ -644,9 +644,10 @@ func request_rematch():
  
 @rpc("call_local", "reliable")
 func execute_rematch():
-	if game_over_ui: game_over_ui.hide()
+	if game_over_ui: 
+		game_over_ui.hide()
 	
-	# Reset wave and resource variables
+	# Reset wave and resource counters
 	current_wave = 0
 	active_enemies = 0
 	enemies_left_to_spawn = 0
@@ -659,30 +660,37 @@ func execute_rematch():
 	building_count = 0
 	
 	if multiplayer.is_server():
-		if wave_timer: wave_timer.stop()
+		if wave_timer: 
+			wave_timer.stop()
+			
+		# Despawn match entities
 		for enemy in get_tree().get_nodes_in_group("enemies"): enemy.queue_free()
 		for player in get_tree().get_nodes_in_group("players"): player.queue_free()
 		for building in get_tree().get_nodes_in_group("buildings"): building.queue_free()
 		for objective in get_tree().get_nodes_in_group("objectives"): objective.queue_free()
 		for bg in get_tree().get_nodes_in_group("bodyguards"): bg.queue_free()
+		for skull in get_tree().get_nodes_in_group("ServoSkull"): skull.queue_free()
+		for scrap in get_tree().get_nodes_in_group("scrap"): scrap.queue_free()
 		
+		# Reset base core
 		var base = get_tree().get_first_node_in_group("base")
 		if base and base.has_method("sync_base_health"):
 			base.rpc("sync_base_health", base.max_health)
 		
 		rpc("sync_resources", scrap_amount, requisition_amount)
-		
-		# Cleanly close and drop the multiplayer peer across the board on rematch
-		if multiplayer.has_multiplayer_peer():
-			multiplayer.multiplayer_peer.close()
-			multiplayer.multiplayer_peer = null
- 
+		request_navmesh_rebake()
+
+	# DO NOT close multiplayer.multiplayer_peer! Keep the connection alive.
 	match_started = false
-	player_classes.clear()
-	player_ready.clear()
+	for peer_id in player_ready.keys():
+		player_ready[peer_id] = false
 	is_ready = false
+	
 	_show_lobby_ui()
-	_set_session_text("Match reset. Host or join to assemble the cadre.")
+	_set_session_text("Match reset. Ready up when the cadre is set.")
+	
+	if multiplayer.is_server():
+		_broadcast_lobby_state()
  
 # --------------------------------------------------
 # CUSTOM SPAWNER
@@ -877,6 +885,9 @@ func request_build_structure(build_pos: Vector2, building_type: int = 0):
 		
 		if spawner:
 			spawner.spawn(building_data)
+
+func request_navmesh_rebake() -> void:
+	update_navmesh()
  
 func update_navmesh():
 	if not nav_region:

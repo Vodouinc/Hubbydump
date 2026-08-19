@@ -382,26 +382,44 @@ func draw_omnissian_axe_sweep():
 	draw_line(blade_bottom_socket, axe_head_pos, steel_edge_color, 2.5)
 
 func check_lingering_melee_hits():
+	var space_state = get_world_2d().direct_space_state
+	if not space_state:
+		return
+
+	# Query the physics engine in an 85px radius around the player
+	var shape = CircleShape2D.new()
+	shape.radius = 85.0
+
+	var query = PhysicsShapeQueryParameters2D.new()
+	query.shape = shape
+	query.transform = Transform2D(0.0, global_position)
+	query.collide_with_areas = false
+	query.collide_with_bodies = true
+
+	var results = space_state.intersect_shape(query, 32)
+	
 	var eased_progress = pow(attack_progress, 2.5) 
 	var total_cone = deg_to_rad(120.0)
 	var current_axe_angle = attack_angle - (total_cone / 2.0) + (eased_progress * total_cone)
 	var axe_dir = Vector2.RIGHT.rotated(current_axe_angle)
 
-	for enemy in get_tree().get_nodes_in_group("enemies"):
-		if not is_instance_valid(enemy) or enemy in already_hit_enemies:
+	for hit in results:
+		var target_body = hit.collider
+		if not is_instance_valid(target_body) or target_body in already_hit_enemies:
+			continue
+		if not (target_body.is_in_group("enemies") or target_body.is_in_group("objectives")):
 			continue
 			
-		var to_enemy = enemy.global_position - global_position
-		var dist = to_enemy.length()
+		var to_target = target_body.global_position - global_position
+		var angle_diff = abs(axe_dir.angle_to(to_target))
 		
-		if dist <= 85.0:
-			var angle_diff = abs(axe_dir.angle_to(to_enemy))
-			if angle_diff <= deg_to_rad(35.0):
-				already_hit_enemies.append(enemy)
-				if enemy.has_method("take_damage"):
-					var knockback_dir = to_enemy.normalized()
-					var knockback_strength: float = 250.0
-					enemy.take_damage(40, knockback_dir * knockback_strength)
+		# 35-degree hit tolerance along the active axe head position
+		if angle_diff <= deg_to_rad(35.0):
+			already_hit_enemies.append(target_body)
+			if target_body.has_method("take_damage"):
+				var knockback_dir = to_target.normalized()
+				var knockback_strength: float = 250.0
+				target_body.take_damage(40, knockback_dir * knockback_strength)
 
 # --- UNHANDLED INPUT (KEYBOARD & MOUSE) ---
 

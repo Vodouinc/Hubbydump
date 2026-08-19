@@ -216,22 +216,21 @@ func take_damage(amount: int, knockback_impulse: Vector2 = Vector2.ZERO) -> void
 		rpc("sync_health", new_health)
 		rpc("trigger_hit_flash")
 		
-		# --- SPAWN FLOATING DAMAGE NUMBERS ACROSS NETWORK ---
+		# Spawn floating combat text over unreliable channel
 		var random_offset = Vector2(randf_range(-12.0, 12.0), randf_range(-10.0, 5.0))
 		rpc("spawn_damage_number", amount, global_position + random_offset)
 
-@rpc("call_local", "reliable")
+@rpc("call_local", "unreliable")
 func spawn_damage_number(amount: int, spawn_pos: Vector2) -> void:
 	var dmg_label = Label.new()
 	dmg_label.script = load("res://DamageNumber.gd")
 	dmg_label.global_position = spawn_pos
 	
-	# Optional: randomize critical hits on heavy damage (e.g. >= 35)
 	var is_crit = amount >= 35
 	get_parent().add_child(dmg_label)
 	dmg_label.setup(amount, is_crit)
 
-@rpc("call_local", "reliable")
+@rpc("call_local", "unreliable")
 func trigger_hit_flash() -> void:
 	if visual_sprite:
 		visual_sprite.modulate = Color(2.0, 0.3, 0.3)

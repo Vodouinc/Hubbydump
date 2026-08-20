@@ -53,11 +53,12 @@ func _setup_pulse_renderer() -> void:
 		conduit_pulse_renderer = get_node("ConduitPulseRenderer")
 
 func _on_node_added(node: Node) -> void:
-	if node.is_in_group("buildings") or node.is_in_group("base") or node.name.begins_with("Building") or node.name.begins_with("Base"):
+	# Only refresh when a relevant StaticBody2D structure changes
+	if node is StaticBody2D and (node.is_in_group("buildings") or node.is_in_group("base")):
 		call_deferred("refresh_foundations")
 
 func _on_node_removed(node: Node) -> void:
-	if node.is_in_group("buildings") or node.is_in_group("base") or node.name.begins_with("Building") or node.name.begins_with("Base"):
+	if node is StaticBody2D and (node.is_in_group("buildings") or node.is_in_group("base")):
 		call_deferred("refresh_foundations")
 
 func refresh_foundations() -> void:
@@ -205,13 +206,7 @@ func _draw() -> void:
 		draw_circle(p_pos + Vector2(1.5, 2.0), p_radius, Color(0.20, 0.14, 0.08, 0.35))
 		draw_circle(p_pos, p_radius, sand_pebble_color)
 
-	# 2. Static Industrial Slabs
-	for slab in cached_slab_polygons:
-		var shadow_poly = PackedVector2Array()
-		for pt in slab:
-			shadow_poly.append(pt + Vector2(4.0, 6.0))
-		draw_colored_polygon(shadow_poly, Color(0.04, 0.05, 0.07, 0.38))
-
+		# 2. Static Industrial Slabs (Drop shadow loop removed!)
 	for slab in cached_slab_polygons:
 		draw_colored_polygon(slab, ferro_plate_base)
 

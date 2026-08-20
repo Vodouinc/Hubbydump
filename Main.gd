@@ -851,6 +851,13 @@ func sync_tech_tree(shields: bool, lasers: bool, nanobots: bool):
 	get_tree().call_group("research_ui", "refresh_tech_cards")
 
 @rpc("any_peer", "call_local", "reliable")
+func request_upgrade_gate(building_name: String) -> void:
+	if not multiplayer.is_server(): return
+	var building = _find_building_by_name(building_name)
+	if is_instance_valid(building) and building.has_method("try_upgrade_to_gate"):
+		building.try_upgrade_to_gate()
+
+@rpc("any_peer", "call_local", "reliable")
 func request_upgrade_turret(building_name: String) -> void:
 	if not multiplayer.is_server(): return
 	var building = _find_building_by_name(building_name)

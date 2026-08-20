@@ -40,6 +40,15 @@ const WALL_LINK_RANGE: float = 95.0
 const WALL_THICKNESS: float = 14.0
 var connected_neighbor_ids: Array[int] = []
 var active_wall_colliders: Dictionary = {}
+var is_gate: bool = false
+var is_gate_open: bool = false
+var gate_check_timer: float = 0.0
+const GATE_SENSOR_RADIUS: float = 55.0
+
+var noosphere_check_timer: float = 0.0
+var turret_target_scan_timer: float = 0.0
+var cached_target_enemy: Node2D = null
+
 
 @onready var visual_spriteNode = get_node_or_null("VisualBuildingSprite")
 @onready var turret_timer: Timer = get_node_or_null("TurretTimer")
@@ -74,10 +83,13 @@ func _process(delta: float):
 	if is_preview:
 		return
 
-	# 1. Update Noosphere Connection Status
-	_update_noosphere_connection()
+	# 1. Throttle Noosphere check to every 0.25s (instead of 60 FPS)
+	noosphere_check_timer += delta
+	if noosphere_check_timer >= 0.25:
+		noosphere_check_timer = 0.0
+		_update_noosphere_connection()
 
-	# 2. Host Logic: Shield Regeneration, Nanobot Repair, Turret Laser
+	# 2. Host Buffs and Turret Logic
 	if (not multiplayer.has_multiplayer_peer()) or multiplayer.is_server():
 		_process_server_buffs(delta)
 		if building_type == Type.TURRET:
@@ -86,6 +98,65 @@ func _process(delta: float):
 
 	if building_type == Type.TURRET and is_instance_valid(turret_light):
 		turret_light.rotation = current_turret_rotation
+
+# Handle Gate automatic proximity sensor
+	if is_gate and ((not multiplayer.has_multiplayer_peer()) or multiplayer.is_server()):
+		gate_check_timer += delta
+		if gate_check_timer >= 0.08:
+			gate_check_timer = 0.0
+			_process_gate_sensor()
+
+func _process_gate_sensor():
+	var should_open = false
+	var friendlies: Array = get_tree().get_nodes_in_group("players")
+	friendlies.append_array(get_tree().get_nodes_in_group("bodyguards"))
+	friendlies.append_array(get_tree().get_nodes_in_group("ServoSkull"))
+
+	for f in friendlies:
+		if is_instance_valid(f) and global_position.distance_to(f.global_position) <= GATE_SENSOR_RADIUS:
+			should_open = true
+			break
+
+	if should_open != is_gate_open:
+		is_gate_open = should_open
+		rpc("sync_gate_state", is_gate_open)
+
+@rpc("call_local", "reliable")
+func sync_gate_state(open_state: bool):
+	is_gate_open = open_state
+	# Disable wall colliders when gate is open for friendlies
+	for col in active_wall_colliders.values():
+		if is_instance_valid(col):
+			col.set_deferred("disabled", is_gate_open)
+
+	if visual_spriteNode and "is_gate_open" in visual_spriteNode:
+		visual_spriteNode.is_gate_open = is_gate_open
+		visual_spriteNode.queue_redraw()
+
+
+# --- UPGRADE: BARRICADE -> AIRLOCK GATE ---
+
+func try_upgrade_to_gate() -> bool:
+	if not multiplayer.is_server() or building_type != Type.BARRICADE or is_gate:
+		return false
+	var main_node = get_tree().get_first_node_in_group("main")
+	if not main_node:
+		return false
+
+	if main_node.scrap_amount >= 10 and main_node.requisition_amount >= 5:
+		main_node.scrap_amount -= 10
+		main_node.requisition_amount -= 5
+		main_node.rpc("sync_resources", main_node.scrap_amount, main_node.requisition_amount)
+		rpc("sync_gate_upgrade")
+		return true
+	return false
+
+@rpc("call_local", "reliable")
+func sync_gate_upgrade():
+	is_gate = true
+	if visual_spriteNode and "is_gate" in visual_spriteNode:
+		visual_spriteNode.is_gate = true
+		visual_spriteNode.queue_redraw()
 
 func _update_noosphere_connection():
 	var was_connected = is_noosphere_connected
@@ -342,10 +413,16 @@ func trigger_generator_pulse():
 		visual_spriteNode.pulse_generator()
 
 func _process_turret_logic(delta: float):
-	var target = _find_closest_enemy()
-	if target:
-		var target_angle = (target.global_position - global_position).angle()
-		current_turret_rotation = lerp_angle(current_turret_rotation, target_angle, 3.5 * delta)
+	turret_target_scan_timer += delta
+	if turret_target_scan_timer >= 0.1:
+		turret_target_scan_timer = 0.0
+		# Retain current target if still valid and in range
+		if not is_instance_valid(cached_target_enemy) or global_position.distance_to(cached_target_enemy.global_position) > TURRET_RANGE_BY_LEVEL[turret_upgrade_level]:
+			cached_target_enemy = _find_closest_enemy()
+
+	if is_instance_valid(cached_target_enemy):
+		var target_angle = (cached_target_enemy.global_position - global_position).angle()
+		current_turret_rotation = lerp_angle(current_turret_rotation, target_angle, 4.0 * delta)
 		rpc("sync_turret_rotation", current_turret_rotation)
 	else:
 		var base_center = Vector2.ZERO
@@ -361,8 +438,7 @@ func _process_turret_logic(delta: float):
 func sync_turret_rotation(rot: float):
 	current_turret_rotation = rot
 	if is_instance_valid(visual_spriteNode):
-		if "turret_rotation" in visual_spriteNode:
-			visual_spriteNode.turret_rotation = current_turret_rotation
+		visual_spriteNode.turret_rotation = current_turret_rotation
 		visual_spriteNode.queue_redraw()
 
 func _find_closest_enemy() -> Node2D:
@@ -465,8 +541,9 @@ func _setup_turret_light():
 		turret_light = PointLight2D.new()
 		turret_light.name = "TurretLight"
 		turret_light.enabled = false
-		turret_light.shadow_enabled = true
-		turret_light.energy = 0.9
+		# DISABLED dynamic shadow mapping on 10+ lights to save 80% GPU fillrate:
+		turret_light.shadow_enabled = false
+		turret_light.energy = 0.85
 		var size = 256
 		var img = Image.create(size, size, false, Image.FORMAT_RGBA8)
 		img.fill(Color(0, 0, 0, 0))
@@ -481,7 +558,7 @@ func _setup_turret_light():
 					if angle_diff <= deg_to_rad(35.0):
 						img.set_pixel(x, y, Color(0.25, 0.75, 0.95, (1.0 - dist/radius) * 0.9))
 		turret_light.texture = ImageTexture.create_from_image(img)
-		turret_light.texture_scale = 3.5
+		turret_light.texture_scale = 3.2
 		turret_light.offset = Vector2(size * 0.22, 0)
 		add_child(turret_light)
 

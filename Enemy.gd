@@ -20,6 +20,8 @@ var base_node: Node2D = null
 var is_objective_guard: bool = false
 var guard_anchor: Vector2 = Vector2.ZERO
 var counts_toward_wave: bool = true
+var aggro_scan_timer: float = 0.0
+var cached_target_friendly: Node2D = null
 
 # Hit Feedback Variables
 var knockback_velocity: Vector2 = Vector2.ZERO
@@ -55,7 +57,12 @@ func setup_navigation() -> void:
 	_update_nav_target()
 
 func _on_nav_map_changed(_map_rid: RID) -> void:
-	_update_nav_target()
+	# Stagger target re-checks over 0.05 - 0.25s so the CPU doesn't spike all at once
+	var delay = randf_range(0.05, 0.25)
+	get_tree().create_timer(delay).timeout.connect(func():
+		if is_instance_valid(self):
+			_update_nav_target()
+	)
 
 func _update_nav_target() -> void:
 	if not is_instance_valid(base_node):
@@ -108,6 +115,32 @@ func _process(delta: float) -> void:
 
 func _physics_process(delta: float) -> void:
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+		return
+		
+	if is_objective_guard:
+		aggro_scan_timer += delta
+		if aggro_scan_timer >= 0.15:
+			aggro_scan_timer = 0.0
+			cached_target_friendly = _find_nearest_friendly_in_range(260.0)
+
+		if is_instance_valid(cached_target_friendly):
+			var dist = global_position.distance_to(cached_target_friendly.global_position)
+			if dist <= attack_range:
+				velocity = Vector2.ZERO
+				perform_attack(cached_target_friendly)
+			else:
+				velocity = global_position.direction_to(cached_target_friendly.global_position) * speed
+			move_and_slide()
+			return
+
+		# Patrol Orbit
+		var wander_radius = 90.0 + (float(get_instance_id() % 6) * 16.0)
+		var patrol_angle = (Time.get_ticks_msec() * 0.0007) + (float(get_instance_id()) * 1.2)
+		var patrol_target = guard_anchor + Vector2.RIGHT.rotated(patrol_angle) * wander_radius
+
+		var dist_to_patrol = global_position.distance_to(patrol_target)
+		velocity = global_position.direction_to(patrol_target) * (speed * 0.55) if dist_to_patrol > 15.0 else Vector2.ZERO
+		move_and_slide()
 		return
 
 	# Handle Attack Cooldown

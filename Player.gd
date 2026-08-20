@@ -55,6 +55,8 @@ var preview_instance: Node2D = null
 var preview_is_valid: bool = false
 var preview_connection_target: Node2D = null
 var hovered_interact_building: Node2D = null
+const BARRICADE_WALL_LENGTH: float = 75.0
+const BARRICADE_SNAP_DETECTION_RANGE: float = 110.0
 
 # ==============================================================================
 # MODULAR GRID & WALL BALANCING CONSTANTS
@@ -286,24 +288,34 @@ func _is_position_on_industrial_ground(pos: Vector2) -> bool:
 	return false
 
 func _get_snapped_build_position(mouse_pos: Vector2) -> Vector2:
+	# 1. Barricade-to-Barricade Uniform 8-Way Snapping
+	if selected_building_type == 0:
+		var buildings = get_tree().get_nodes_in_group("buildings")
+		var closest_barricade: Node2D = null
+		var closest_d = BARRICADE_SNAP_DETECTION_RANGE
+
+		for b in buildings:
+			if not is_instance_valid(b) or b == preview_instance: continue
+			if "building_type" in b and int(b.building_type) == 0:
+				if "is_preview" in b and b.is_preview: continue
+				var d = mouse_pos.distance_to(b.global_position)
+				if d < closest_d and d > 20.0:
+					closest_d = d
+					closest_barricade = b
+
+		if is_instance_valid(closest_barricade):
+			var to_mouse = mouse_pos - closest_barricade.global_position
+			# Snap to exact 45-degree angle (0, 45, 90, 135, 180, 225, 270, 315)
+			var angle = snapped(to_mouse.angle(), PI / 4.0)
+			# Exact uniform 75px length on all angles!
+			return (closest_barricade.global_position + Vector2.RIGHT.rotated(angle) * BARRICADE_WALL_LENGTH).snapped(Vector2(2, 2))
+
+	# 2. Standard Grid Snapping for All Other Buildings
 	var size = _get_building_size(selected_building_type)
 	var cells_x = int(round(size.x / GRID_SIZE))
 	var cells_y = int(round(size.y / GRID_SIZE))
-	
-	var snapped_x: float
-	var snapped_y: float
-	
-	# Odd cell footprints center on cell midpoints (+16px); even footprints center on grid line intersections (+0px)
-	if cells_x % 2 == 1:
-		snapped_x = floor(mouse_pos.x / GRID_SIZE) * GRID_SIZE + (GRID_SIZE * 0.5)
-	else:
-		snapped_x = round(mouse_pos.x / GRID_SIZE) * GRID_SIZE
-		
-	if cells_y % 2 == 1:
-		snapped_y = floor(mouse_pos.y / GRID_SIZE) * GRID_SIZE + (GRID_SIZE * 0.5)
-	else:
-		snapped_y = round(mouse_pos.y / GRID_SIZE) * GRID_SIZE
-		
+	var snapped_x = floor(mouse_pos.x / GRID_SIZE) * GRID_SIZE + (GRID_SIZE * 0.5) if cells_x % 2 == 1 else round(mouse_pos.x / GRID_SIZE) * GRID_SIZE
+	var snapped_y = floor(mouse_pos.y / GRID_SIZE) * GRID_SIZE + (GRID_SIZE * 0.5) if cells_y % 2 == 1 else round(mouse_pos.y / GRID_SIZE) * GRID_SIZE
 	return Vector2(snapped_x, snapped_y)
 
 func _is_build_location_valid(build_pos: Vector2) -> bool:
@@ -404,16 +416,18 @@ func request_interact_nearby_structure() -> void:
 
 	var closest: Node2D = _get_closest_interactable_structure()
 	if is_instance_valid(closest):
-		var b_type = int(closest.building_type)
-		if b_type == 2: # Turret Upgrade
-			var main_node = get_tree().get_first_node_in_group("main")
-			if main_node: main_node.rpc_id(1, "request_upgrade_turret", closest.name)
-		elif b_type == 4: # Distributor -> Antenna Upgrade
-			var main_node = get_tree().get_first_node_in_group("main")
-			if main_node: main_node.rpc_id(1, "request_upgrade_distributor", closest.name)
-		elif b_type == 6: # Research Shrine -> Open Tech-Vault Terminal!
-			if r_ui and r_ui.has_method("open_terminal"):
-				r_ui.open_terminal(closest)
+		var main_node = get_tree().get_first_node_in_group("main")
+		if main_node:
+			var b_type = int(closest.building_type)
+			if b_type == 0: # Barricade -> Gate Upgrade!
+				main_node.rpc_id(1, "request_upgrade_gate", closest.name)
+			elif b_type == 2: # Turret Upgrade
+				main_node.rpc_id(1, "request_upgrade_turret", closest.name)
+			elif b_type == 4: # Distributor -> Antenna Upgrade
+				main_node.rpc_id(1, "request_upgrade_distributor", closest.name)
+			elif b_type == 6: # Research Shrine -> Tech Vault
+				if r_ui and r_ui.has_method("open_terminal"):
+					r_ui.open_terminal(closest)
 	
 func _get_closest_interactable_structure() -> Node2D:
 	var closest: Node2D = null
@@ -421,8 +435,9 @@ func _get_closest_interactable_structure() -> Node2D:
 	for building in get_tree().get_nodes_in_group("buildings"):
 		if not is_instance_valid(building) or not ("building_type" in building): continue
 		var b_type = int(building.building_type)
-		# Only Turrets (2), Distributors (4), and Research Shrines (6) have [E] interactions
-		if not (b_type in [2, 4, 6]): continue
+		# Barricades (0 - if not gate), Turrets (2), Distributors (4), Research Shrines (6)
+		if b_type == 0 and building.get("is_gate"): continue # Already a gate
+		if not (b_type in [0, 2, 4, 6]): continue
 		var dist = global_position.distance_to(building.global_position)
 		if dist < closest_dist:
 			closest_dist = dist
@@ -474,10 +489,10 @@ func _draw():
 		draw_omnissian_axe_sweep()
 		
 	# 1. Floating In-World Contextual Interaction Tooltip
-	if is_instance_valid(hovered_interact_building):
+	if _is_local_authority() and is_instance_valid(hovered_interact_building):
 		var local_b_pos = hovered_interact_building.global_position - global_position
 		_draw_inworld_interaction_tooltip(local_b_pos, int(hovered_interact_building.building_type))
-
+	
 	# 2. Build Preview Holograms & Blueprint Footprints
 	if is_building_mode and is_instance_valid(preview_instance):
 		var local_build_pos = preview_instance.global_position - global_position
@@ -563,6 +578,10 @@ func _draw_inworld_interaction_tooltip(local_pos: Vector2, b_type: int):
 	var current_req = main_node.requisition_amount if main_node else 0
 
 	match b_type:
+		0: # Barricade
+			if not hovered_interact_building.get("is_gate"):
+				prompt_text = "[E] Upgrade Gate"
+				cost_text = "⚙ 10  ⚡ 5"
 		2: # Turret
 			var lvl = hovered_interact_building.get("turret_upgrade_level") if "turret_upgrade_level" in hovered_interact_building else 0
 			var costs = [10, 20, 35]
@@ -580,18 +599,20 @@ func _draw_inworld_interaction_tooltip(local_pos: Vector2, b_type: int):
 
 	if prompt_text.is_empty(): return
 
-	# Floating Holographic Badge Position
+	# 1. Single Floating Holographic Badge Frame
 	var badge_pos = local_pos + Vector2(0, -44)
-	var badge_rect = Rect2(badge_pos - Vector2(80, 13), Vector2(160, 26))
+	var badge_rect = Rect2(badge_pos - Vector2(85, 13), Vector2(170, 26))
 	
-	# Box Backdrop & Edge Framing
-	draw_rect(badge_rect, Color(0.05, 0.07, 0.10, 0.90), true)
+	draw_rect(badge_rect, Color(0.05, 0.07, 0.10, 0.92), true)
 	draw_rect(badge_rect, Color(0.20, 0.88, 1.0, 0.85), false, 1.2)
 	draw_line(badge_pos + Vector2(0, 13), local_pos + Vector2(0, -18), Color(0.20, 0.88, 1.0, 0.35), 1.5)
 
-	# Draw Holographic Text Inside Badge
+	# 2. Draw Text (Crisp Left/Right separation)
 	var font = ThemeDB.fallback_font
 	var font_size = 11
+	
+	draw_string(font, badge_pos + Vector2(-78, 4), prompt_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.90, 0.86, 0.74))
+	draw_string(font, badge_pos + Vector2(10, 4), cost_text, HORIZONTAL_ALIGNMENT_RIGHT, 70, font_size, Color(0.35, 0.90, 1.0))
 	
 	# Left Action Label
 	draw_string(font, badge_pos + Vector2(-74, 4), prompt_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.90, 0.86, 0.74))

@@ -6,26 +6,29 @@ extends Node
 @onready var canvas_modulate: CanvasModulate = $CanvasModulate
 
 var time_of_day: float = 0.0
+var shadow_update_accumulator: float = 0.0
+const SHADOW_UPDATE_INTERVAL: float = 0.15 # 6-7 updates/sec is plenty for shadows
 
 func _ready() -> void:
 	time_of_day = starting_time
+	_apply_lighting(true)
 
 func _process(delta: float) -> void:
 	time_of_day = fposmod(time_of_day + delta / full_cycle_seconds, 1.0)
-	_apply_lighting()
+	shadow_update_accumulator += delta
+	if shadow_update_accumulator >= SHADOW_UPDATE_INTERVAL:
+		shadow_update_accumulator = 0.0
+		_apply_lighting(false)
 
-func _apply_lighting() -> void:
-	# Noon is at 0.25; the sun falls below the horizon after 0.5.
+func _apply_lighting(force: bool = false) -> void:
 	var sun_height = maxf(0.0, sin(time_of_day * TAU))
 	var daylight = smoothstep(0.0, 0.18, sun_height)
 
-	# East-west azimuth with a slight groundward Y so casts read as lying on the sand.
 	var azimuth = Vector2(cos(time_of_day * TAU), sin(time_of_day * TAU) * 0.38)
 	if azimuth.length_squared() < 0.0001:
 		azimuth = Vector2.RIGHT
 	var shadow_dir = -azimuth.normalized()
 
-	# Long at dawn/dusk, short at noon, none at night (contact blob only).
 	var low_sun = 1.0 - sun_height
 	var shadow_length = lerpf(7.0, 44.0, low_sun) * daylight
 

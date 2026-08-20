@@ -38,8 +38,8 @@ func set_preview_mode(enabled: bool):
 		if not is_in_group("navmesh_source"):
 			add_to_group("navmesh_source")
 
-func take_damage(amount: int):
-	if multiplayer.is_server():
+func take_damage(amount: int, _knockback: Vector2 = Vector2.ZERO):
+	if multiplayer.is_server() or not multiplayer.has_multiplayer_peer():
 		var new_hp = max(0, current_health - amount)
 		rpc("sync_base_health", new_hp)
 

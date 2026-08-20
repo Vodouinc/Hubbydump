@@ -764,6 +764,28 @@ func _unhandled_input(event):
 	if not is_multiplayer_authority():
 		return
 
+	# ESC Key Hierarchy
+	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		# 1. If Research Terminal is open, close it first
+		var r_ui = get_tree().get_first_node_in_group("research_ui")
+		if r_ui and r_ui.visible:
+			r_ui.close_terminal()
+			get_viewport().set_input_as_handled()
+			return
+
+		# 2. If Build Mode is active, cancel placement preview
+		if is_building_mode:
+			_cancel_build_mode()
+			get_viewport().set_input_as_handled()
+			return
+
+		# 3. Otherwise, Toggle Global Synchronized Pause Menu!
+		var p_ui = get_tree().get_first_node_in_group("pause_menu")
+		if p_ui and p_ui.has_method("toggle_my_pause_menu"):
+			p_ui.toggle_my_pause_menu()
+			get_viewport().set_input_as_handled()
+			return
+
 # Skitarii Marshal Stance and Ultimate Inputs
 	if current_class == PlayerClass.RANGED and event is InputEventKey and event.pressed:
 		if event.keycode == KEY_SPACE or event.keycode == KEY_F:

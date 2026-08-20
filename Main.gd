@@ -63,6 +63,8 @@ var wave_player_count: int = 1
 var spawn_lane_angles: Array[float] = []
 var spawn_serial: int = 0
 var objective_count: int = 0
+var wave_squad_queue: Array[Dictionary] = [] # Queue of { "lane": int, "units": Array[int], "delay": float }
+var current_squad_timer: float = 0.0
 
 # --- GLOBAL TECH TREE UNLOCKS ---
 var tech_shields_unlocked: bool = false
@@ -506,42 +508,206 @@ func start_next_wave():
 		game_over(true)
 		return
  
-	# Spawn WAAAGH! War-Camps at regular intervals throughout the campaign
-	if current_wave in [3, 6, 9, 12]:
+	# Dynamic Totem Drops: A new war camp drops into the desert every 2 waves!
+	if current_wave in [2, 4, 6, 8, 10, 12, 14]:
 		spawn_waaagh_idol()
 		
 	wave_player_count = max(1, get_tree().get_nodes_in_group("players").size())
-	wave_spawn_queue = _build_wave_spawn_queue(current_wave, wave_player_count)
-	enemies_left_to_spawn = wave_spawn_queue.size()
 	spawn_lane_angles = _build_spawn_lanes(current_wave, wave_player_count)
-	spawn_serial = 0
-	is_wave_active = true
+	wave_squad_queue = _build_wave_squads(current_wave, wave_player_count)
 	
-	rpc("sync_wave_info", current_wave, "WAVE " + str(current_wave) + "/" + str(max_waves) + " — " + str(enemies_left_to_spawn) + " CONTACTS")
+	enemies_left_to_spawn = 0
+	for squad in wave_squad_queue:
+		enemies_left_to_spawn += squad["units"].size()
+		
+	is_wave_active = true
+	_broadcast_wave_hud()
 	
 	if wave_timer == null:
 		wave_timer = Timer.new()
-		wave_timer.timeout.connect(_spawn_wave_tick)
+		wave_timer.timeout.connect(_spawn_squad_tick)
 		add_child(wave_timer)
 		
-	wave_timer.wait_time = max(0.42, 1.35 - (current_wave * 0.06) - ((wave_player_count - 1) * 0.04))
+	# Waves arrive faster if 3+ totems are active!
+	var speed_up = 0.75 if get_active_totem_count() >= 3 else 1.0
+	wave_timer.wait_time = 2.0 * speed_up
 	wave_timer.start()
 
  
-func _spawn_wave_tick():
-	if not wave_spawn_queue.is_empty():
-		var chosen_type = wave_spawn_queue.pop_front()
-		spawn_enemy(chosen_type, spawn_serial % max(1, spawn_lane_angles.size()))
-		spawn_serial += 1
-		enemies_left_to_spawn = wave_spawn_queue.size()
-		active_enemies += 1
+func _spawn_squad_tick():
+	if not wave_squad_queue.is_empty():
+		var squad = wave_squad_queue.pop_front()
+		_spawn_tactical_squad(squad)
+		
+		# Set delay until the NEXT squad assault arrives (creates a push -> clear -> push rhythm!)
+		if not wave_squad_queue.is_empty():
+			var next_squad = wave_squad_queue.front()
+			wave_timer.wait_time = next_squad["delay"]
+			wave_timer.start()
+		else:
+			wave_timer.stop()
 	else:
 		wave_timer.stop()
+
+## Spawns an entire squad clustered together in their assigned lane
+func _spawn_tactical_squad(squad: Dictionary):
+	var lane_idx: int = squad["lane"]
+	var units: Array = squad["units"]
+	
+	var base_node = get_tree().get_first_node_in_group("base")
+	var center_pos = base_node.global_position if base_node else Vector2(500, 500)
+	
+	var lane_angle = spawn_lane_angles[lane_idx % spawn_lane_angles.size()]
+	var spawn_dist = randf_range(700.0, 850.0)
+	var squad_center = center_pos + Vector2.RIGHT.rotated(lane_angle) * spawn_dist
+	
+	for unit_type in units:
+		enemy_count += 1
+		# Cluster units within 45px radius of squad center (Meatshields screen heavy units!)
+		var offset = Vector2.RIGHT.rotated(randf() * TAU) * randf_range(10.0, 48.0)
+		var spawn_pos = squad_center + offset
+		
+		var enemy_data = {
+			"type": "enemy",
+			"name": "Enemy_" + str(enemy_count),
+			"enemy_type": unit_type,
+			"position": spawn_pos,
+			"is_objective_guard": false,
+			"counts_toward_wave": true
+		}
+		
+		if spawner:
+			spawner.spawn(enemy_data)
+			active_enemies += 1
+			enemies_left_to_spawn = max(0, enemies_left_to_spawn - 1)
+			
+	rpc("sync_wave_info", current_wave, "WAVE " + str(current_wave) + "/" + str(max_waves) + " — " + str(enemies_left_to_spawn + active_enemies) + " CONTACTS")
+
+# ===========================================================================
+# WAAAGH mechanics
+# ===========================================================================
+func get_active_totem_count() -> int:
+	return get_tree().get_nodes_in_group("objectives").size()
+
+## Each active totem grants +12% speed to all attacking Orks
+func get_waaagh_speed_multiplier() -> float:
+	var count = get_active_totem_count()
+	return 1.0 + (count * 0.12)
+
+## Each active totem grants +10% damage to all attacking Orks
+func get_waaagh_damage_multiplier() -> float:
+	var count = get_active_totem_count()
+	return 1.0 + (count * 0.10)
+
+func _broadcast_wave_hud():
+	var totem_count = get_active_totem_count()
+	var buff_pct = int(totem_count * 12)
+	var threat_tag = " | 🔥 WAAAGH! THREAT: " + str(totem_count) + " (+" + str(buff_pct) + "% SPD)" if totem_count > 0 else ""
+	var hud_msg = "WAVE " + str(current_wave) + "/" + str(max_waves) + " — " + str(enemies_left_to_spawn + active_enemies) + " CONTACTS" + threat_tag
+	rpc("sync_wave_info", current_wave, hud_msg)
+
+
+
+# ==============================================================================
+# SQUAD FORMATION GENERATOR
+# ==============================================================================
+
+func _build_wave_squads(wave: int, player_count: int) -> Array[Dictionary]:
+	var threat_budget = int(round((14.0 + pow(wave, 1.36) * 6.2) * (1.0 + 0.65 * (player_count - 1))))
+	var squads: Array[Dictionary] = []
+	var lane_counter = 0
+	
+	while threat_budget > 0:
+		var available_squads = _get_available_squad_templates(wave)
+		var affordable: Array[Dictionary] = []
+		
+		for t in available_squads:
+			if t["cost"] <= threat_budget:
+				affordable.append(t)
+				
+		if affordable.is_empty():
+			# Dump leftover points into a small gretchin chaff pack
+			squads.append({
+				"lane": lane_counter % max(1, spawn_lane_angles.size()),
+				"units": [0, 0, 0],
+				"delay": 3.0
+			})
+			break
+			
+		var chosen = affordable.pick_random()
+		squads.append({
+			"lane": lane_counter % max(1, spawn_lane_angles.size()),
+			"units": chosen["units"].duplicate(),
+			"delay": chosen["delay"]
+		})
+		
+		threat_budget -= chosen["cost"]
+		lane_counter += 1
+		
+	return squads
+
+func _get_available_squad_templates(wave: int) -> Array[Dictionary]:
+	var templates: Array[Dictionary] = []
+	
+	# 1. Gretchin Meatshield Swarm (Early & Flank distraction)
+	templates.append({
+		"name": "gretchin_swarm",
+		"cost": 6,
+		"units": [0, 0, 0, 0, 0, 0],
+		"delay": 3.5
+	})
+	
+	# 2. Squig Flank Stampede (Fast rushers)
+	if wave >= 2:
+		templates.append({
+			"name": "squig_pack",
+			"cost": 8,
+			"units": [1, 1, 1, 1],
+			"delay": 4.0
+		})
+		
+	# 3. Ork Boy Patrol (Frontline infantry + chaff screen)
+	if wave >= 3:
+		templates.append({
+			"name": "boyz_squad",
+			"cost": 12,
+			"units": [2, 2, 0, 0, 0, 0], # 2 Boyz screened by 4 Gretchin
+			"delay": 4.5
+		})
+		
+	# 4. Stormboy Jump Assault (Leapers bypass walls)
+	if wave >= 6:
+		templates.append({
+			"name": "stormboy_raiders",
+			"cost": 12,
+			"units": [3, 3, 3, 1], # 3 Stormboyz + 1 Squig
+			"delay": 5.0
+		})
+		
+	# 5. Nob Warband (Armored Boss with Bodyguards & Meatshields)
+	if wave >= 8:
+		templates.append({
+			"name": "nob_warband",
+			"cost": 20,
+			"units": [4, 2, 2, 0, 0, 0, 0], # 1 Nob + 2 Boyz + 4 Gretchin meatshields!
+			"delay": 6.0
+		})
+		
+	# 6. Armored Siege Column (Late game heavy assault)
+	if wave >= 11:
+		templates.append({
+			"name": "armored_column",
+			"cost": 28,
+			"units": [4, 4, 3, 3, 2, 1, 1], # 2 Nobz, 2 Stormboyz, 1 Boy, 2 Squigs
+			"delay": 7.0
+		})
+		
+	return templates
  
 func _build_wave_spawn_queue(wave: int, player_count: int) -> Array[int]:
-	# Exponential threat budgeting for 15 waves
-	var threat_budget = int(round((10.0 + pow(wave, 1.32) * 5.2) * (1.0 + 0.65 * (player_count - 1))))
-	var unit_costs = {0: 1, 1: 2, 2: 4}
+	var threat_budget = int(round((12.0 + pow(wave, 1.35) * 5.8) * (1.0 + 0.65 * (player_count - 1))))
+	# Unit threat costs: 0: Gretchin (1), 1: Squig (2), 2: Boy (4), 3: Stormboy (3), 4: Nob (8)
+	var unit_costs = {0: 1, 1: 2, 2: 4, 3: 3, 4: 8}
 	var roster = _get_wave_roster(wave)
 	var queue: Array[int] = []
  
@@ -552,33 +718,33 @@ func _build_wave_spawn_queue(wave: int, player_count: int) -> Array[int]:
 			if unit_costs[entry.type] <= threat_budget:
 				affordable.append(entry)
 				total_weight += entry.weight
-		if affordable.is_empty():
-			break
+		if affordable.is_empty(): break
  
 		var roll = randf() * total_weight
 		var chosen_type: int = affordable.back().type
 		for entry in affordable:
 			roll -= entry.weight
-			if roll <= 0.0:
-				chosen_type = entry.type
-				break
+			if roll <= 0.0: chosen_type = entry.type; break
 		queue.append(chosen_type)
 		threat_budget -= unit_costs[chosen_type]
  
 	return queue
 
+
 func _get_wave_roster(wave: int) -> Array[Dictionary]:
 	if wave <= 2:
-		return [{"type": 0, "weight": 0.85}, {"type": 1, "weight": 0.15}]
-	elif wave <= 4:
-		return [{"type": 0, "weight": 0.60}, {"type": 1, "weight": 0.40}]
-	elif wave <= 7:
-		return [{"type": 0, "weight": 0.45}, {"type": 1, "weight": 0.40}, {"type": 2, "weight": 0.15}]
+		return [{"type": 0, "weight": 0.80}, {"type": 1, "weight": 0.20}]
+	elif wave <= 5:
+		return [{"type": 0, "weight": 0.45}, {"type": 1, "weight": 0.35}, {"type": 2, "weight": 0.20}]
+	elif wave <= 8:
+		# Stormboyz start leaping over walls!
+		return [{"type": 0, "weight": 0.30}, {"type": 1, "weight": 0.30}, {"type": 2, "weight": 0.25}, {"type": 3, "weight": 0.15}]
 	elif wave <= 11:
-		return [{"type": 0, "weight": 0.30}, {"type": 1, "weight": 0.42}, {"type": 2, "weight": 0.28}]
+		# Ork Nobz arrive!
+		return [{"type": 0, "weight": 0.20}, {"type": 1, "weight": 0.25}, {"type": 2, "weight": 0.25}, {"type": 3, "weight": 0.20}, {"type": 4, "weight": 0.10}]
 	else:
-		# Waves 12-15: Massive Ork Boyz Elites & Squig Breachers
-		return [{"type": 0, "weight": 0.18}, {"type": 1, "weight": 0.42}, {"type": 2, "weight": 0.40}]
+		# Late Game Waves (12-15): Heavy armored Nobz & Stormboy swarms!
+		return [{"type": 0, "weight": 0.10}, {"type": 1, "weight": 0.25}, {"type": 2, "weight": 0.25}, {"type": 3, "weight": 0.25}, {"type": 4, "weight": 0.15}]
 
 func _build_spawn_lanes(wave: int, player_count: int) -> Array[float]:
 	var lane_count = 1
@@ -722,6 +888,7 @@ func execute_rematch():
 	scrap_amount = 0
 	requisition_amount = 0
 	building_count = 0
+	wave_squad_queue.clear()
 	
 	# Reset Tech Tree
 	tech_shields_unlocked = false

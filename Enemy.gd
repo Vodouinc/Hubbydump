@@ -1,6 +1,6 @@
 extends CharacterBody2D
 
-enum EnemyType { GRETCHIN, SQUIG, ORK_BOY }
+enum EnemyType { GRETCHIN, SQUIG, ORK_BOY, STORMBOY, NOB }
 
 @export var type: EnemyType = EnemyType.GRETCHIN:
 	set(value):
@@ -16,14 +16,26 @@ enum EnemyType { GRETCHIN, SQUIG, ORK_BOY }
 
 var current_health: int = 50
 var attack_cooldown_timer: float = 0.0
+var ability_timer: float = 0.0
 var base_node: Node2D = null
 var is_objective_guard: bool = false
 var guard_anchor: Vector2 = Vector2.ZERO
 var counts_toward_wave: bool = true
+
+# AI Navigation & Flocking State
 var aggro_scan_timer: float = 0.0
 var cached_target_friendly: Node2D = null
+var is_jumping_or_lunging: bool = false
+var rage_buff_timer: float = 0.0
+var is_mob_rule_active: bool = false
+var is_berserk: bool = false
+var lateral_fanning_seed: float = 0.0
 
-# Hit Feedback Variables
+# Gretchin Scrap Stealing State
+var targeted_scrap_item: Node2D = null
+var has_stolen_scrap: bool = false
+
+# Hit Feedback
 var knockback_velocity: Vector2 = Vector2.ZERO
 var flash_timer: float = 0.0
 
@@ -31,9 +43,12 @@ var flash_timer: float = 0.0
 @onready var visual_sprite: Node2D = get_node_or_null("VisualSprite")
 @onready var nav_agent: NavigationAgent2D = get_node_or_null("NavigationAgent2D")
 @onready var shadow_node: Node2D = get_node_or_null("Shadow")
+@onready var collision_shape: CollisionShape2D = get_node_or_null("CollisionShape2D")
 
 func _ready() -> void:
 	add_to_group("enemies")
+	lateral_fanning_seed = float(get_instance_id() % 13) * 0.48
+	
 	if is_objective_guard:
 		add_to_group("objective_guards")
 	
@@ -57,11 +72,9 @@ func setup_navigation() -> void:
 	_update_nav_target()
 
 func _on_nav_map_changed(_map_rid: RID) -> void:
-	# Stagger target re-checks over 0.05 - 0.25s so the CPU doesn't spike all at once
 	var delay = randf_range(0.05, 0.25)
 	get_tree().create_timer(delay).timeout.connect(func():
-		if is_instance_valid(self):
-			_update_nav_target()
+		if is_instance_valid(self): _update_nav_target()
 	)
 
 func _update_nav_target() -> void:
@@ -69,184 +82,392 @@ func _update_nav_target() -> void:
 		base_node = get_tree().get_first_node_in_group("base") as Node2D
 		
 	if is_instance_valid(base_node) and nav_agent:
-		nav_agent.target_position = base_node.global_position
+		var surround_angle = float(get_instance_id() % 16) * (TAU / 16.0)
+		var surround_offset = Vector2.RIGHT.rotated(surround_angle) * 75.0
+		nav_agent.target_position = base_node.global_position + surround_offset
 
 func apply_type_stats() -> void:
 	match type:
 		EnemyType.GRETCHIN:
-			speed = 160.0
-			max_health = 25
-			damage = 5
-			if health_bar:
-				health_bar.bar_size = Vector2(22.0, 3.5)
-				health_bar.bar_offset = Vector2(0.0, -18.0)
+			speed = 155.0; max_health = 25; damage = 5; attack_range = 210.0
+			if health_bar: health_bar.bar_size = Vector2(22.0, 3.5); health_bar.bar_offset = Vector2(0.0, -18.0)
 		EnemyType.SQUIG:
-			speed = 130.0
-			max_health = 60
-			damage = 15
-			if health_bar:
-				health_bar.bar_size = Vector2(28.0, 4.0)
-				health_bar.bar_offset = Vector2(0.0, -24.0)
+			speed = 145.0; max_health = 65; damage = 16; attack_range = 100.0
+			if health_bar: health_bar.bar_size = Vector2(28.0, 4.0); health_bar.bar_offset = Vector2(0.0, -24.0)
 		EnemyType.ORK_BOY:
-			speed = 80.0
-			max_health = 140
-			damage = 25
-			if health_bar:
-				health_bar.bar_size = Vector2(34.0, 4.5)
-				health_bar.bar_offset = Vector2(0.0, -28.0)
+			speed = 85.0; max_health = 150; damage = 25; attack_range = 75.0
+			if health_bar: health_bar.bar_size = Vector2(34.0, 4.5); health_bar.bar_offset = Vector2(0.0, -28.0)
+		EnemyType.STORMBOY:
+			speed = 165.0; max_health = 80; damage = 14; attack_range = 75.0
+			if health_bar: health_bar.bar_size = Vector2(30.0, 4.0); health_bar.bar_offset = Vector2(0.0, -26.0)
+		EnemyType.NOB:
+			speed = 68.0; max_health = 420; damage = 35; attack_range = 85.0
+			if health_bar: health_bar.bar_size = Vector2(42.0, 5.5); health_bar.bar_offset = Vector2(0.0, -34.0)
 
 func update_visuals() -> void:
-	if not visual_sprite:
-		visual_sprite = get_node_or_null("VisualSprite")
-		
-	if visual_sprite and visual_sprite.has_method("set_enemy_type"):
-		visual_sprite.set_enemy_type(type)
-
-	if not shadow_node:
-		shadow_node = get_node_or_null("Shadow")
-	if shadow_node and shadow_node.has_method("update_shadow_size"):
-		shadow_node.update_shadow_size()
+	if not visual_sprite: visual_sprite = get_node_or_null("VisualSprite")
+	if visual_sprite and visual_sprite.has_method("set_enemy_type"): visual_sprite.set_enemy_type(type)
+	if not shadow_node: shadow_node = get_node_or_null("Shadow")
+	if shadow_node and shadow_node.has_method("update_shadow_size"): shadow_node.update_shadow_size()
 
 func _process(delta: float) -> void:
 	if flash_timer > 0.0:
 		flash_timer -= delta
-		if flash_timer <= 0.0 and visual_sprite:
-			visual_sprite.modulate = Color.WHITE
+		if flash_timer <= 0.0 and visual_sprite: visual_sprite.modulate = Color.WHITE
 
 func _physics_process(delta: float) -> void:
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
 		return
-		
-	if is_objective_guard:
-		aggro_scan_timer += delta
-		if aggro_scan_timer >= 0.15:
-			aggro_scan_timer = 0.0
-			cached_target_friendly = _find_nearest_friendly_in_range(260.0)
 
-		if is_instance_valid(cached_target_friendly):
-			var dist = global_position.distance_to(cached_target_friendly.global_position)
-			if dist <= attack_range:
-				velocity = Vector2.ZERO
-				perform_attack(cached_target_friendly)
-			else:
-				velocity = global_position.direction_to(cached_target_friendly.global_position) * speed
-			move_and_slide()
-			return
+	if attack_cooldown_timer > 0.0: attack_cooldown_timer -= delta
+	if ability_timer > 0.0: ability_timer -= delta
+	if rage_buff_timer > 0.0: rage_buff_timer -= delta
 
-		# Patrol Orbit
-		var wander_radius = 90.0 + (float(get_instance_id() % 6) * 16.0)
-		var patrol_angle = (Time.get_ticks_msec() * 0.0007) + (float(get_instance_id()) * 1.2)
-		var patrol_target = guard_anchor + Vector2.RIGHT.rotated(patrol_angle) * wander_radius
-
-		var dist_to_patrol = global_position.distance_to(patrol_target)
-		velocity = global_position.direction_to(patrol_target) * (speed * 0.55) if dist_to_patrol > 15.0 else Vector2.ZERO
-		move_and_slide()
-		return
-
-	# Handle Attack Cooldown
-	if attack_cooldown_timer > 0.0:
-		attack_cooldown_timer -= delta
-
-	# Re-locate base if missing
 	if not is_instance_valid(base_node):
 		base_node = get_tree().get_first_node_in_group("base") as Node2D
-		if not base_node:
-			velocity = Vector2.ZERO
-			return
+		if not base_node: velocity = Vector2.ZERO; return
 
-	# Handle Knockback Stagger
+	# Handle Knockback
 	if knockback_velocity.length() > 10.0:
 		knockback_velocity = knockback_velocity.move_toward(Vector2.ZERO, 1500.0 * delta)
 		velocity = knockback_velocity
 		move_and_slide()
 		return
 
-	# Idol guards actively protect their camp and chase players who trespass
-	if is_objective_guard:
-		# 1. Check for nearby players or friendly bodyguards to attack
-		var target_friendly = _find_nearest_friendly_in_range(260.0)
-		if is_instance_valid(target_friendly):
-			var dist = global_position.distance_to(target_friendly.global_position)
-			if dist <= attack_range:
-				velocity = Vector2.ZERO
-				perform_attack(target_friendly)
-			else:
-				velocity = global_position.direction_to(target_friendly.global_position) * speed
-			move_and_slide()
-			return
-
-		# 2. If no players nearby, patrol in a wide orbit around the camp anchor
-		var wander_radius = 90.0 + (float(get_instance_id() % 6) * 16.0)
-		var patrol_angle = (Time.get_ticks_msec() * 0.0007) + (float(get_instance_id()) * 1.2)
-		var patrol_target = guard_anchor + Vector2.RIGHT.rotated(patrol_angle) * wander_radius
-
-		var dist_to_patrol = global_position.distance_to(patrol_target)
-		if dist_to_patrol > 15.0:
-			velocity = global_position.direction_to(patrol_target) * (speed * 0.55)
-		else:
-			velocity = Vector2.ZERO
-
-		move_and_slide()
+	if is_jumping_or_lunging:
 		return
 
-	# 1. Check distance to base
+	# --- 1. MOB RULE & NOB BERSERK STATE CHECKS ---
+	_evaluate_mob_rule_and_berserk()
+
+	var main_node = get_tree().get_first_node_in_group("main")
+	var waaagh_speed_mult = main_node.get_waaagh_speed_multiplier() if main_node and main_node.has_method("get_waaagh_speed_multiplier") else 1.0
+	
+	var speed_multiplier = 1.0
+	if is_berserk: speed_multiplier = 1.45
+	elif rage_buff_timer > 0.0: speed_multiplier = 1.35
+	elif is_mob_rule_active: speed_multiplier = 1.15
+
+	var current_speed = speed * speed_multiplier * waaagh_speed_mult
+
+	# --- 2. IDOL GUARD BEHAVIOR ---
+	if is_objective_guard:
+		_process_guard_behavior(delta, current_speed)
+		return
+
+	# --- 3. SPECIAL COMBAT BEHAVIORS ---
+	_process_enemy_special_abilities(delta)
+
+	# --- 4. MOVEMENT, FLOCKING & GRETCHIN SCAVENGING ---
+	var move_dir = Vector2.ZERO
+	
+	if type == EnemyType.GRETCHIN and _process_gretchin_thievery():
+		# Gretchin is chasing scrap!
+		move_dir = global_position.direction_to(targeted_scrap_item.global_position)
+	else:
+		if nav_agent and not nav_agent.is_navigation_finished():
+			var next_path = nav_agent.get_next_path_position()
+			move_dir = global_position.direction_to(next_path)
+		else:
+			move_dir = global_position.direction_to(base_node.global_position)
+
+		# Lateral Sine Swarm Fanning
+		var lateral_offset = move_dir.orthogonal() * sin(Time.get_ticks_msec() * 0.003 + lateral_fanning_seed) * 0.35
+		move_dir = (move_dir + lateral_offset).normalized()
+
+	# Gretchin Cowardice Flee
+	if type == EnemyType.GRETCHIN and not has_stolen_scrap:
+		var close_threat = _find_nearest_friendly_in_range(90.0)
+		if is_instance_valid(close_threat):
+			move_dir = -global_position.direction_to(close_threat.global_position)
+
+	# Check base attack distance
 	var dist_to_base = global_position.distance_to(base_node.global_position)
-	if dist_to_base <= attack_range:
+	if dist_to_base <= attack_range and type != EnemyType.GRETCHIN:
 		velocity = Vector2.ZERO
 		perform_attack(base_node)
 		return
 
-	# 2. Compute Movement via NavigationAgent2D
-	var move_direction = Vector2.ZERO
+	velocity = move_dir * current_speed
 
-	if nav_agent:
-		if not nav_agent.is_navigation_finished():
-			var next_path_pos = nav_agent.get_next_path_position()
-			move_direction = global_position.direction_to(next_path_pos)
-		else:
-			_update_nav_target()
-	else:
-		move_direction = global_position.direction_to(base_node.global_position)
-
-	velocity = move_direction * speed
-
-	# 3. Move and check for breakable obstacles blocking the direct path
+	# Move & Slide with Obstacle Attack & Stormboy Jump
 	if move_and_slide():
 		for i in range(get_slide_collision_count()):
 			var collision = get_slide_collision(i)
 			var collider = collision.get_collider()
-			
 			if is_instance_valid(collider):
+				# Stormboy Wall Jump
+				if type == EnemyType.STORMBOY and ability_timer <= 0.0:
+					if collider.is_in_group("buildings") and int(collider.get("building_type")) == 0:
+						_execute_stormboy_jump(move_dir)
+						return
+
 				if collider.has_method("take_damage") and not collider.is_in_group("enemies"):
 					velocity = Vector2.ZERO
 					perform_attack(collider)
 					return
 
-func _find_nearest_friendly_in_range(range_limit: float) -> Node2D:
-	var candidates: Array = get_tree().get_nodes_in_group("players")
-	candidates.append_array(get_tree().get_nodes_in_group("bodyguards"))
+# ==============================================================================
+# MOB RULE, BERSERK & GRETCHIN THIEVERY
+# ==============================================================================
+
+func _evaluate_mob_rule_and_berserk():
+	# Check Mob Rule (Count nearby allies within 120px)
+	var nearby_allies = 0
+	for e in get_tree().get_nodes_in_group("enemies"):
+		if is_instance_valid(e) and e != self and global_position.distance_to(e.global_position) <= 120.0:
+			nearby_allies += 1
+			if nearby_allies >= 4: break
+
+	is_mob_rule_active = (nearby_allies >= 4)
+
+	# Check Nob Last Stand Berserk (< 25% HP)
+	if type == EnemyType.NOB:
+		var was_berserk = is_berserk
+		is_berserk = (float(current_health) / float(max_health)) <= 0.28
+		if is_berserk and not was_berserk:
+			rpc("trigger_nob_berserk_fx")
+
+func _process_gretchin_thievery() -> bool:
+	if has_stolen_scrap: return false
 	
+	if not is_instance_valid(targeted_scrap_item):
+		# Search for loose scrap within 140px
+		var min_d = 140.0
+		for s in get_tree().get_nodes_in_group("scrap"):
+			if is_instance_valid(s):
+				var d = global_position.distance_to(s.global_position)
+				if d < min_d:
+					min_d = d
+					targeted_scrap_item = s
+
+	if is_instance_valid(targeted_scrap_item):
+		if global_position.distance_to(targeted_scrap_item.global_position) <= 24.0:
+			# Steal the scrap!
+			has_stolen_scrap = true
+			targeted_scrap_item.queue_free()
+			targeted_scrap_item = null
+			rpc("trigger_scrap_stolen_fx")
+		return true
+
+	return false
+
+@rpc("call_local", "unreliable")
+func trigger_nob_berserk_fx():
+	AudioManager.play_sfx("orbital_strike", global_position, 1.0, 1.5)
+	if visual_sprite:
+		visual_sprite.modulate = Color(2.8, 0.3, 0.3)
+
+@rpc("call_local", "unreliable")
+func trigger_scrap_stolen_fx():
+	var label = Label.new()
+	label.text = "🏃 ⚙ STOLEN!"
+	label.global_position = global_position + Vector2(-30, -32)
+	label.label_settings = LabelSettings.new()
+	label.label_settings.font_color = Color(1.0, 0.85, 0.2)
+	label.label_settings.font_size = 12
+	get_parent().add_child(label)
+	get_tree().create_timer(1.5).timeout.connect(label.queue_free)
+
+# ==============================================================================
+# SPECIAL ABILITIES & WEAPONS
+# ==============================================================================
+
+func _process_enemy_special_abilities(_delta: float):
+	match type:
+		EnemyType.GRETCHIN:
+			if attack_cooldown_timer <= 0.0 and not has_stolen_scrap:
+				var target = _find_nearest_attackable_target(220.0)
+				if is_instance_valid(target):
+					_shoot_gretchin_slug(target.global_position)
+
+		EnemyType.SQUIG:
+			if attack_cooldown_timer <= 0.0 and ability_timer <= 0.0:
+				var target = _find_nearest_attackable_target(110.0)
+				if is_instance_valid(target):
+					_execute_squig_pounce(target)
+
+		EnemyType.ORK_BOY:
+			if ability_timer <= 0.0:
+				var target = _find_nearest_attackable_target(150.0)
+				if is_instance_valid(target):
+					_lob_stikkbomb(target.global_position)
+
+		EnemyType.NOB:
+			if ability_timer <= 0.0:
+				_execute_nob_warcry()
+
+func _shoot_gretchin_slug(target_pos: Vector2):
+	attack_cooldown_timer = 2.4
+	rpc("trigger_attack_charge")
+	
+	var main_node = get_parent()
+	if main_node and "spawner" in main_node:
+		var dir = (target_pos - global_position).normalized()
+		var bullet = main_node.spawner.spawn({
+			"type": "bullet",
+			"name": "ScrapSlug_" + str(randi()),
+			"position": global_position + (dir * 16.0),
+			"direction": dir,
+			"damage": 6
+		})
+		if bullet:
+			bullet.is_enemy_bullet = true # Friendly fire disabled!
+
+func _execute_squig_pounce(target: Node2D):
+	is_jumping_or_lunging = true
+	attack_cooldown_timer = 1.8
+	ability_timer = 3.5
+	rpc("trigger_attack_charge")
+
+	var leap_dir = (target.global_position - global_position).normalized()
+	var leap_target = global_position + (leap_dir * 85.0)
+
+	var tween = create_tween()
+	tween.tween_property(self, "global_position", leap_target, 0.22).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.finished.connect(func():
+		is_jumping_or_lunging = false
+		if is_instance_valid(target) and global_position.distance_to(target.global_position) <= 50.0:
+			if target.has_method("take_damage"):
+				target.take_damage(damage)
+	)
+
+func _lob_stikkbomb(target_pos: Vector2):
+	ability_timer = 9.0
+	rpc("trigger_stikkbomb_fx", target_pos)
+
+	get_tree().create_timer(1.1).timeout.connect(func():
+		if not is_instance_valid(self): return
+		AudioManager.play_sfx("orbital_strike", target_pos, -2.0, 1.6)
+		
+		var space = get_world_2d().direct_space_state
+		var shape = CircleShape2D.new(); shape.radius = 65.0
+		var q = PhysicsShapeQueryParameters2D.new()
+		q.shape = shape; q.transform = Transform2D(0.0, target_pos)
+		q.collide_with_bodies = true
+		var results = space.intersect_shape(q, 16)
+		for hit in results:
+			var body = hit.collider
+			if is_instance_valid(body) and not body.is_in_group("enemies"):
+				if body.has_method("take_damage"):
+					var dir = (body.global_position - target_pos).normalized()
+					body.take_damage(28, dir * 200.0)
+	)
+
+@rpc("call_local", "unreliable")
+func trigger_stikkbomb_fx(target_pos: Vector2):
+	var bomb = Label.new()
+	bomb.text = "💣"
+	bomb.global_position = global_position
+	get_parent().add_child(bomb)
+	var tween = create_tween().set_parallel(true)
+	tween.tween_property(bomb, "global_position", target_pos, 1.0).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	get_tree().create_timer(1.1).timeout.connect(bomb.queue_free)
+
+func _execute_nob_warcry():
+	ability_timer = 10.0
+	rpc("trigger_warcry_fx")
+	
+	for e in get_tree().get_nodes_in_group("enemies"):
+		if is_instance_valid(e) and global_position.distance_to(e.global_position) <= 260.0:
+			e.set("rage_buff_timer", 5.5)
+
+@rpc("call_local", "unreliable")
+func trigger_warcry_fx():
+	AudioManager.play_sfx("axe_swing", global_position, 2.0, 0.5)
+	if visual_sprite:
+		var tween = create_tween()
+		visual_sprite.modulate = Color(2.5, 0.4, 0.4)
+		tween.tween_property(visual_sprite, "modulate", Color.WHITE, 0.8)
+
+func _execute_stormboy_jump(dir: Vector2):
+	is_jumping_or_lunging = true
+	ability_timer = 8.0
+	rpc("trigger_jump_fx")
+
+	# Temporarily disable physics collision while soaring over the wall
+	if is_instance_valid(collision_shape):
+		collision_shape.set_deferred("disabled", true)
+
+	var jump_target = global_position + (dir * 150.0)
+	var tween = create_tween()
+	tween.tween_property(self, "global_position", jump_target, 0.65).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.finished.connect(func():
+		is_jumping_or_lunging = false
+		if is_instance_valid(collision_shape):
+			collision_shape.set_deferred("disabled", false)
+	)
+
+@rpc("call_local", "unreliable")
+func trigger_jump_fx():
+	if visual_sprite:
+		var tween = create_tween()
+		tween.tween_property(visual_sprite, "position:y", -40.0, 0.32).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tween.chain().tween_property(visual_sprite, "position:y", 0.0, 0.32).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+
+func _process_guard_behavior(_delta: float, current_speed: float):
+	aggro_scan_timer += _delta
+	if aggro_scan_timer >= 0.15:
+		aggro_scan_timer = 0.0
+		cached_target_friendly = _find_nearest_friendly_in_range(260.0)
+
+	if is_instance_valid(cached_target_friendly):
+		var dist = global_position.distance_to(cached_target_friendly.global_position)
+		if dist <= attack_range:
+			velocity = Vector2.ZERO
+			perform_attack(cached_target_friendly)
+		else:
+			velocity = global_position.direction_to(cached_target_friendly.global_position) * current_speed
+		move_and_slide()
+		return
+
+	var wander_radius = 90.0 + (float(get_instance_id() % 6) * 16.0)
+	var patrol_angle = (Time.get_ticks_msec() * 0.0007) + (float(get_instance_id()) * 1.2)
+	var patrol_target = guard_anchor + Vector2.RIGHT.rotated(patrol_angle) * wander_radius
+	var dist_to_patrol = global_position.distance_to(patrol_target)
+	velocity = global_position.direction_to(patrol_target) * (current_speed * 0.55) if dist_to_patrol > 15.0 else Vector2.ZERO
+	move_and_slide()
+
+# ==============================================================================
+# TARGETING & DEATH
+# ==============================================================================
+
+func _find_nearest_attackable_target(range_limit: float) -> Node2D:
+	var candidates: Array = get_tree().get_nodes_in_group("players")
+	candidates.append_array(get_tree().get_nodes_in_group("buildings"))
+	candidates.append_array(get_tree().get_nodes_in_group("bodyguards"))
+	if is_instance_valid(base_node): candidates.append(base_node)
+
 	var nearest: Node2D = null
 	var min_d = range_limit
 	for c in candidates:
 		if is_instance_valid(c):
 			var d = global_position.distance_to(c.global_position)
-			if d < min_d:
-				min_d = d
-				nearest = c
+			if d < min_d: min_d = d; nearest = c
+	return nearest
+
+func _find_nearest_friendly_in_range(range_limit: float) -> Node2D:
+	var candidates: Array = get_tree().get_nodes_in_group("players")
+	candidates.append_array(get_tree().get_nodes_in_group("bodyguards"))
+	var nearest: Node2D = null
+	var min_d = range_limit
+	for c in candidates:
+		if is_instance_valid(c):
+			var d = global_position.distance_to(c.global_position)
+			if d < min_d: min_d = d; nearest = c
 	return nearest
 
 func perform_attack(target: Node2D) -> void:
-	if attack_cooldown_timer > 0.0 or not is_instance_valid(target):
-		return
-
+	if attack_cooldown_timer > 0.0 or not is_instance_valid(target): return
 	attack_cooldown_timer = 1.0
 	rpc("trigger_attack_charge")
 	
+	var main_node = get_tree().get_first_node_in_group("main")
+	var waaagh_dmg_mult = main_node.get_waaagh_damage_multiplier() if main_node and main_node.has_method("get_waaagh_damage_multiplier") else 1.0
+	var final_dmg = int(damage * (1.5 if is_berserk else 1.0) * waaagh_dmg_mult)
+
 	if target.has_method("take_damage"):
-		target.take_damage(damage)
-	else:
-		print_debug("Target ", target.name, " reached, but lacks 'take_damage(amount)' function.")
+		target.take_damage(final_dmg)
 
 func release_objective_guard() -> void:
 	is_objective_guard = false
@@ -255,46 +476,44 @@ func release_objective_guard() -> void:
 @rpc("call_local", "reliable")
 func trigger_attack_charge() -> void:
 	if visual_sprite:
-		if visual_sprite.has_method("play_attack_fx"):
-			visual_sprite.play_attack_fx()
+		if visual_sprite.has_method("play_attack_fx"): visual_sprite.play_attack_fx()
 		var tween = create_tween().set_parallel(true)
 		visual_sprite.scale = Vector2(0.8, 1.2)
 		tween.tween_property(visual_sprite, "scale", Vector2(1.3, 0.7), 0.1).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 		tween.chain().tween_property(visual_sprite, "scale", Vector2.ONE, 0.15).set_trans(Tween.TRANS_SINE)
 
 func take_damage(amount: int, knockback_impulse: Vector2 = Vector2.ZERO) -> void:
-	if multiplayer.is_server():
+	if multiplayer.is_server() or not multiplayer.has_multiplayer_peer():
 		if knockback_impulse != Vector2.ZERO:
-			var knockback_modifier = 1.0
-			if type == EnemyType.ORK_BOY:
-				knockback_modifier = 0.4
-			elif type == EnemyType.GRETCHIN:
-				knockback_modifier = 1.2
+			var knockback_mod = 1.0
+			match type:
+				EnemyType.GRETCHIN: knockback_mod = 1.2
+				EnemyType.ORK_BOY: knockback_mod = 0.4
+				EnemyType.STORMBOY: knockback_mod = 0.8
+				EnemyType.NOB: knockback_mod = 0.0 if is_berserk else 0.15
+			
+			# Mob Rule grants knockback resistance!
+			if is_mob_rule_active:
+				knockback_mod *= 0.35
 				
-			knockback_velocity = knockback_impulse * knockback_modifier
+			knockback_velocity = knockback_impulse * knockback_mod
 
 		var new_health = max(0, current_health - amount)
 		rpc("sync_health", new_health)
 		rpc("trigger_hit_flash")
-		
-		var random_offset = Vector2(randf_range(-12.0, 12.0), randf_range(-10.0, 5.0))
-		rpc("spawn_damage_number", amount, global_position + random_offset)
+		rpc("spawn_damage_number", amount, global_position + Vector2(randf_range(-10, 10), randf_range(-10, 5)))
 
 @rpc("call_local", "unreliable")
 func spawn_damage_number(amount: int, spawn_pos: Vector2) -> void:
 	var dmg_label = Label.new()
 	dmg_label.script = load("res://DamageNumber.gd")
 	dmg_label.global_position = spawn_pos
-	
-	var is_crit = amount >= 35
 	get_parent().add_child(dmg_label)
-	dmg_label.setup(amount, is_crit)
+	dmg_label.setup(amount, amount >= 35)
 
 @rpc("call_local", "unreliable")
 func trigger_hit_flash() -> void:
-	
 	AudioManager.play_sfx("hit", global_position, -6.0)
-	
 	if visual_sprite:
 		visual_sprite.modulate = Color(2.0, 0.3, 0.3)
 		flash_timer = 0.12
@@ -303,28 +522,27 @@ func trigger_hit_flash() -> void:
 func sync_health(new_health: int) -> void:
 	current_health = new_health
 	update_ui()
-
-	if current_health <= 0:
-		if multiplayer.is_server():
-			if not is_queued_for_deletion():
-				call_deferred("_handle_death")
+	if current_health <= 0 and (multiplayer.is_server() or not multiplayer.has_multiplayer_peer()) and not is_queued_for_deletion():
+		call_deferred("_handle_death")
 
 func _handle_death() -> void:
 	if NavigationServer2D.map_changed.is_connected(_on_nav_map_changed):
 		NavigationServer2D.map_changed.disconnect(_on_nav_map_changed)
 
 	var main_node = get_parent()
-	if main_node:
-		if "spawner" in main_node and main_node.spawner:
-			if "scrap_count" in main_node:
-				main_node.scrap_count += 1
-				
-			var scrap_data = {
-				"type": "scrap",
-				"name": "Scrap_" + str(main_node.get("scrap_count") if "scrap_count" in main_node else randi()),
-				"position": global_position
-			}
-			main_node.spawner.spawn(scrap_data)
+	if main_node and "spawner" in main_node and main_node.spawner:
+		# If Gretchin was carrying stolen scrap, drop bonus scrap!
+		var scrap_value = 7 if has_stolen_scrap else 5
+		main_node.spawner.spawn({
+			"type": "scrap",
+			"name": "Scrap_" + str(randi()),
+			"position": global_position,
+			"value": scrap_value
+		})
+
+		# 25% Chance for dying Ork Boy to drop a ticking Stikkbomb
+		if type == EnemyType.ORK_BOY and randf() <= 0.25:
+			_lob_stikkbomb(global_position + Vector2.RIGHT.rotated(randf() * TAU) * 20.0)
 
 		if counts_toward_wave and main_node.has_method("notify_enemy_defeated"):
 			main_node.notify_enemy_defeated()

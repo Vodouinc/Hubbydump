@@ -1005,6 +1005,8 @@ func _custom_spawner(data) -> Node:
 				bullet.rotation = data["direction"].angle()
 				if "damage" in data and "damage" in bullet:
 					bullet.damage = data["damage"]
+				if "is_enemy_bullet" in data and "is_enemy_bullet" in bullet:
+					bullet.is_enemy_bullet = data["is_enemy_bullet"]
 				return bullet
 			"building":
 				var building = building_scene.instantiate()

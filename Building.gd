@@ -122,9 +122,19 @@ func _process_gate_sensor():
 @rpc("call_local", "reliable")
 func sync_gate_state(open_state: bool):
 	is_gate_open = open_state
+
+	# 1. Disable colliders owned by this building
 	for col in active_wall_colliders.values():
 		if is_instance_valid(col):
 			col.set_deferred("disabled", is_gate_open)
+
+	# 2. ALSO disable colliders owned by connected neighbor barricades
+	for building in get_tree().get_nodes_in_group("buildings"):
+		if is_instance_valid(building) and building != self and "active_wall_colliders" in building:
+			if building.active_wall_colliders.has(get_instance_id()):
+				var neighbor_col = building.active_wall_colliders[get_instance_id()]
+				if is_instance_valid(neighbor_col):
+					neighbor_col.set_deferred("disabled", is_gate_open)
 
 	AudioManager.play_sfx("gate_toggle", global_position, -3.0, 1.25 if open_state else 0.8)
 

@@ -14,6 +14,9 @@ func _ready():
 	if health_bar and health_bar.has_method("setup"):
 		health_bar.setup(current_health, max_health)
 	update_ui()
+	
+	# Trigger SandyFloor to immediately generate the ferrocrete slab under the base!
+	get_tree().call_group("sandy_floor", "refresh_foundations")
 
 func setup_building_type(is_main_base: bool):
 	if visual_sprite:

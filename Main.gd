@@ -44,8 +44,8 @@ var bullet_count: int = 0
 var building_count: int = 0
  
 # Resource Totals
-var scrap_amount: int = 0
-var requisition_amount: int = 0
+var scrap_amount: int = 40
+var requisition_amount: int = 10
  
 # Class Tracking per Peer ID
 var player_classes: Dictionary = {}
@@ -53,6 +53,25 @@ var player_ready: Dictionary = {}
 var match_started: bool = false
  
 # Wave Management
+
+const WAVE_NARRATIVE_TITLES = [
+	"LOST RECON SCOUTS",               # Wave 1
+	"PROBING WARBAND RAID",             # Wave 2
+	"WAAAGH! BEACON DETECTED",          # Wave 3
+	"SQUIG FLANK INVASION",             # Wave 4
+	"FRONTLINE ORK ASSAULT",            # Wave 5
+	"AIRBORNE STORMBOY INCURSION",      # Wave 6
+	"HEAVY CHOPPA SQUADRONS",           # Wave 7
+	"ORIK NOB SIEGE BREACHERS",         # Wave 8
+	"BOMBARDMENT & STIKKBOMBS",         # Wave 9
+	"MULTI-LANCE WAAAGH! CONVERGENCE",  # Wave 10
+	"ARMORED NOB WARBAND SIEGE",        # Wave 11
+	"FOUR-FRONT FORTRESS PRESSURE",     # Wave 12
+	"DESPERATE NOOSPHERIC STAND",       # Wave 13
+	"TOTAL CITADEL BREACH",             # Wave 14
+	"THE WARBOSS - THE FINAL WAAAGH!"   # Wave 15
+]
+
 var current_wave: int = 0
 var enemies_left_to_spawn: int = 0
 var active_enemies: int = 0
@@ -523,6 +542,9 @@ func start_next_wave():
 	is_wave_active = true
 	_broadcast_wave_hud()
 	
+		# Broadcast attack angles to all player Auspex radars!
+	rpc("sync_incoming_threat_lanes", spawn_lane_angles)
+	
 	if wave_timer == null:
 		wave_timer = Timer.new()
 		wave_timer.timeout.connect(_spawn_squad_tick)
@@ -586,6 +608,10 @@ func _spawn_tactical_squad(squad: Dictionary):
 # ===========================================================================
 # WAAAGH mechanics
 # ===========================================================================
+func notify_totem_destroyed():
+	# Deferred call ensures the queue_free() node is excluded from the count
+	call_deferred("_broadcast_wave_hud")
+
 func get_active_totem_count() -> int:
 	return get_tree().get_nodes_in_group("objectives").size()
 
@@ -764,6 +790,7 @@ func notify_enemy_defeated():
 		
 		if enemies_left_to_spawn <= 0 and active_enemies == 0 and is_wave_active:
 			is_wave_active = false
+			rpc("sync_incoming_threat_lanes", []) # Clear threat pointers when wave is cleared
 			rpc("sync_wave_info", current_wave, "WAVE CLEARED! Re-arm the perimeter — next wave in 10s...")
 			get_tree().create_timer(10.0).timeout.connect(start_next_wave)
  
@@ -914,6 +941,7 @@ func execute_rematch():
 		
 		rpc("sync_resources", scrap_amount, requisition_amount)
 		rpc("sync_tech_tree", false, false, false, false)
+		rpc("sync_incoming_threat_lanes", [])
 		request_navmesh_rebake()
 
 	match_started = false
@@ -926,6 +954,10 @@ func execute_rematch():
 	
 	if multiplayer.is_server():
 		_broadcast_lobby_state()
+		
+@rpc("call_local", "reliable")
+func sync_incoming_threat_lanes(lane_angles: Array):
+	get_tree().call_group("navigation_pointers", "set_threat_lanes", lane_angles)
  
 # --------------------------------------------------
 # CUSTOM SPAWNER
@@ -973,7 +1005,7 @@ func _custom_spawner(data) -> Node:
 				enemy.name = str(data["name"])
 				enemy.position = data["position"]
 				if "enemy_type" in data:
-					enemy.type = data["enemy_type"]
+					enemy.type = int(data["enemy_type"]) # Explicit int cast
 				if "is_objective_guard" in data:
 					enemy.is_objective_guard = data["is_objective_guard"]
 				if "guard_anchor" in data:
@@ -1090,8 +1122,19 @@ func request_upgrade_gate(building_name: String) -> void:
 @rpc("any_peer", "call_local", "reliable")
 func request_upgrade_turret(building_name: String) -> void:
 	if not multiplayer.is_server(): return
+	var sender_id = multiplayer.get_remote_sender_id()
+	if sender_id == 0: sender_id = 1
+	var player = get_node_or_null(str(sender_id)) as Node2D
 	var building = _find_building_by_name(building_name)
-	if is_instance_valid(building) and building.has_method("try_upgrade_turret"):
+
+	if not is_instance_valid(player) or not is_instance_valid(building):
+		return
+	if not ("building_type" in building and int(building.building_type) == 2):
+		return
+	# Widen from 85.0 to 120.0 to account for larger 48px building footprints:
+	if player.global_position.distance_to(building.global_position) > 120.0:
+		return
+	if building.has_method("try_upgrade_turret"):
 		building.try_upgrade_turret()
 
 @rpc("any_peer", "call_local", "reliable")

@@ -12,23 +12,23 @@ extends Node2D
 @export var sand_crest_color: Color = Color(0.85, 0.70, 0.48, 0.55)
 @export var sand_pebble_color: Color = Color(0.44, 0.31, 0.19, 0.55)
 
-# --- FORGEWORLD LIVING METAL SLAB PALETTE ---
-@export var ferro_plate_base: Color = Color(0.11, 0.13, 0.16, 1.0)
-@export var ferro_plate_inner: Color = Color(0.17, 0.19, 0.23, 1.0)
-@export var plate_bevel_light: Color = Color(0.42, 0.48, 0.55, 1.0)
-@export var plate_bevel_dark: Color = Color(0.06, 0.07, 0.09, 1.0)
+# --- FORGEWORLD MODULAR SQUARE SLAB PALETTE ---
+@export var ferro_plate_base: Color = Color(0.10, 0.12, 0.15, 1.0)
+@export var ferro_plate_inner: Color = Color(0.16, 0.18, 0.22, 1.0)
+@export var plate_bevel_light: Color = Color(0.40, 0.46, 0.54, 1.0)
+@export var plate_bevel_dark: Color = Color(0.05, 0.06, 0.08, 1.0)
 @export var brass_trim_color: Color = Color(0.78, 0.58, 0.22, 1.0)
 
-# Discreet Living Metal Conduit Palette
-@export var conduit_trench_color: Color = Color(0.06, 0.07, 0.09, 0.95) # Recessed dark seam
-@export var conduit_metal_color: Color = Color(0.24, 0.28, 0.34, 0.85)  # Subtle alloy trace
-@export var conduit_glow_color: Color = Color(0.15, 0.85, 1.0, 0.85)   # Luminous cyan fiber
-@export var max_conduit_length: float = 280.0
-@export var territory_padding: float = 38.0
+# Living Metal Conduit Seams
+@export var conduit_trench_color: Color = Color(0.06, 0.07, 0.09, 0.95)
+@export var conduit_metal_color: Color = Color(0.24, 0.28, 0.34, 0.85)
+@export var conduit_glow_color: Color = Color(0.15, 0.85, 1.0, 0.85)
+@export var max_conduit_length: float = 320.0
 
 # Cached geometry
 var cached_slab_polygons: Array[PackedVector2Array] = []
 var cached_inner_polygons: Array[PackedVector2Array] = []
+var cached_stepped_edge_plates: Array[PackedVector2Array] = []
 var cached_active_structures: Array[Dictionary] = []
 var cached_conduit_links: Array[Dictionary] = []
 
@@ -37,7 +37,6 @@ var conduit_pulse_renderer: Node2D = null
 func _ready() -> void:
 	z_index = -10
 	add_to_group("sandy_floor")
-	
 	_setup_pulse_renderer()
 	
 	if not Engine.is_editor_hint():
@@ -50,21 +49,19 @@ func _setup_pulse_renderer() -> void:
 		conduit_pulse_renderer = ConduitPulseRenderer.new()
 		conduit_pulse_renderer.name = "ConduitPulseRenderer"
 		conduit_pulse_renderer.z_index = 1
-		
 		var mat = CanvasItemMaterial.new()
 		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
 		conduit_pulse_renderer.material = mat
-		
 		add_child(conduit_pulse_renderer)
 	else:
 		conduit_pulse_renderer = get_node("ConduitPulseRenderer")
 
 func _on_node_added(node: Node) -> void:
-	if node is StaticBody2D and (node.is_in_group("buildings") or node.is_in_group("base")):
+	if node is StaticBody2D and (node.is_in_group("buildings") or node.is_in_group("base") or node.name.begins_with("Base") or node.name.begins_with("Building")):
 		call_deferred("refresh_foundations")
 
 func _on_node_removed(node: Node) -> void:
-	if node is StaticBody2D and (node.is_in_group("buildings") or node.is_in_group("base")):
+	if node is StaticBody2D and (node.is_in_group("buildings") or node.is_in_group("base") or node.name.begins_with("Base") or node.name.begins_with("Building")):
 		call_deferred("refresh_foundations")
 
 func refresh_foundations() -> void:
@@ -74,41 +71,51 @@ func refresh_foundations() -> void:
 	if cached_active_structures.is_empty():
 		cached_slab_polygons.clear()
 		cached_inner_polygons.clear()
+		cached_stepped_edge_plates.clear()
 		queue_redraw()
 		return
 
 	var raw_polygons: Array[PackedVector2Array] = []
 
-	# 1. Build territory slabs ONLY for ground-generating structures
+	# 1. Generate SQUARE Modular Industrial Plating with Chamfered Corners
 	for s in cached_active_structures:
-		if s.slab_radius > 0.0:
-			var r: float = s.slab_radius + territory_padding
-			raw_polygons.append(_get_polygon_points(s.local_pos, r, 20, 0.0))
+		if s.slab_size.x > 0.0:
+			raw_polygons.append(_get_square_plate_polygon(s.local_pos, s.slab_size * 0.5, 12.0))
 
-	# 2. Corridors bridging close territory structures
-	var ground_structs = cached_active_structures.filter(func(st): return st.slab_radius > 0.0)
+	# 2. Bridge neighboring square slabs with corridors
+	var ground_structs = cached_active_structures.filter(func(st): return st.slab_size.x > 0.0)
 	for i in range(ground_structs.size()):
 		for j in range(i + 1, ground_structs.size()):
 			var s1 = ground_structs[i]
 			var s2 = ground_structs[j]
-			var r1: float = s1.slab_radius + territory_padding
-			var r2: float = s2.slab_radius + territory_padding
-			if s1.local_pos.distance_to(s2.local_pos) <= (r1 + r2) * 1.05:
-				raw_polygons.append(_get_bridge_polygon(s1.local_pos, s2.local_pos, r1 * 0.85, r2 * 0.85))
+			var dist = s1.local_pos.distance_to(s2.local_pos)
+			var max_bridge_dist = (s1.slab_size.x * 0.5) + (s2.slab_size.x * 0.5) + 45.0
+			if dist <= max_bridge_dist:
+				raw_polygons.append(_get_bridge_polygon(s1.local_pos, s2.local_pos, 28.0, 28.0))
 
+	# 3. Boolean Union: Merge all square slabs into a continuous industrial deck!
 	cached_slab_polygons = _fuse_polygons(raw_polygons)
 
+	# 4. Generate Inset Plasteel Plates
 	cached_inner_polygons.clear()
 	for slab in cached_slab_polygons:
-		var insets = Geometry2D.offset_polygon(slab, -6.0, Geometry2D.JOIN_ROUND)
+		var insets = Geometry2D.offset_polygon(slab, -7.0, Geometry2D.JOIN_SQUARE)
 		for inset in insets:
 			cached_inner_polygons.append(inset)
+
+	# 5. Generate Stepped Outer Edge Plates that fade into sand
+	cached_stepped_edge_plates.clear()
+	for slab in cached_slab_polygons:
+		var stepped = Geometry2D.offset_polygon(slab, 8.0, Geometry2D.JOIN_SQUARE)
+		for st in stepped:
+			cached_stepped_edge_plates.append(st)
 
 	queue_redraw()
 
 func _gather_active_structures() -> Array[Dictionary]:
 	var list: Array[Dictionary] = []
 
+	# Huge Starting Industrial Plaza for the Main Base (360x360px square!)
 	var base_nodes = get_tree().get_nodes_in_group("base") if not Engine.is_editor_hint() else []
 	for b in base_nodes:
 		if is_instance_valid(b):
@@ -116,8 +123,8 @@ func _gather_active_structures() -> Array[Dictionary]:
 				"node": b,
 				"local_pos": to_local(b.global_position),
 				"is_base": true,
-				"slab_radius": 130.0,
-				"visual_radius": 42.0,
+				"slab_size": Vector2(360, 360), # Massive square starting area!
+				"visual_radius": 44.0,
 				"type": -1
 			})
 
@@ -127,22 +134,22 @@ func _gather_active_structures() -> Array[Dictionary]:
 			if "is_preview" in b and b.is_preview: continue
 			var b_type = int(b.get("building_type")) if "building_type" in b else 0
 			
-			var slab_r = 0.0
+			var slab_s = Vector2.ZERO
 			var visual_r = 18.0
 			match b_type:
-				0: slab_r = 0.0; visual_r = 16.0    # Barricade (Not wired into power conduits)
-				1: slab_r = 58.0; visual_r = 24.0   # Generator
-				2: slab_r = 0.0; visual_r = 20.0    # Turret
-				3: slab_r = 65.0; visual_r = 34.0   # Manufactorum
-				4: slab_r = 110.0; visual_r = 16.0  # Distributor
-				5: slab_r = 120.0; visual_r = 18.0  # Noosphere Antenna
-				6: slab_r = 65.0; visual_r = 28.0   # Research Shrine
+				0: slab_s = Vector2.ZERO; visual_r = 16.0       # Barricade (Open sand)
+				1: slab_s = Vector2(160, 160); visual_r = 24.0   # Generator
+				2: slab_s = Vector2.ZERO; visual_r = 20.0       # Turret
+				3: slab_s = Vector2(190, 190); visual_r = 34.0   # Manufactorum
+				4: slab_s = Vector2(240, 240); visual_r = 16.0   # Distributor (Expands territory by 240px square!)
+				5: slab_s = Vector2(260, 260); visual_r = 18.0   # Antenna
+				6: slab_s = Vector2(180, 180); visual_r = 28.0   # Research Shrine
 
 			list.append({
 				"node": b,
 				"local_pos": to_local(b.global_position),
 				"is_base": false,
-				"slab_radius": slab_r,
+				"slab_size": slab_s,
 				"visual_radius": visual_r,
 				"type": b_type
 			})
@@ -152,7 +159,7 @@ func _gather_active_structures() -> Array[Dictionary]:
 func _fuse_polygons(poly_list: Array[PackedVector2Array]) -> Array[PackedVector2Array]:
 	var merged: Array[PackedVector2Array] = poly_list.duplicate()
 	var changed = true
-	var max_iterations = 12
+	var max_iterations = 14
 	var iter = 0
 
 	while changed and iter < max_iterations:
@@ -184,7 +191,7 @@ func _draw() -> void:
 	var half_size = floor_size / 2.0
 	var full_rect = Rect2(-half_size, floor_size)
 
-	# 1. Static Sand Floor & Dunes
+	# 1. Desert Sand Floor
 	draw_rect(full_rect, sand_base_color)
 
 	var rng = RandomNumberGenerator.new()
@@ -218,32 +225,38 @@ func _draw() -> void:
 		draw_circle(p_pos + Vector2(1.5, 2.0), p_radius, Color(0.20, 0.14, 0.08, 0.35))
 		draw_circle(p_pos, p_radius, sand_pebble_color)
 
-	# 2. Static Industrial Slabs
+	# 2. Stepped Outer Ferrocrete Rim (Tapers into sand)
+	for st in cached_stepped_edge_plates:
+		draw_colored_polygon(st, Color(0.08, 0.09, 0.12, 0.60))
+
+	# 3. Main Square Ferrocrete Deck
 	for slab in cached_slab_polygons:
 		draw_colored_polygon(slab, ferro_plate_base)
 
+	# 4. Inset Plasteel Grid Plates
 	for inner in cached_inner_polygons:
 		draw_colored_polygon(inner, ferro_plate_inner)
 		var closed_inner = inner.duplicate()
 		closed_inner.append(inner[0])
 		draw_polyline(closed_inner, plate_bevel_dark, 1.5)
 
+	# 5. Crisp Outer Brass & Steel Perimeter Edging
 	for slab in cached_slab_polygons:
 		var closed_slab = slab.duplicate()
 		closed_slab.append(slab[0])
 		draw_polyline(closed_slab, plate_bevel_light, 2.5)
 		draw_polyline(closed_slab, brass_trim_color, 1.0)
 
-	# 3. Static Recessed Living Metal Micro-Traces
+	# 6. Recessed Conduit Seams
 	for link in cached_conduit_links:
 		var source = cached_active_structures[link.from]
 		var target = cached_active_structures[link.to]
 		_draw_static_conduit(source.local_pos, target.local_pos, source.visual_radius, target.visual_radius)
 
-	# 4. Base Command Plaza
+	# 7. Base Command Plaza
 	for s in cached_active_structures:
 		if s.is_base:
-			_draw_base_command_plaza(s.local_pos, s.slab_radius)
+			_draw_base_command_plaza(s.local_pos, 100.0)
 
 func _draw_static_conduit(p1: Vector2, p2: Vector2, v_radius_1: float, v_radius_2: float) -> void:
 	var direction = p2 - p1
@@ -251,79 +264,53 @@ func _draw_static_conduit(p1: Vector2, p2: Vector2, v_radius_1: float, v_radius_
 	if total_len < 1.0: return
 	var dir_norm = direction.normalized()
 	
-	# Dock precisely to visual building rims
 	var start = p1 + dir_norm * (v_radius_1 - 1.0)
 	var finish = p2 - dir_norm * (v_radius_2 - 1.0)
 	if start.distance_to(finish) < 4.0: return
 
-	# Discreet, etched living-metal micro-channel (sleek and integrated)
 	draw_line(start, finish, conduit_trench_color, 3.2)
 	draw_line(start, finish, conduit_metal_color, 1.6)
-
-	# Small terminal anchor rivets at each junction
 	draw_circle(start, 2.0, conduit_metal_color)
 	draw_circle(finish, 2.0, conduit_metal_color)
 
-# ==============================================================================
-# NON-CROSSING PLANAR CIRCUIT MESH (Allows Loops & Full Circuits!)
-# ==============================================================================
 func _build_conduit_network(structures: Array[Dictionary]) -> Array[Dictionary]:
 	var links: Array[Dictionary] = []
-	if structures.size() < 2:
-		return links
+	if structures.size() < 2: return links
 
-	var max_conns_per_node = 3
-
-	# 1. Gather all candidate pairs sorted by distance
+	var max_conns = 3
 	var candidates: Array[Dictionary] = []
+
 	for i in range(structures.size()):
 		for j in range(i + 1, structures.size()):
 			var s1 = structures[i]
 			var s2 = structures[j]
-			
-			# Exclude pure barricades from power cabling
 			if s1.type == 0 or s2.type == 0: continue
-			
 			var dist = s1.local_pos.distance_to(s2.local_pos)
 			if dist <= max_conduit_length and dist > 1.0:
 				candidates.append({"from": i, "to": j, "dist": dist})
 
-	# Sort shortest first so nearby buildings link first
 	candidates.sort_custom(func(a, b): return a.dist < b.dist)
 
-	# Track connection degrees
 	var conn_counts: Dictionary = {}
-	for i in range(structures.size()):
-		conn_counts[i] = 0
+	for i in range(structures.size()): conn_counts[i] = 0
 
-	# 2. Add edges greedily, enforcing degree limits and NO LINE-CROSSINGS
 	for cand in candidates:
-		var u: int = cand.from
-		var v: int = cand.to
+		var u = cand.from; var v = cand.to
+		if conn_counts[u] >= max_conns or conn_counts[v] >= max_conns: continue
 
-		if conn_counts[u] >= max_conns_per_node or conn_counts[v] >= max_conns_per_node:
-			continue
+		var p1 = structures[u].local_pos
+		var p2 = structures[v].local_pos
+		var crosses = false
 
-		var p1: Vector2 = structures[u].local_pos
-		var p2: Vector2 = structures[v].local_pos
-
-		# Check if this link intersects any already-established powerline
-		var crosses_existing = false
 		for edge in links:
-			var e1: int = edge.from
-			var e2: int = edge.to
-			# Shared endpoints are allowed (branches/junctions)
-			if u == e1 or u == e2 or v == e1 or v == e2:
-				continue
-			var ep1: Vector2 = structures[e1].local_pos
-			var ep2: Vector2 = structures[e2].local_pos
-			
-			# Built-in fast C++ 2D segment intersection
+			var e1 = edge.from; var e2 = edge.to
+			if u == e1 or u == e2 or v == e1 or v == e2: continue
+			var ep1 = structures[e1].local_pos
+			var ep2 = structures[e2].local_pos
 			if Geometry2D.segment_intersects_segment(p1, p2, ep1, ep2) != null:
-				crosses_existing = true
-				break
+				crosses = true; break
 
-		if not crosses_existing:
+		if not crosses:
 			links.append({"from": u, "to": v})
 			conn_counts[u] += 1
 			conn_counts[v] += 1
@@ -338,6 +325,22 @@ func _draw_base_command_plaza(pos: Vector2, radius: float) -> void:
 		var t_pos = pos + Vector2(cos(angle), sin(angle)) * cog_radius
 		draw_rect(Rect2(t_pos - Vector2(3, 3), Vector2(6, 6)), brass_trim_color)
 
+## Generates a square plate with clean chamfered corners
+func _get_square_plate_polygon(center: Vector2, half_extents: Vector2, chamfer: float) -> PackedVector2Array:
+	var hx = half_extents.x
+	var hy = half_extents.y
+	var c = minf(chamfer, minf(hx, hy) * 0.3)
+	return PackedVector2Array([
+		center + Vector2(-hx + c, -hy),
+		center + Vector2(hx - c, -hy),
+		center + Vector2(hx, -hy + c),
+		center + Vector2(hx, hy - c),
+		center + Vector2(hx - c, hy),
+		center + Vector2(-hx + c, hy),
+		center + Vector2(-hx, hy - c),
+		center + Vector2(-hx, -hy + c)
+	])
+
 func _get_bridge_polygon(p1: Vector2, p2: Vector2, radius_1: float, radius_2: float) -> PackedVector2Array:
 	var delta = p2 - p1
 	if delta.length_squared() < 0.01: return PackedVector2Array()
@@ -350,14 +353,7 @@ func _get_bridge_polygon(p1: Vector2, p2: Vector2, radius_1: float, radius_2: fl
 		p1 - perpendicular * radius_1
 	])
 
-func _get_polygon_points(center: Vector2, radius: float, sides: int, angle_offset: float) -> PackedVector2Array:
-	var points = PackedVector2Array()
-	for i in range(sides):
-		var angle = angle_offset + (float(i) / float(sides)) * TAU
-		points.append(center + Vector2(cos(angle), sin(angle)) * radius)
-	return points
-
-# --- NESTED CLASS: UNSHADED LIVING-METAL ENERGY PULSES ---
+# --- UNSHADED CONDUIT PULSE RENDERER ---
 class ConduitPulseRenderer extends Node2D:
 	var anim_timer: float = 0.0
 
@@ -367,8 +363,7 @@ class ConduitPulseRenderer extends Node2D:
 
 	func _draw() -> void:
 		var parent = get_parent()
-		if not parent or not ("cached_conduit_links" in parent):
-			return
+		if not parent or not ("cached_conduit_links" in parent): return
 
 		var links: Array[Dictionary] = parent.cached_conduit_links
 		var structures: Array[Dictionary] = parent.cached_active_structures
@@ -381,8 +376,8 @@ class ConduitPulseRenderer extends Node2D:
 		for link in links:
 			var s1 = structures[link.from]
 			var s2 = structures[link.to]
-			var p1: Vector2 = s1.local_pos
-			var p2: Vector2 = s2.local_pos
+			var p1 = s1.local_pos
+			var p2 = s2.local_pos
 			
 			var dir_vec = p2 - p1
 			var dist = dir_vec.length()
@@ -394,10 +389,8 @@ class ConduitPulseRenderer extends Node2D:
 			var seg_len = start.distance_to(finish)
 			if seg_len < 4.0: continue
 
-			# 1. Luminous Cyan Core Filament (Unshaded across the dark!)
 			draw_line(start, finish, Color(glow_color.r, glow_color.g, glow_color.b, 0.40), 1.0)
 
-			# 2. Flowing Living-Metal Data Packets
 			var cur_dist = pulse_offset
 			while cur_dist < seg_len:
 				var pulse_pos = start + dir_norm * cur_dist

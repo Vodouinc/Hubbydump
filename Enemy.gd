@@ -2,7 +2,7 @@ extends CharacterBody2D
 
 enum EnemyType { GRETCHIN, SQUIG, ORK_BOY, STORMBOY, NOB }
 
-@export var type: EnemyType = EnemyType.GRETCHIN:
+@export var type: int = 0:
 	set(value):
 		type = value
 		if is_node_ready():
@@ -266,7 +266,11 @@ func _evaluate_mob_rule_and_berserk():
 			rpc("trigger_nob_berserk_fx")
 
 func _process_gretchin_thievery() -> bool:
-	if has_stolen_scrap:
+	if has_stolen_scrap: return false
+	
+	# Only steal scrap once the invasion has advanced past Wave 2
+	var main_node = get_tree().get_first_node_in_group("main")
+	if main_node and main_node.get("current_wave") and main_node.current_wave <= 2:
 		return false
 	
 	if not is_instance_valid(targeted_scrap_item):
@@ -335,6 +339,7 @@ func _process_enemy_special_abilities(_delta: float):
 			if ability_timer <= 0.0:
 				_execute_nob_warcry()
 
+# In Enemy.gd -> update _shoot_gretchin_slug(target_pos):
 func _shoot_gretchin_slug(target_pos: Vector2):
 	attack_cooldown_timer = 2.4
 	rpc("trigger_attack_charge")
@@ -345,10 +350,10 @@ func _shoot_gretchin_slug(target_pos: Vector2):
 		main_node.spawner.spawn({
 			"type": "bullet",
 			"name": "ScrapSlug_" + str(randi()),
-			"position": global_position + (dir * 16.0),
+			"position": global_position + (dir * 18.0),
 			"direction": dir,
-			"damage": 6,
-			"is_enemy_bullet": true # <-- Correctly tagged for multiplayer sync!
+			"damage": 6, # Solid, noticeable damage
+			"is_enemy_bullet": true
 		})
 
 func _execute_squig_pounce(target: Node2D):

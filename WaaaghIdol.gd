@@ -104,7 +104,6 @@ func sync_health(new_health: int) -> void:
 func _destroy_idol() -> void:
 	get_tree().call_group("objective_guards", "release_objective_guard")
 	
-	# Scaled bounty based on Totem Tier
 	var scrap_reward = 35
 	var req_reward = 20
 	match tier:
@@ -115,6 +114,9 @@ func _destroy_idol() -> void:
 	if main_node:
 		if main_node.has_method("add_scrap"): main_node.add_scrap(scrap_reward)
 		if main_node.has_method("add_requisition"): main_node.add_requisition(req_reward)
+		# Immediately notify Main to recalculate threat & broadcast HUD!
+		if main_node.has_method("notify_totem_destroyed"):
+			main_node.notify_totem_destroyed()
 		
 	rpc("play_destroyed_feedback", scrap_reward, req_reward)
 	queue_free()
@@ -129,7 +131,7 @@ func play_destroyed_feedback(scrap_amt: int, req_amt: int) -> void:
 	label.label_settings = LabelSettings.new()
 	label.label_settings.font_color = Color(0.35, 0.95, 1.0)
 	label.label_settings.font_size = 14
-	get_parent().add_child(label)
+	get_tree().current_scene.add_child(label) # Use current_scene to avoid premature free
 	get_tree().create_timer(3.5).timeout.connect(label.queue_free)
 
 func _draw() -> void:

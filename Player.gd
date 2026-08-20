@@ -46,7 +46,7 @@ var already_hit_enemies: Array = []
 # 5: Noosphere Antenna (Upgraded from Distributor via [E])
 # 6: Research Shrine (40 Scrap, 15 Req - Requires Industrial Ground)
 var selected_building_type: int = 0
-const BUILDING_COSTS = [15, 25, 35, 60, 20, 0, 40]
+const BUILDING_COSTS = [15, 25, 35, 60, 15, 0, 40] # Distributor lowered from 20 -> 15 Scrap!
 const BUILD_RANGE: float = 260.0
 const CONDUIT_RANGE: float = 360.0
 const INTERACTION_RANGE: float = 85.0
@@ -182,18 +182,37 @@ func apply_class_stats():
 			hud.update_hud_layout()
 
 func take_damage(amount: int, _knockback: Vector2 = Vector2.ZERO):
-	if multiplayer.is_server():
+	if multiplayer.is_server() or not multiplayer.has_multiplayer_peer():
 		var final_damage = float(amount)
 		
 		# Skitarii Marshal Stance Armor Multiplier
 		if current_class == PlayerClass.RANGED:
 			if active_doctrina == Doctrina.PROTECTOR:
-				final_damage *= 0.65 # 35% Armor Damage Reduction!
+				final_damage *= 0.65
 			elif active_doctrina == Doctrina.CONQUEROR:
-				final_damage *= 1.20 # 20% Vulnerability trade-off
+				final_damage *= 1.20
 				
 		var new_hp = max(0, current_health - int(final_damage))
 		rpc("sync_player_health", new_hp)
+		rpc("trigger_player_hit_feedback", int(final_damage))
+
+# In Player.gd -> Add this RPC function:
+@rpc("any_peer", "call_local", "unreliable")
+func trigger_player_hit_feedback(amount: int):
+	AudioManager.play_sfx("hit", global_position, -2.0)
+	
+	# Flash player sprite red
+	if visual_sprite:
+		visual_sprite.modulate = Color(2.5, 0.4, 0.4)
+		var tween = create_tween()
+		tween.tween_property(visual_sprite, "modulate", Color.WHITE, 0.15)
+
+	# Spawn floating combat text above player's head
+	var dmg_label = Label.new()
+	dmg_label.script = load("res://DamageNumber.gd")
+	dmg_label.global_position = global_position + Vector2(randf_range(-8, 8), -30)
+	get_tree().current_scene.add_child(dmg_label)
+	dmg_label.setup(amount, false)
 
 @rpc("any_peer", "call_local", "reliable")
 func sync_player_health(new_hp: int):
@@ -277,23 +296,23 @@ func _requires_industrial_ground(type: int) -> bool:
 	return type in [1, 3, 6]
 
 func _is_position_on_industrial_ground(pos: Vector2) -> bool:
+	# Main Base gives a huge 220px starting radius!
 	var base_nodes = get_tree().get_nodes_in_group("base")
 	for b in base_nodes:
-		if is_instance_valid(b) and pos.distance_to(b.global_position) <= 145.0:
+		if is_instance_valid(b) and pos.distance_to(b.global_position) <= 220.0:
 			return true
 
 	var buildings = get_tree().get_nodes_in_group("buildings")
 	for b in buildings:
-		if not is_instance_valid(b) or b == preview_instance:
-			continue
+		if not is_instance_valid(b) or b == preview_instance: continue
 		var b_type = int(b.get("building_type")) if "building_type" in b else 0
 		var coverage_radius = 0.0
 		match b_type:
-			1: coverage_radius = 70.0   # Generator
-			3: coverage_radius = 80.0   # Manufactorum
-			4: coverage_radius = 125.0  # Distributor (Territory Expansion)
-			5: coverage_radius = 135.0  # Noosphere Antenna
-			6: coverage_radius = 80.0   # Research Shrine
+			1: coverage_radius = 90.0   # Generator
+			3: coverage_radius = 110.0  # Manufactorum
+			4: coverage_radius = 150.0  # Distributor (Expands area by 150px!)
+			5: coverage_radius = 160.0  # Noosphere Antenna
+			6: coverage_radius = 100.0  # Research Shrine
 			_: continue
 
 		if pos.distance_to(b.global_position) <= coverage_radius:
@@ -796,14 +815,6 @@ func _unhandled_input(event):
 		elif event.keycode == KEY_X:
 			# Trigger Orbital Macrocannon Strike at cursor position
 			rpc("request_orbital_strike", get_global_mouse_position())
-			get_viewport().set_input_as_handled()
-			return
-
-	# Allow ESC to close Tech Vault terminal if open
-	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-		var r_ui = get_tree().get_first_node_in_group("research_ui")
-		if r_ui and r_ui.visible:
-			r_ui.close_terminal()
 			get_viewport().set_input_as_handled()
 			return
 

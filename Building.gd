@@ -10,6 +10,7 @@ enum Type { BARRICADE, GENERATOR, TURRET, MANUFACTORUM, DISTRIBUTOR, NOOSPHERE_A
 
 @export var max_health: int = 150
 var current_health: int = 150
+var health_float: float = 150.0
 
 # --- SHIELD & NOOSPHERE STATE ---
 var max_shield: float = 0.0
@@ -50,6 +51,7 @@ var turret_light: PointLight2D = null
 func _ready():
 	add_to_group("buildings")
 	add_to_group("navmesh_source")
+	health_float = float(current_health)
 	
 	_setup_turret_light()
 	_apply_type_setup()
@@ -125,19 +127,24 @@ func _process_server_buffs(delta: float):
 	var tech_shields = main_node.get("tech_shields_unlocked") if main_node else false
 	var tech_nanobots = main_node.get("tech_nanobots_unlocked") if main_node else false
 
-	# Shield Recharge Delay
+	# 1. Shield Recharge Delay
 	if shield_recharge_timer > 0.0:
 		shield_recharge_timer -= delta
 	else:
-		# Recharge Shield
+		# Recharge Shield (Smooth float regen)
 		if is_noosphere_connected and tech_shields and current_shield < max_shield:
+			var prev_shield = int(current_shield)
 			current_shield = minf(max_shield, current_shield + SHIELD_REGEN_RATE * delta)
-			rpc("sync_shield", current_shield)
+			if int(current_shield) != prev_shield:
+				rpc("sync_shield", current_shield)
 
-		# Passive Nanobot Health Repair
+		# Passive Nanobot Health Repair (Float accumulator fix)
 		if is_noosphere_connected and tech_nanobots and current_health < max_health:
-			current_health = int(minf(max_health, current_health + NANOBOT_REPAIR_RATE * delta))
-			rpc("sync_building_health", current_health)
+			health_float = minf(float(max_health), health_float + NANOBOT_REPAIR_RATE * delta)
+			var new_int_health = int(health_float)
+			if new_int_health != current_health:
+				current_health = new_int_health
+				rpc("sync_building_health", current_health)
 
 func _process_turret_laser(delta: float):
 	var main_node = get_tree().get_first_node_in_group("main")
@@ -178,16 +185,15 @@ func take_damage(amount: int, _knockback: Vector2 = Vector2.ZERO):
 	shield_recharge_timer = SHIELD_RECHARGE_DELAY
 	var damage_remaining = float(amount)
 
-	# Shield Absorbs Damage First
 	if current_shield > 0.0:
 		var shield_dmg = minf(current_shield, damage_remaining)
 		current_shield -= shield_dmg
 		damage_remaining -= shield_dmg
 		rpc("sync_shield", current_shield)
 
-	# Remaining damage passes through to structural HP
 	if damage_remaining > 0.0:
 		var new_hp = max(0, current_health - int(damage_remaining))
+		health_float = float(new_hp)
 		rpc("sync_building_health", new_hp)
 
 @rpc("call_local", "reliable")
@@ -280,6 +286,7 @@ func _apply_turret_upgrade() -> void:
 # --- TYPE INITIALIZATION ---
 
 func _apply_type_setup():
+	health_float = float(max_health)
 	match building_type:
 		Type.BARRICADE: max_health = 150
 		Type.GENERATOR: max_health = 100

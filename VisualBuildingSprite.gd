@@ -29,7 +29,7 @@ func _draw():
 	# Draw Noosphere status aura if connected
 	if is_noosphere_connected and type != BuildingType.BARRICADE:
 		var aura_pulse = 0.25 + sin(idle_timer * 3.0) * 0.1
-		draw_arc(Vector2.ZERO, 28.0, 0, TAU, 16, Color(0.20, 0.88, 1.0, aura_pulse), 1.2)
+		draw_arc(Vector2.ZERO, 32.0, 0, TAU, 20, Color(0.20, 0.88, 1.0, aura_pulse), 1.2)
 
 	match type:
 		BuildingType.BARRICADE: _draw_barricade()
@@ -40,79 +40,12 @@ func _draw():
 		BuildingType.NOOSPHERE_ANTENNA: _draw_antenna()
 		BuildingType.RESEARCH_SHRINE: _draw_research_shrine()
 
-	# Draw Solid Continuous Laser Beam
+	# Draw Solid Continuous Cognis Laser Beam
 	if is_instance_valid(laser_target_node):
 		var local_target = to_local(laser_target_node.global_position)
-		draw_line(Vector2.ZERO, local_target, Color(0.15, 0.90, 1.0, 0.4), 4.5)
+		draw_line(Vector2.ZERO, local_target, Color(0.15, 0.90, 1.0, 0.4), 5.0)
 		draw_line(Vector2.ZERO, local_target, Color(0.85, 0.98, 1.0, 0.95), 1.8)
-		draw_circle(local_target, 4.0, Color(0.20, 0.88, 1.0, 0.8))
-
-func _draw_distributor():
-	var iron_dark = Color(0.10, 0.11, 0.14)
-	var iron_mid = Color(0.25, 0.28, 0.32)
-	var brass_gold = Color(0.78, 0.58, 0.22)
-
-	# Heavy Triangular Plinth
-	var tri = PackedVector2Array([Vector2(0, -18), Vector2(16, 12), Vector2(-16, 12)])
-	draw_colored_polygon(tri, iron_dark)
-	var closed = tri.duplicate(); closed.append(tri[0])
-	draw_polyline(closed, brass_gold, 2.0)
-
-	# Central Ground-Anchor Core
-	draw_circle(Vector2.ZERO, 9.0, iron_mid)
-	draw_circle(Vector2.ZERO, 4.0, brass_gold)
-
-func _draw_antenna():
-	var iron_dark = Color(0.10, 0.11, 0.14)
-	var iron_mid = Color(0.25, 0.28, 0.32)
-	var brass_gold = Color(0.85, 0.65, 0.25)
-	var cyan_glow = Color(0.20, 0.88, 1.0)
-
-	# Hexagonal Base
-	var hex = PackedVector2Array()
-	for i in range(6):
-		var a = i * TAU / 6.0
-		hex.append(Vector2(cos(a), sin(a)) * 18.0)
-	draw_colored_polygon(hex, iron_dark)
-	var closed = hex.duplicate(); closed.append(hex[0])
-	draw_polyline(closed, brass_gold, 2.0)
-
-	# Broadcast Satellite Dish & Antennas
-	for i in range(3):
-		var a = (i * TAU / 3.0) + (idle_timer * 1.5)
-		draw_line(Vector2.ZERO, Vector2(cos(a), sin(a)) * 22.0, iron_mid, 3.0)
-		draw_circle(Vector2(cos(a), sin(a)) * 22.0, 2.5, cyan_glow)
-
-	# Central Pulsing Ocular Node
-	var pulse = 0.5 + sin(idle_timer * 4.0) * 0.5
-	draw_circle(Vector2.ZERO, 7.0, iron_dark)
-	draw_circle(Vector2.ZERO, 4.0 + pulse * 2.0, Color(cyan_glow.r, cyan_glow.g, cyan_glow.b, 0.8))
-
-func _draw_research_shrine():
-	var iron_dark = Color(0.10, 0.11, 0.14)
-	var iron_mid = Color(0.22, 0.24, 0.28)
-	var mars_red = Color(0.68, 0.12, 0.08)
-	var brass_gold = Color(0.85, 0.68, 0.22)
-	var cyan_holo = Color(0.20, 0.88, 1.0, 0.7)
-
-	# Octagonal Vault Foundation
-	var oct_poly = PackedVector2Array([
-		Vector2(-32, -18), Vector2(-18, -32), Vector2(18, -32), Vector2(32, -18),
-		Vector2(32, 18), Vector2(18, 32), Vector2(-18, 32), Vector2(-32, 18)
-	])
-	draw_colored_polygon(oct_poly, iron_dark)
-	var closed = oct_poly.duplicate(); closed.append(oct_poly[0])
-	draw_polyline(closed, brass_gold, 2.0)
-
-	# Gothic Red Sanctuary Wings
-	draw_rect(Rect2(-24, -20, 48, 40), mars_red)
-	draw_rect(Rect2(-20, -24, 40, 48), mars_red)
-	draw_rect(Rect2(-20, -20, 40, 40), iron_mid)
-
-	# Central Holographic Tech-Skull Projector
-	var holo_pulse = 0.6 + sin(idle_timer * 3.5) * 0.3
-	draw_arc(Vector2.ZERO, 12.0, 0, TAU, 16, Color(cyan_holo.r, cyan_holo.g, cyan_holo.b, holo_pulse), 2.0)
-	draw_circle(Vector2.ZERO, 5.0, cyan_holo)
+		draw_circle(local_target, 4.5, Color(0.20, 0.88, 1.0, 0.8))
 
 func _draw_barricade():
 	var iron_dark = Color(0.10, 0.11, 0.14)
@@ -168,6 +101,9 @@ func _draw_barricade():
 	var core_glow = (sin(idle_timer * 3.5) + 1.0) * 0.5
 	draw_circle(Vector2.ZERO, 2.5, Color(alert_red.r, alert_red.g, alert_red.b, 0.5 + core_glow * 0.5))
 
+	for i in range(6):
+		draw_circle(Vector2.RIGHT.rotated(float(i) * TAU / 6.0) * 16.5, 1.2, brass_gold)
+
 func _draw_generator():
 	var iron_dark = Color(0.12, 0.12, 0.16)
 	var iron_mid = Color(0.28, 0.30, 0.35)
@@ -176,59 +112,244 @@ func _draw_generator():
 	var plasma_white = Color(0.85, 0.98, 1.0)
 	var glow_intensity = 0.4 + (pulse_scale * 0.6) + (sin(idle_timer * 4.0) * 0.1)
 
+	# Heavy Hexagonal Ferro-Plate
 	var hex_poly = PackedVector2Array()
 	for i in range(6):
 		var angle = i * TAU / 6.0
-		hex_poly.append(Vector2(cos(angle), sin(angle)) * 22.0)
+		hex_poly.append(Vector2(cos(angle), sin(angle)) * 24.0)
 	draw_colored_polygon(hex_poly, iron_dark)
 	var closed = hex_poly.duplicate(); closed.append(hex_poly[0])
 	draw_polyline(closed, brass_gold, 2.0)
 
+	# 6 Radiator Heat Fins
 	for i in range(6):
 		var fin_dir = Vector2.RIGHT.rotated(i * TAU / 6.0)
-		draw_line(fin_dir * 14.0, fin_dir * 25.0, iron_mid, 4.0)
-		draw_line(fin_dir * 14.0, fin_dir * 25.0, brass_gold, 1.5)
+		draw_line(fin_dir * 14.0, fin_dir * 28.0, iron_mid, 4.0)
+		draw_line(fin_dir * 14.0, fin_dir * 28.0, brass_gold, 1.5)
+		draw_circle(fin_dir * 26.0, 2.0, Color(1.0, 0.5, 0.1, 0.8))
 
-	draw_circle(Vector2.ZERO, 15.0, iron_mid)
-	draw_circle(Vector2.ZERO, 15.0, brass_gold, false, 2.0)
+	# Outer Containment Ring
+	draw_circle(Vector2.ZERO, 16.0, iron_mid)
+	draw_circle(Vector2.ZERO, 16.0, brass_gold, false, 2.0)
 
-	var aura_radius = 12.0 + (pulse_scale * 8.0)
+	# Pulsing Archeotech Plasma Field
+	var aura_radius = 13.0 + (pulse_scale * 9.0)
 	draw_circle(Vector2.ZERO, aura_radius, Color(plasma_cyan.r, plasma_cyan.g, plasma_cyan.b, glow_intensity * 0.4))
-	draw_circle(Vector2.ZERO, 10.0, Color(0.05, 0.2, 0.35))
-	draw_arc(Vector2.ZERO, 10.0, 0, TAU, 24, plasma_cyan, 2.0)
+	draw_circle(Vector2.ZERO, 11.0, Color(0.05, 0.2, 0.35))
+	draw_arc(Vector2.ZERO, 11.0, 0, TAU, 24, plasma_cyan, 2.0)
 
-	var core_r = 4.0 + (pulse_scale * 4.0)
+	for i in range(3):
+		var arc_start = idle_timer * 3.0 + (i * TAU / 3.0)
+		draw_arc(Vector2.ZERO, 8.0, arc_start, arc_start + 1.8, 12, plasma_white, 2.0)
+
+	var core_r = 4.5 + (pulse_scale * 4.0)
 	draw_circle(Vector2.ZERO, core_r, plasma_white)
 
 func _draw_turret():
 	var iron_dark = Color(0.12, 0.12, 0.15)
-	var iron_mid = Color(0.3, 0.32, 0.36)
-	var mars_red = Color(0.7, 0.1, 0.1)
+	var iron_mid = Color(0.30, 0.32, 0.36)
+	var mars_red = Color(0.70, 0.10, 0.10)
 	var brass_gold = Color(0.85, 0.68, 0.22)
 
+	# 1. Ground Mount Ring
 	draw_circle(Vector2.ZERO, 19.0, iron_dark)
 	draw_circle(Vector2.ZERO, 19.0, brass_gold, false, 2.0)
 
+	# Upgrade Level Rings
+	for level in range(turret_upgrade_level):
+		var ring_radius = 22.0 + level * 3.0
+		var arc_start = idle_timer * (1.5 + level * 0.25) + level * 1.4
+		draw_arc(Vector2.ZERO, ring_radius, arc_start, arc_start + PI * 1.35, 16, Color(0.25, 0.88, 1.0, 0.82), 1.5)
+
+	for i in range(8):
+		var a = i * TAU / 8.0
+		var bolt_pos = Vector2(cos(a), sin(a)) * 16.5
+		draw_circle(bolt_pos, 1.5, brass_gold)
+
+	# 2. Rotating Upper Assembly
 	draw_set_transform(Vector2.ZERO, turret_rotation, Vector2.ONE)
+
+	# Twin Heavy Barrels
 	draw_rect(Rect2(2, -9, 18, 5), iron_dark)
 	draw_rect(Rect2(2, 4, 18, 5), iron_dark)
+	draw_rect(Rect2(16, -10, 5, 7), iron_mid)
+	draw_rect(Rect2(16, 3, 5, 7), iron_mid)
+	draw_rect(Rect2(18, -9.5, 2, 6), brass_gold)
+	draw_rect(Rect2(18, 3.5, 2, 6), brass_gold)
 
+	# Armored Turret Housing
 	var housing_poly = PackedVector2Array([
 		Vector2(-14, -14), Vector2(2, -14), Vector2(10, -7),
 		Vector2(10, 7), Vector2(2, 14), Vector2(-14, 14)
 	])
 	draw_colored_polygon(housing_poly, mars_red)
-	var closed = housing_poly.duplicate(); closed.append(housing_poly[0])
-	draw_polyline(closed, brass_gold, 2.0)
-	draw_circle(Vector2(4, 0), 2.5, Color(1.0, 0.2, 0.2))
+	var closed_housing = housing_poly.duplicate(); closed_housing.append(housing_poly[0])
+	draw_polyline(closed_housing, brass_gold, 2.0)
+
+	# Ammo Feeder Drums & Vent Grilles
+	draw_rect(Rect2(-10, -17, 10, 3), iron_mid)
+	draw_rect(Rect2(-10, 14, 10, 3), iron_mid)
+	draw_rect(Rect2(-10, -17, 10, 3), brass_gold, false, 1.0)
+	draw_rect(Rect2(-10, 14, 10, 3), brass_gold, false, 1.0)
+	draw_rect(Rect2(-12, -8, 4, 16), iron_dark)
+	draw_line(Vector2(-10, -6), Vector2(-10, 6), brass_gold, 1.5)
+
+	# Omnissiah Targeter Lens
+	draw_circle(Vector2(3, 0), 4.5, iron_dark)
+	draw_circle(Vector2(3, 0), 4.5, brass_gold, false, 1.0)
+	var eye_pulse = (sin(idle_timer * 5.0) + 1.0) * 0.5
+	draw_circle(Vector2(4, 0), 2.5, Color(1.0, 0.2, 0.2, 0.8 + eye_pulse * 0.2))
+	draw_circle(Vector2(4.8, -0.8), 0.8, Color.WHITE)
+
 	draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
+
+func _draw_distributor():
+	var iron_dark = Color(0.10, 0.11, 0.14)
+	var iron_mid = Color(0.25, 0.28, 0.32)
+	var brass_gold = Color(0.78, 0.58, 0.22)
+	var amber_glow = Color(0.95, 0.72, 0.15)
+
+	# Heavy Triangular Plinth
+	var tri = PackedVector2Array([Vector2(0, -20), Vector2(18, 14), Vector2(-18, 14)])
+	draw_colored_polygon(tri, iron_dark)
+	var closed = tri.duplicate(); closed.append(tri[0])
+	draw_polyline(closed, brass_gold, 2.0)
+
+	# Corner Anchor Pylons
+	for p in tri:
+		draw_circle(p, 4.0, iron_mid)
+		draw_circle(p, 4.0, brass_gold, false, 1.0)
+		draw_circle(p, 2.0, amber_glow)
+
+	# Center Hydraulic Core
+	draw_circle(Vector2.ZERO, 10.0, iron_mid)
+	draw_circle(Vector2.ZERO, 6.0, iron_dark)
+	draw_circle(Vector2.ZERO, 6.0, brass_gold, false, 1.5)
+	draw_circle(Vector2.ZERO, 3.0, amber_glow)
+
+func _draw_antenna():
+	var iron_dark = Color(0.10, 0.11, 0.14)
+	var iron_mid = Color(0.25, 0.28, 0.32)
+	var brass_gold = Color(0.85, 0.65, 0.25)
+	var cyan_glow = Color(0.20, 0.88, 1.0)
+
+	# Hexagonal Base
+	var hex = PackedVector2Array()
+	for i in range(6):
+		var a = i * TAU / 6.0
+		hex.append(Vector2(cos(a), sin(a)) * 20.0)
+	draw_colored_polygon(hex, iron_dark)
+	var closed = hex.duplicate(); closed.append(hex[0])
+	draw_polyline(closed, brass_gold, 2.0)
+
+	# 3 Broadcast Antenna Spikes
+	for i in range(3):
+		var a = (i * TAU / 3.0) + (idle_timer * 1.2)
+		var tip = Vector2(cos(a), sin(a)) * 24.0
+		draw_line(Vector2.ZERO, tip, iron_mid, 3.5)
+		draw_line(Vector2.ZERO, tip, brass_gold, 1.5)
+		draw_circle(tip, 3.0, cyan_glow)
+
+	# Central Pulsing Noosphere Transmitter
+	var pulse = 0.5 + sin(idle_timer * 4.0) * 0.5
+	draw_circle(Vector2.ZERO, 9.0, iron_dark)
+	draw_circle(Vector2.ZERO, 9.0, brass_gold, false, 1.5)
+	draw_circle(Vector2.ZERO, 4.0 + pulse * 2.5, Color(cyan_glow.r, cyan_glow.g, cyan_glow.b, 0.85))
+
+func _draw_research_shrine():
+	var iron_dark = Color(0.10, 0.11, 0.14)
+	var iron_mid = Color(0.22, 0.24, 0.28)
+	var mars_red = Color(0.68, 0.12, 0.08)
+	var mars_red_dark = Color(0.42, 0.06, 0.05)
+	var brass_gold = Color(0.85, 0.68, 0.22)
+	var cyan_holo = Color(0.20, 0.88, 1.0, 0.8)
+
+	# Octagonal Vault Foundation
+	var oct_poly = PackedVector2Array([
+		Vector2(-32, -18), Vector2(-18, -32), Vector2(18, -32), Vector2(32, -18),
+		Vector2(32, 18), Vector2(18, 32), Vector2(-18, 32), Vector2(-32, 18)
+	])
+	draw_colored_polygon(oct_poly, iron_dark)
+	var closed = oct_poly.duplicate(); closed.append(oct_poly[0])
+	draw_polyline(closed, brass_gold, 2.0)
+
+	# Gothic Red Sanctuary Wings
+	draw_rect(Rect2(-26, -22, 52, 44), mars_red_dark)
+	draw_rect(Rect2(-22, -26, 44, 52), mars_red_dark)
+	draw_rect(Rect2(-24, -20, 48, 40), mars_red)
+	draw_rect(Rect2(-20, -24, 40, 48), mars_red)
+	draw_rect(Rect2(-24, -20, 48, 40), brass_gold, false, 1.5)
+	draw_rect(Rect2(-20, -24, 40, 48), brass_gold, false, 1.5)
+
+	# 4 Data Conduit Spire Pillars
+	for corner in [Vector2(-20, -20), Vector2(20, -20), Vector2(-20, 20), Vector2(20, 20)]:
+		draw_circle(corner, 5.0, iron_mid)
+		draw_circle(corner, 5.0, brass_gold, false, 1.0)
+		draw_circle(corner, 2.5, cyan_holo)
+
+	# Central Holographic Tech-Skull Projector
+	draw_circle(Vector2.ZERO, 13.0, iron_dark)
+	draw_circle(Vector2.ZERO, 13.0, brass_gold, false, 2.0)
+	var holo_pulse = 0.6 + sin(idle_timer * 3.5) * 0.3
+	draw_arc(Vector2.ZERO, 10.0, 0, TAU, 16, Color(cyan_holo.r, cyan_holo.g, cyan_holo.b, holo_pulse), 2.0)
+	draw_circle(Vector2.ZERO, 5.0, cyan_holo)
+	draw_circle(Vector2.ZERO, 2.0, Color.WHITE)
 
 func _draw_manufactorum():
 	var iron_dark = Color(0.12, 0.12, 0.15)
+	var iron_mid = Color(0.25, 0.26, 0.30)
 	var mars_red = Color(0.65, 0.1, 0.1)
+	var mars_red_dark = Color(0.4, 0.05, 0.05)
 	var brass_gold = Color(0.85, 0.68, 0.22)
-	draw_rect(Rect2(-32, -32, 64, 64), iron_dark)
-	draw_rect(Rect2(-28, -28, 56, 56), mars_red)
-	draw_rect(Rect2(-28, -28, 56, 56), brass_gold, false, 2.0)
-	draw_circle(Vector2.ZERO, 12.0, iron_dark)
-	draw_circle(Vector2.ZERO, 12.0, brass_gold, false, 2.0)
+	var brass_dark = Color(0.5, 0.38, 0.1)
+	var cyan_plasma = Color(0.2, 0.85, 1.0, 0.8)
+
+	var base_poly = PackedVector2Array([
+		Vector2(-36, -20), Vector2(-20, -36), Vector2(20, -36), Vector2(36, -20),
+		Vector2(36, 20), Vector2(20, 36), Vector2(-20, 36), Vector2(-36, 20)
+	])
+	draw_colored_polygon(base_poly, iron_dark)
+	var closed_base = base_poly.duplicate(); closed_base.append(base_poly[0])
+	draw_polyline(closed_base, brass_dark, 2.5)
+
+	for corner in [Vector2(-30, -30), Vector2(30, -30), Vector2(-30, 30), Vector2(30, 30)]:
+		draw_rect(Rect2(corner - Vector2(4, 4), Vector2(8, 8)), iron_mid)
+		draw_rect(Rect2(corner - Vector2(4, 4), Vector2(8, 8)), brass_gold, false, 1.0)
+
+	draw_rect(Rect2(-28, -24, 56, 48), mars_red_dark)
+	draw_rect(Rect2(-24, -28, 48, 56), mars_red_dark)
+	draw_rect(Rect2(-26, -22, 52, 44), mars_red)
+	draw_rect(Rect2(-22, -26, 44, 52), mars_red)
+	draw_rect(Rect2(-26, -22, 52, 44), brass_gold, false, 1.5)
+	draw_rect(Rect2(-22, -26, 44, 52), brass_gold, false, 1.5)
+
+	var chimney_positions = [Vector2(-20, -20), Vector2(20, -20), Vector2(-20, 20), Vector2(20, 20)]
+	for pos in chimney_positions:
+		draw_circle(pos, 6.0, iron_dark)
+		draw_circle(pos, 6.0, brass_gold, false, 1.5)
+		var heat_val = (sin(idle_timer * 3.0 + pos.x) + 1.0) * 0.5
+		draw_circle(pos, 3.0, Color(1.0, 0.4, 0.1, 0.5 + heat_val * 0.4))
+
+	var cog_center = Vector2.ZERO
+	var cog_radius = 14.0
+	for i in range(8):
+		var angle = (i * TAU / 8.0)
+		var tooth_dir = Vector2.RIGHT.rotated(angle)
+		draw_set_transform(cog_center + tooth_dir * cog_radius, angle, Vector2.ONE)
+		draw_rect(Rect2(-2.5, -2.5, 5.0, 5.0), brass_gold)
+	draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
+
+	draw_circle(cog_center, cog_radius, iron_dark)
+	draw_circle(cog_center, cog_radius, brass_gold, false, 2.0)
+
+	var left_semi = PackedVector2Array()
+	var right_semi = PackedVector2Array()
+	for i in range(17):
+		var a = -PI/2 + (i * PI / 16.0)
+		left_semi.append(cog_center + Vector2(cos(a + PI), sin(a + PI)) * (cog_radius - 2))
+		right_semi.append(cog_center + Vector2(cos(a), sin(a)) * (cog_radius - 2))
+
+	draw_colored_polygon(left_semi, Color(0.9, 0.9, 0.9))
+	draw_colored_polygon(right_semi, iron_mid)
+	draw_circle(Vector2(0, -6), 4.0, cyan_plasma)
+	draw_circle(Vector2(0, -6), 5.0, brass_gold, false, 1.0)

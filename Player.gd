@@ -54,6 +54,7 @@ var is_building_mode: bool = false
 var preview_instance: Node2D = null
 var preview_is_valid: bool = false
 var preview_connection_target: Node2D = null
+var hovered_interact_building: Node2D = null
 
 # ==============================================================================
 # MODULAR GRID & WALL BALANCING CONSTANTS
@@ -241,14 +242,14 @@ func update_preview_type():
 
 func _get_building_size(type: int) -> Vector2:
 	match type:
-		-1: return Vector2(128, 128) # Main Base (4x4 tiles)
+		-1: return Vector2(144, 144) # Main Base Core (4.5 tiles with natural clearance)
 		0:  return Vector2(32, 32)   # Barricade Post (1x1 tile)
 		1:  return Vector2(64, 64)   # Generator (2x2 tiles)
-		2:  return Vector2(32, 32)   # Turret (1x1 tile)
+		2:  return Vector2(48, 48)   # Turret (1.5 tiles - provides clearance for rotating barrels)
 		3:  return Vector2(96, 96)   # Manufactorum (3x3 tiles)
-		4:  return Vector2(32, 32)   # Distributor (1x1 tile)
-		5:  return Vector2(32, 32)   # Noosphere Antenna (1x1 tile)
-		6:  return Vector2(64, 64)   # Research Shrine (2x2 tiles)
+		4:  return Vector2(48, 48)   # Distributor (1.5 tiles - prevents merging into generators)
+		5:  return Vector2(48, 48)   # Noosphere Antenna (1.5 tiles)
+		6:  return Vector2(72, 72)   # Research Shrine (2.25 tiles)
 		_:  return Vector2(32, 32)
 
 func _get_building_rect(type: int, pos: Vector2) -> Rect2:
@@ -310,8 +311,12 @@ func _is_build_location_valid(build_pos: Vector2) -> bool:
 	if _requires_industrial_ground(selected_building_type) and not _is_position_on_industrial_ground(build_pos):
 		return false
 
-	# 2. Square AABB Collision Overlap Check (Grow by -1.0px so adjacent touching tiles are valid)
-	var my_rect = Rect2(build_pos - (_get_building_size(selected_building_type) * 0.5), _get_building_size(selected_building_type)).grow(-1.0)
+	var is_placing_barricade = (selected_building_type == 0)
+	
+	# Barricades touch with tight tolerance; Heavy buildings get a 6px breathing margin
+	var placement_margin = -1.0 if is_placing_barricade else 6.0
+	var my_rect = Rect2(build_pos - (_get_building_size(selected_building_type) * 0.5), _get_building_size(selected_building_type)).grow(placement_margin)
+
 	var structures = get_tree().get_nodes_in_group("buildings")
 	structures.append_array(get_tree().get_nodes_in_group("base"))
 
@@ -320,11 +325,15 @@ func _is_build_location_valid(build_pos: Vector2) -> bool:
 			continue
 		if "is_preview" in s and s.is_preview:
 			continue
-			
+
 		var s_type = -1 if s.is_in_group("base") else int(s.get("building_type"))
-		var other_rect = Rect2(s.global_position - (_get_building_size(s_type) * 0.5), _get_building_size(s_type)).grow(-1.0)
-		
-		# Block placement if the two square footprints overlap
+		var other_is_barricade = (s_type == 0)
+
+		# Allow Barricade-to-Barricade touching for continuous curtain walls
+		var other_margin = -1.0 if (is_placing_barricade and other_is_barricade) else 6.0
+		var other_rect = Rect2(s.global_position - (_get_building_size(s_type) * 0.5), _get_building_size(s_type)).grow(other_margin)
+
+		# Block placement if the footprints crowd or overlap
 		if my_rect.intersects(other_rect):
 			return false
 
@@ -385,27 +394,40 @@ func _is_wall_line_blocked_by_structure(pos_a: Vector2, pos_b: Vector2) -> bool:
 				return true
 	return false
 
-# --- [E] INTERACTION: UPGRADE TURRET / DISTRIBUTOR ---
+# --- [E] INTERACTION: UPGRADE TURRET / DISTRIBUTOR / TECH SHRINE ---
 
 func request_interact_nearby_structure() -> void:
+	var r_ui = get_tree().get_first_node_in_group("research_ui")
+	if r_ui and r_ui.visible:
+		r_ui.close_terminal()
+		return
+
+	var closest: Node2D = _get_closest_interactable_structure()
+	if is_instance_valid(closest):
+		var b_type = int(closest.building_type)
+		if b_type == 2: # Turret Upgrade
+			var main_node = get_tree().get_first_node_in_group("main")
+			if main_node: main_node.rpc_id(1, "request_upgrade_turret", closest.name)
+		elif b_type == 4: # Distributor -> Antenna Upgrade
+			var main_node = get_tree().get_first_node_in_group("main")
+			if main_node: main_node.rpc_id(1, "request_upgrade_distributor", closest.name)
+		elif b_type == 6: # Research Shrine -> Open Tech-Vault Terminal!
+			if r_ui and r_ui.has_method("open_terminal"):
+				r_ui.open_terminal(closest)
+	
+func _get_closest_interactable_structure() -> Node2D:
 	var closest: Node2D = null
 	var closest_dist := INTERACTION_RANGE
 	for building in get_tree().get_nodes_in_group("buildings"):
-		if not is_instance_valid(building) or not ("building_type" in building):
-			continue
+		if not is_instance_valid(building) or not ("building_type" in building): continue
+		var b_type = int(building.building_type)
+		# Only Turrets (2), Distributors (4), and Research Shrines (6) have [E] interactions
+		if not (b_type in [2, 4, 6]): continue
 		var dist = global_position.distance_to(building.global_position)
 		if dist < closest_dist:
 			closest_dist = dist
 			closest = building
-
-	if is_instance_valid(closest):
-		var main_node = get_tree().get_first_node_in_group("main")
-		if main_node:
-			var b_type = int(closest.building_type)
-			if b_type == 2: # Turret Upgrade
-				main_node.rpc_id(1, "request_upgrade_turret", closest.name)
-			elif b_type == 4: # Distributor -> Antenna Upgrade
-				main_node.rpc_id(1, "request_upgrade_distributor", closest.name)
+	return closest
 
 # --- PROCESS & DRAW LOOP ---
 
@@ -421,6 +443,10 @@ func _process(delta):
 			attack_progress = 0.0
 			already_hit_enemies.clear()
 
+		queue_redraw()
+
+	if _is_local_authority():
+		hovered_interact_building = _get_closest_interactable_structure()
 		queue_redraw()
 
 	if _is_local_authority():
@@ -446,15 +472,21 @@ func _process(delta):
 func _draw():
 	if is_attacking_anim:
 		draw_omnissian_axe_sweep()
+		
+	# 1. Floating In-World Contextual Interaction Tooltip
+	if is_instance_valid(hovered_interact_building):
+		var local_b_pos = hovered_interact_building.global_position - global_position
+		_draw_inworld_interaction_tooltip(local_b_pos, int(hovered_interact_building.building_type))
 
+	# 2. Build Preview Holograms & Blueprint Footprints
 	if is_building_mode and is_instance_valid(preview_instance):
 		var local_build_pos = preview_instance.global_position - global_position
 		var placement_color = Color(0.35, 1.0, 0.72, 0.9) if preview_is_valid else Color(1.0, 0.25, 0.20, 0.95)
 		
-		# 1. Build Range Boundary Arc
+		# Build Range Boundary Arc
 		draw_arc(Vector2.ZERO, BUILD_RANGE, 0.0, TAU, 48, Color(0.20, 0.75, 0.95, 0.24), 1.5)
 		
-		# 2. HOLOGRAPHIC BARRICADE WALL LINK PREVIEWS
+		# Holographic Barricade Wall Link Previews
 		if selected_building_type == 0 and not preview_barricade_links.is_empty():
 			var wall_half_width = 8.0
 			var pulse = 0.55 + sin(Time.get_ticks_msec() * 0.008) * 0.25
@@ -493,7 +525,7 @@ func _draw():
 
 				draw_arc(local_neighbor_pos, 18.0, 0.0, TAU, 16, holo_edge, 1.5)
 
-		# 3. SQUARE TACTICAL BLUEPRINT FOOTPRINT
+		# Square Tactical Blueprint Footprint
 		var b_size = _get_building_size(selected_building_type)
 		var b_rect = Rect2(local_build_pos - (b_size * 0.5), b_size)
 		
@@ -519,10 +551,58 @@ func _draw():
 		draw_line(br, br - Vector2(b_len, 0), placement_color, 2.5)
 		draw_line(br, br - Vector2(0, b_len), placement_color, 2.5)
 		
-		# 4. Standard Conduit Target Line (for non-barricades)
+		# Standard Conduit Target Line (for non-barricades)
 		if selected_building_type != 0 and is_instance_valid(preview_connection_target):
 			var local_target = preview_connection_target.global_position - global_position
 			draw_line(local_target, local_build_pos, Color(0.25, 0.85, 1.0, 0.45), 2.0)
+
+func _draw_inworld_interaction_tooltip(local_pos: Vector2, b_type: int):
+	var prompt_text = ""
+	var cost_text = ""
+	var main_node = get_tree().get_first_node_in_group("main")
+	var current_req = main_node.requisition_amount if main_node else 0
+
+	match b_type:
+		2: # Turret
+			var lvl = hovered_interact_building.get("turret_upgrade_level") if "turret_upgrade_level" in hovered_interact_building else 0
+			var costs = [10, 20, 35]
+			if lvl < costs.size():
+				prompt_text = "[E] Upgrade (Lv." + str(lvl + 2) + ")"
+				cost_text = "⚡ " + str(costs[lvl])
+			else:
+				prompt_text = "Turret Maxed"
+		4: # Distributor
+			prompt_text = "[E] Upgrade Antenna"
+			cost_text = "⚡ 15"
+		6: # Research Shrine
+			prompt_text = "[E] Tech-Vault"
+			cost_text = "OPEN"
+
+	if prompt_text.is_empty(): return
+
+	# Floating Holographic Badge Position
+	var badge_pos = local_pos + Vector2(0, -44)
+	var badge_rect = Rect2(badge_pos - Vector2(80, 13), Vector2(160, 26))
+	
+	# Box Backdrop & Edge Framing
+	draw_rect(badge_rect, Color(0.05, 0.07, 0.10, 0.90), true)
+	draw_rect(badge_rect, Color(0.20, 0.88, 1.0, 0.85), false, 1.2)
+	draw_line(badge_pos + Vector2(0, 13), local_pos + Vector2(0, -18), Color(0.20, 0.88, 1.0, 0.35), 1.5)
+
+	# Draw Holographic Text Inside Badge
+	var font = ThemeDB.fallback_font
+	var font_size = 11
+	
+	# Left Action Label
+	draw_string(font, badge_pos + Vector2(-74, 4), prompt_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.90, 0.86, 0.74))
+	
+	# Right Cost Badge (Live Affordability Coloring)
+	if not cost_text.is_empty():
+		var cost_color = Color(0.35, 0.90, 1.0)
+		if cost_text.begins_with("⚡"):
+			var cost_val = cost_text.replace("⚡ ", "").to_int()
+			cost_color = Color(0.35, 0.90, 1.0) if current_req >= cost_val else Color(0.90, 0.25, 0.20)
+		draw_string(font, badge_pos + Vector2(25, 4), cost_text, HORIZONTAL_ALIGNMENT_RIGHT, 48, font_size, cost_color)
 
 func draw_omnissian_axe_sweep():
 	var eased_progress = pow(attack_progress, 2.5) 
@@ -615,6 +695,14 @@ func check_lingering_melee_hits():
 func _unhandled_input(event):
 	if not is_multiplayer_authority():
 		return
+		
+	# Allow ESC to close Tech Vault terminal if open
+	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		var r_ui = get_tree().get_first_node_in_group("research_ui")
+		if r_ui and r_ui.visible:
+			r_ui.close_terminal()
+			get_viewport().set_input_as_handled()
+			return
 
 	# Tech-Priest Building & Support Inputs
 	if current_class == PlayerClass.MELEE:
@@ -623,7 +711,7 @@ func _unhandled_input(event):
 				request_interact_nearby_structure()
 				get_viewport().set_input_as_handled()
 				return
-			elif event.keycode == KEY_K: # Press K to deploy a Servo-skull
+			elif event.keycode == KEY_K:
 				rpc("request_spawn_servo_skull")
 				get_viewport().set_input_as_handled()
 				return
@@ -631,44 +719,24 @@ func _unhandled_input(event):
 				toggle_build_mode(selected_building_type)
 				get_viewport().set_input_as_handled()
 				return
-			elif event.keycode == KEY_1 or event.keycode == KEY_KP_1:
-				if not is_building_mode:
-					toggle_build_mode(0)
-				else:
-					selected_building_type = 0
-					update_preview_type()
+			elif event.keycode in [KEY_1, KEY_KP_1]:
+				toggle_build_mode(0) # Barricade
 				get_viewport().set_input_as_handled()
 				return
-			elif event.keycode == KEY_2 or event.keycode == KEY_KP_2:
-				if not is_building_mode:
-					toggle_build_mode(4) # Distributor (Spreads Territory)
-				else:
-					selected_building_type = 4
-					update_preview_type()
+			elif event.keycode in [KEY_2, KEY_KP_2]:
+				toggle_build_mode(4) # Distributor (Spreads Ground)
 				get_viewport().set_input_as_handled()
 				return
-			elif event.keycode == KEY_3 or event.keycode == KEY_KP_3:
-				if not is_building_mode:
-					toggle_build_mode(1) # Generator
-				else:
-					selected_building_type = 1
-					update_preview_type()
+			elif event.keycode in [KEY_3, KEY_KP_3]:
+				toggle_build_mode(1) # Generator
 				get_viewport().set_input_as_handled()
 				return
-			elif event.keycode == KEY_4 or event.keycode == KEY_KP_4:
-				if not is_building_mode:
-					toggle_build_mode(2) # Turret
-				else:
-					selected_building_type = 2
-					update_preview_type()
+			elif event.keycode in [KEY_4, KEY_KP_4]:
+				toggle_build_mode(2) # Turret
 				get_viewport().set_input_as_handled()
 				return
-			elif event.keycode == KEY_5 or event.keycode == KEY_KP_5:
-				if not is_building_mode:
-					toggle_build_mode(6) # Research Shrine
-				else:
-					selected_building_type = 6
-					update_preview_type()
+			elif event.keycode in [KEY_5, KEY_KP_5]:
+				toggle_build_mode(6) # Research Shrine
 				get_viewport().set_input_as_handled()
 				return
 

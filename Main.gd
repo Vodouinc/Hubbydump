@@ -26,7 +26,7 @@ const CLASS_DATA = {
 	}
 }
  
-@export var max_waves: int = 5
+@export var max_waves: int = 15
  
 var player_scene = preload("res://Player.tscn")
 var enemy_scene = preload("res://Enemy.tscn")
@@ -68,6 +68,8 @@ var objective_count: int = 0
 var tech_shields_unlocked: bool = false
 var tech_lasers_unlocked: bool = false
 var tech_nanobots_unlocked: bool = false
+
+var research_ui_node: Control = null
  
 # --------------------------------------------------
 # UI & NETWORK NODE REFERENCES (Using % Unique Names)
@@ -132,11 +134,19 @@ func _ready():
 	_show_lobby_ui()
 	_update_class_ui()
 	_refresh_lobby_roster()
+	_setup_research_ui()
  
 # --------------------------------------------------
 # CLASS SELECTION & LOBBY UI
 # --------------------------------------------------
  
+func _setup_research_ui():
+	if not has_node("UI/ResearchUI"):
+		var r_ui = ResearchUI.new()
+		r_ui.name = "ResearchUI"
+		$UI.add_child(r_ui)
+		research_ui_node = r_ui
+
 func _update_class_ui():
 	if CLASS_DATA.has(my_selected_class):
 		var class_info = CLASS_DATA[my_selected_class]
@@ -438,7 +448,8 @@ func start_next_wave():
 		game_over(true)
 		return
  
-	if current_wave == 3 or current_wave == 6:
+	# Spawn WAAAGH! War-Camps at regular intervals throughout the campaign
+	if current_wave in [3, 6, 9, 12]:
 		spawn_waaagh_idol()
 		
 	wave_player_count = max(1, get_tree().get_nodes_in_group("players").size())
@@ -455,8 +466,9 @@ func start_next_wave():
 		wave_timer.timeout.connect(_spawn_wave_tick)
 		add_child(wave_timer)
 		
-	wave_timer.wait_time = max(0.55, 1.45 - (current_wave * 0.09) - ((wave_player_count - 1) * 0.05))
+	wave_timer.wait_time = max(0.42, 1.35 - (current_wave * 0.06) - ((wave_player_count - 1) * 0.04))
 	wave_timer.start()
+
  
 func _spawn_wave_tick():
 	if not wave_spawn_queue.is_empty():
@@ -469,7 +481,8 @@ func _spawn_wave_tick():
 		wave_timer.stop()
  
 func _build_wave_spawn_queue(wave: int, player_count: int) -> Array[int]:
-	var threat_budget = int(round((7.0 + wave * 4.0) * (1.0 + 0.65 * (player_count - 1))))
+	# Exponential threat budgeting for 15 waves
+	var threat_budget = int(round((10.0 + pow(wave, 1.32) * 5.2) * (1.0 + 0.65 * (player_count - 1))))
 	var unit_costs = {0: 1, 1: 2, 2: 4}
 	var roster = _get_wave_roster(wave)
 	var queue: Array[int] = []
@@ -495,26 +508,25 @@ func _build_wave_spawn_queue(wave: int, player_count: int) -> Array[int]:
 		threat_budget -= unit_costs[chosen_type]
  
 	return queue
- 
+
 func _get_wave_roster(wave: int) -> Array[Dictionary]:
-	if wave == 1:
-		return [{"type": 0, "weight": 0.82}, {"type": 1, "weight": 0.18}]
-	if wave == 2:
-		return [{"type": 0, "weight": 0.68}, {"type": 1, "weight": 0.32}]
-	if wave == 3:
-		return [{"type": 0, "weight": 0.52}, {"type": 1, "weight": 0.48}]
-	if wave == 4:
-		return [{"type": 0, "weight": 0.42}, {"type": 1, "weight": 0.46}, {"type": 2, "weight": 0.12}]
-	if wave == 5:
-		return [{"type": 0, "weight": 0.32}, {"type": 1, "weight": 0.45}, {"type": 2, "weight": 0.23}]
-	return [{"type": 0, "weight": 0.24}, {"type": 1, "weight": 0.42}, {"type": 2, "weight": 0.34}]
- 
+	if wave <= 2:
+		return [{"type": 0, "weight": 0.85}, {"type": 1, "weight": 0.15}]
+	elif wave <= 4:
+		return [{"type": 0, "weight": 0.60}, {"type": 1, "weight": 0.40}]
+	elif wave <= 7:
+		return [{"type": 0, "weight": 0.45}, {"type": 1, "weight": 0.40}, {"type": 2, "weight": 0.15}]
+	elif wave <= 11:
+		return [{"type": 0, "weight": 0.30}, {"type": 1, "weight": 0.42}, {"type": 2, "weight": 0.28}]
+	else:
+		# Waves 12-15: Massive Ork Boyz Elites & Squig Breachers
+		return [{"type": 0, "weight": 0.18}, {"type": 1, "weight": 0.42}, {"type": 2, "weight": 0.40}]
+
 func _build_spawn_lanes(wave: int, player_count: int) -> Array[float]:
 	var lane_count = 1
-	if wave >= 4:
-		lane_count += 1
-	if wave >= 7 and player_count >= 2:
-		lane_count += 1
+	if wave >= 4: lane_count += 1
+	if wave >= 8: lane_count += 1
+	if wave >= 12 and player_count >= 2: lane_count += 1
  
 	var lanes: Array[float] = []
 	var first_angle = randf() * TAU
@@ -557,20 +569,29 @@ func spawn_enemy(enemy_type: int = 0, lane_index: int = -1):
 		spawner.spawn(enemy_data)
  
 func spawn_waaagh_idol() -> void:
-	if not multiplayer.is_server() or not get_tree().get_nodes_in_group("objectives").is_empty():
+	if not multiplayer.is_server():
 		return
 	objective_count += 1
 	var base_node = get_tree().get_first_node_in_group("base")
 	var center_pos = base_node.global_position if base_node else Vector2(500, 500)
-	var position = center_pos + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(420.0, 540.0)
+	
+	# Spawn 700 to 1000px out into the desert terrain!
+	var camp_pos = center_pos + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(720.0, 1020.0)
+	
 	if spawner:
 		spawner.spawn({
 			"type": "waaagh_idol",
 			"name": "WaaaghIdol_" + str(objective_count),
-			"position": position
+			"position": camp_pos
 		})
-		for i in range(4 + current_wave):
-			spawn_objective_defender(position, 1 if i % 4 == 0 else 0)
+		
+		# Spawn 6-10 camp defenders (Gretchen + Squigs + Boyz)
+		var total_guards = 6 + int(current_wave * 0.5)
+		for i in range(total_guards):
+			var guard_type = 0
+			if i % 3 == 0: guard_type = 1 # Squig
+			elif i % 5 == 0 and current_wave >= 6: guard_type = 2 # Ork Boy
+			spawn_objective_defender(camp_pos, guard_type)
  
 func spawn_objective_defender(objective_pos: Vector2, enemy_type: int) -> void:
 	if not spawner:
@@ -827,31 +848,35 @@ func sync_tech_tree(shields: bool, lasers: bool, nanobots: bool):
 	tech_lasers_unlocked = lasers
 	tech_nanobots_unlocked = nanobots
 	get_tree().call_group("buildings", "_apply_tech_stats")
-
-@rpc("any_peer", "call_local", "reliable")
-func request_upgrade_distributor(building_name: String):
-	if not multiplayer.is_server(): return
-	var building = get_node_or_null(building_name)
-	if building and building.has_method("try_upgrade_distributor"):
-		building.try_upgrade_distributor()
+	get_tree().call_group("research_ui", "refresh_tech_cards")
 
 @rpc("any_peer", "call_local", "reliable")
 func request_upgrade_turret(building_name: String) -> void:
-	if not multiplayer.is_server():
-		return
-	var sender_id = multiplayer.get_remote_sender_id()
-	if sender_id == 0:
-		sender_id = 1
-	var player = get_node_or_null(str(sender_id)) as Node2D
-	var building = get_node_or_null(building_name) as Node2D
-	if not is_instance_valid(player) or not is_instance_valid(building):
-		return
-	if not ("building_type" in building and int(building.building_type) == 2):
-		return
-	if player.global_position.distance_to(building.global_position) > 85.0:
-		return
-	if building.has_method("try_upgrade_turret"):
+	if not multiplayer.is_server(): return
+	var building = _find_building_by_name(building_name)
+	if is_instance_valid(building) and building.has_method("try_upgrade_turret"):
 		building.try_upgrade_turret()
+
+@rpc("any_peer", "call_local", "reliable")
+func request_upgrade_distributor(building_name: String) -> void:
+	if not multiplayer.is_server(): return
+	var building = _find_building_by_name(building_name)
+	if is_instance_valid(building) and building.has_method("try_upgrade_distributor"):
+		building.try_upgrade_distributor()
+		
+@rpc("any_peer", "call_local", "reliable")
+func request_purchase_research(building_name: String, tech_index: int) -> void:
+	if not multiplayer.is_server(): return
+	var building = _find_building_by_name(building_name)
+	if is_instance_valid(building) and int(building.get("building_type")) == 6: # Research Shrine
+		if building.has_method("try_purchase_research"):
+			building.try_purchase_research(tech_index)
+
+func _find_building_by_name(b_name: String) -> Node2D:
+	if has_node(b_name): return get_node(b_name) as Node2D
+	for b in get_tree().get_nodes_in_group("buildings"):
+		if is_instance_valid(b) and b.name == b_name: return b
+	return null
  
 @rpc("call_local", "reliable")
 func sync_resources(scrap: int, requisition: int):

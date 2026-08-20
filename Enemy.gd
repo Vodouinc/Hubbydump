@@ -47,7 +47,6 @@ func _ready() -> void:
 
 	var is_host = (not multiplayer.has_multiplayer_peer()) or multiplayer.is_server()
 	if nav_agent and is_host:
-		# Connect to nav map changes so path updates when buildings are dropped
 		NavigationServer2D.map_changed.connect(_on_nav_map_changed)
 		call_deferred("setup_navigation")
 
@@ -129,11 +128,31 @@ func _physics_process(delta: float) -> void:
 		move_and_slide()
 		return
 
-	# Idol guards pace around their objective until the players choose to engage.
+	# Idol guards actively protect their camp and chase players who trespass
 	if is_objective_guard:
-		var patrol_angle = Time.get_ticks_msec() * 0.0007 + float(get_instance_id()) * 0.37
-		var patrol_target = guard_anchor + Vector2.RIGHT.rotated(patrol_angle) * 48.0
-		velocity = global_position.direction_to(patrol_target) * speed * 0.45
+		# 1. Check for nearby players or friendly bodyguards to attack
+		var target_friendly = _find_nearest_friendly_in_range(260.0)
+		if is_instance_valid(target_friendly):
+			var dist = global_position.distance_to(target_friendly.global_position)
+			if dist <= attack_range:
+				velocity = Vector2.ZERO
+				perform_attack(target_friendly)
+			else:
+				velocity = global_position.direction_to(target_friendly.global_position) * speed
+			move_and_slide()
+			return
+
+		# 2. If no players nearby, patrol in a wide orbit around the camp anchor
+		var wander_radius = 90.0 + (float(get_instance_id() % 6) * 16.0)
+		var patrol_angle = (Time.get_ticks_msec() * 0.0007) + (float(get_instance_id()) * 1.2)
+		var patrol_target = guard_anchor + Vector2.RIGHT.rotated(patrol_angle) * wander_radius
+
+		var dist_to_patrol = global_position.distance_to(patrol_target)
+		if dist_to_patrol > 15.0:
+			velocity = global_position.direction_to(patrol_target) * (speed * 0.55)
+		else:
+			velocity = Vector2.ZERO
+
 		move_and_slide()
 		return
 
@@ -152,10 +171,8 @@ func _physics_process(delta: float) -> void:
 			var next_path_pos = nav_agent.get_next_path_position()
 			move_direction = global_position.direction_to(next_path_pos)
 		else:
-			# If finished navigation but not in range of base, force map check
 			_update_nav_target()
 	else:
-		# Emergency fallback ONLY if NavigationAgent2D node is missing completely
 		move_direction = global_position.direction_to(base_node.global_position)
 
 	velocity = move_direction * speed
@@ -172,13 +189,25 @@ func _physics_process(delta: float) -> void:
 					perform_attack(collider)
 					return
 
+func _find_nearest_friendly_in_range(range_limit: float) -> Node2D:
+	var candidates: Array = get_tree().get_nodes_in_group("players")
+	candidates.append_array(get_tree().get_nodes_in_group("bodyguards"))
+	
+	var nearest: Node2D = null
+	var min_d = range_limit
+	for c in candidates:
+		if is_instance_valid(c):
+			var d = global_position.distance_to(c.global_position)
+			if d < min_d:
+				min_d = d
+				nearest = c
+	return nearest
+
 func perform_attack(target: Node2D) -> void:
 	if attack_cooldown_timer > 0.0 or not is_instance_valid(target):
 		return
 
-	attack_cooldown_timer = 1.0 # 1 second attack rate
-	
-	# Trigger attack animation/charge effect across network
+	attack_cooldown_timer = 1.0
 	rpc("trigger_attack_charge")
 	
 	if target.has_method("take_damage"):
@@ -196,8 +225,7 @@ func trigger_attack_charge() -> void:
 		if visual_sprite.has_method("play_attack_fx"):
 			visual_sprite.play_attack_fx()
 		var tween = create_tween().set_parallel(true)
-		# Quick wind-up shrink backward, lunge forward scale punch, then snap back
-		visual_sprite.scale = Vector2(0.8, 1.2) # Squash vertical stretch
+		visual_sprite.scale = Vector2(0.8, 1.2)
 		tween.tween_property(visual_sprite, "scale", Vector2(1.3, 0.7), 0.1).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 		tween.chain().tween_property(visual_sprite, "scale", Vector2.ONE, 0.15).set_trans(Tween.TRANS_SINE)
 
@@ -216,7 +244,6 @@ func take_damage(amount: int, knockback_impulse: Vector2 = Vector2.ZERO) -> void
 		rpc("sync_health", new_health)
 		rpc("trigger_hit_flash")
 		
-		# Spawn floating combat text over unreliable channel
 		var random_offset = Vector2(randf_range(-12.0, 12.0), randf_range(-10.0, 5.0))
 		rpc("spawn_damage_number", amount, global_position + random_offset)
 
@@ -243,12 +270,10 @@ func sync_health(new_health: int) -> void:
 
 	if current_health <= 0:
 		if multiplayer.is_server():
-			# --- FIX: Defer death handling so it avoids flushing query restrictions ---
 			if not is_queued_for_deletion():
 				call_deferred("_handle_death")
 
 func _handle_death() -> void:
-	# Disconnect listener before freeing to avoid memory leaks
 	if NavigationServer2D.map_changed.is_connected(_on_nav_map_changed):
 		NavigationServer2D.map_changed.disconnect(_on_nav_map_changed)
 

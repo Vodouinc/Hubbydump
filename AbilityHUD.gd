@@ -13,7 +13,6 @@ var local_player: Node2D = null
 var update_accumulator: float = 0.0
 const UPDATE_INTERVAL: float = 0.1
 
-# AdMech UI Palette
 const COLOR_BG := Color(0.06, 0.07, 0.09, 0.94)
 const COLOR_BRASS := Color(0.78, 0.58, 0.22)
 const COLOR_BRASS_DIM := Color(0.38, 0.28, 0.12)
@@ -28,7 +27,7 @@ func _ready():
 	_setup_slot_containers()
 
 func _setup_slot_containers():
-	var slots = [slot1_panel, slot2_panel, slot3_panel, slot4_panel, slot5_panel]
+	var slots = [slot1_panel, slot2_panel, slot3_panel, slot4_panel, slot5_panel, slot6_panel]
 	for slot in slots:
 		if slot is PanelContainer or slot is Panel:
 			slot.custom_minimum_size = Vector2(105, 68)
@@ -64,17 +63,14 @@ func _format_slot(panel: Node, key_txt: String, name_txt: String, cost_scrap: in
 	var name_lbl = panel.find_child("NameLabel", true, false) as Label
 	var cost_lbl = panel.find_child("CostLabel", true, false) as Label
 
-	# 1. Clean Keybind Chip formatting
 	if key_lbl:
 		key_lbl.text = " " + key_txt + " "
 		key_lbl.add_theme_color_override("font_color", COLOR_CYAN if is_selected else Color(0.95, 0.95, 0.95))
 
-	# 2. Ability Name Header
 	if name_lbl:
 		name_lbl.text = name_txt
 		name_lbl.add_theme_color_override("font_color", Color.WHITE if not is_maxed else COLOR_DISABLED)
 
-	# 3. Compact Resource Badges (⚙ Scrap / ⚡ Req)
 	if cost_lbl:
 		if is_maxed:
 			cost_lbl.text = "◆ MAXED ◆"
@@ -84,23 +80,18 @@ func _format_slot(panel: Node, key_txt: String, name_txt: String, cost_scrap: in
 			cost_lbl.add_theme_color_override("font_color", Color(0.4, 0.9, 0.5))
 		else:
 			var parts: Array[String] = []
-			if cost_scrap > 0:
-				parts.append("⚙ " + str(cost_scrap))
-			if cost_req > 0:
-				parts.append("⚡ " + str(cost_req))
+			if cost_scrap > 0: parts.append("⚙ " + str(cost_scrap))
+			if cost_req > 0: parts.append("⚡ " + str(cost_req))
 			cost_lbl.text = "  ".join(parts)
 
-			# Highlight red if player cannot afford
 			var can_afford = (current_scrap >= cost_scrap and current_req >= cost_req)
 			cost_lbl.add_theme_color_override("font_color", Color(0.9, 0.85, 0.7) if can_afford else COLOR_RED_ALERT)
 
-	# 4. Active Selection & Affordability Styling
 	var can_afford_total = (current_scrap >= cost_scrap and current_req >= cost_req) or is_selected
 	if is_maxed:
 		panel.modulate = Color(0.55, 0.55, 0.60, 0.75)
 		panel.scale = Vector2.ONE
 	elif is_selected:
-		# Pulsing active build mode highlight
 		var pulse = 0.85 + sin(Time.get_ticks_msec() * 0.008) * 0.15
 		panel.modulate = Color(COLOR_CYAN.r, COLOR_CYAN.g, COLOR_CYAN.b, pulse)
 		panel.scale = Vector2(1.04, 1.04)
@@ -121,10 +112,7 @@ func refresh_hud_display():
 	
 	if main_node:
 		if "requisition_amount" in main_node: current_req = main_node.requisition_amount
-		elif "requisition" in main_node: current_req = main_node.requisition
-		
 		if "scrap_amount" in main_node: current_scrap = main_node.scrap_amount
-		elif "scrap" in main_node: current_scrap = main_node.scrap
 
 	var is_techpriest = (local_player.current_class == 0)
 
@@ -157,8 +145,8 @@ func refresh_hud_display():
 		if slot5_panel:
 			slot5_panel.show()
 			_format_slot(slot5_panel, "5", "Tech Shrine", 40, 15, current_scrap, current_req, is_building and selected_type == 6)
-		
-		# Slot 5: Servo-Skull [K]
+
+		# Slot 6: Servo-Skull [K]
 		if slot6_panel:
 			slot6_panel.show()
 			var max_skulls = local_player.MAX_SERVO_SKULLS if "MAX_SERVO_SKULLS" in local_player else 2
@@ -169,16 +157,14 @@ func refresh_hud_display():
 
 			var is_maxed = (current_skulls >= max_skulls)
 			var skull_name = "Servo-Skull (" + str(current_skulls) + "/" + str(max_skulls) + ")"
-			_format_slot(slot5_panel, "K", skull_name, 20, 10, current_scrap, current_req, false, is_maxed)
+			_format_slot(slot6_panel, "K", skull_name, 20, 10, current_scrap, current_req, false, is_maxed)
 
 	# --- SKITARII MARSHAL (RANGED COMMANDER) ---
 	else:
-		# Slot 1: Primary Radium Shot
 		if slot1_panel:
 			slot1_panel.show()
 			_format_slot(slot1_panel, "LMB", "Radium Carbine", 0, 0, current_scrap, current_req, false)
 
-		# Slot 2: Bodyguards [N]
 		if slot2_panel:
 			slot2_panel.show()
 			var current_lvl = local_player.bodyguard_level if "bodyguard_level" in local_player else 0
@@ -186,7 +172,6 @@ func refresh_hud_display():
 			var is_maxed = (current_lvl >= 2)
 			_format_slot(slot2_panel, "N", "Bodyguard (" + str(current_lvl) + "/2)", 0, cost, current_scrap, current_req, false, is_maxed)
 
-		# Slot 3: Damage Upgrade [M]
 		if slot3_panel:
 			slot3_panel.show()
 			var dmg_lvl = local_player.damage_upgrade_level if "damage_upgrade_level" in local_player else 0
@@ -195,7 +180,6 @@ func refresh_hud_display():
 			var is_maxed = (dmg_lvl >= max_dmg)
 			_format_slot(slot3_panel, "M", "DMG Up (" + str(dmg_lvl) + "/" + str(max_dmg) + ")", 0, cost, current_scrap, current_req, false, is_maxed)
 
-		# Slot 4: Speed Upgrade [V]
 		if slot4_panel:
 			slot4_panel.show()
 			var spd_lvl = local_player.speed_upgrade_level if "speed_upgrade_level" in local_player else 0
@@ -204,6 +188,5 @@ func refresh_hud_display():
 			var is_maxed = (spd_lvl >= max_spd)
 			_format_slot(slot4_panel, "V", "Speed Up (" + str(spd_lvl) + "/" + str(max_spd) + ")", 0, cost, current_scrap, current_req, false, is_maxed)
 
-		# Slot 5 hidden for Marshal
-		if slot5_panel:
-			slot5_panel.hide()
+		if slot5_panel: slot5_panel.hide()
+		if slot6_panel: slot6_panel.hide()

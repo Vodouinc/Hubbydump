@@ -15,26 +15,30 @@ extends Node2D
 @export var always_visible: bool = false
 
 # Palette Constants
-@export var color_healthy: Color = Color(0.15, 0.90, 0.45) # Emerald Green / Cyan Glow
-@export var color_medium: Color = Color(0.95, 0.72, 0.15)  # Forge Amber
-@export var color_critical: Color = Color(0.92, 0.18, 0.18)# Mars Red
-@export var color_ghost: Color = Color(0.95, 0.92, 0.85, 0.75) # Trailing damage flash
-@export var bg_color: Color = Color(0.06, 0.07, 0.10, 0.85)     # Deep dark iron
-@export var border_color: Color = Color(0.35, 0.38, 0.42, 0.9)  # Steel frame
+@export var color_healthy: Color = Color(0.15, 0.90, 0.45)
+@export var color_medium: Color = Color(0.95, 0.72, 0.15)
+@export var color_critical: Color = Color(0.92, 0.18, 0.18)
+@export var color_shield: Color = Color(0.20, 0.88, 1.0, 0.95)
+@export var color_ghost: Color = Color(0.95, 0.92, 0.85, 0.75)
+@export var bg_color: Color = Color(0.06, 0.07, 0.10, 0.85)
+@export var border_color: Color = Color(0.35, 0.38, 0.42, 0.9)
 
 var current_hp: float = 100.0
 var max_hp: float = 100.0
+var current_shield: float = 0.0
+var max_shield: float = 0.0
 
 var target_ratio: float = 1.0
 var primary_ratio: float = 1.0
 var ghost_ratio: float = 1.0
+var shield_ratio: float = 0.0
 
 var ghost_lag_timer: float = 0.0
 var visibility_timer: float = 0.0
 var current_alpha: float = 1.0
 
 func _ready() -> void:
-	z_index = 10 # Draw above floor and units
+	z_index = 10
 	if not Engine.is_editor_hint() and auto_hide_when_full and not always_visible:
 		current_alpha = 0.0
 		modulate.a = 0.0
@@ -42,11 +46,9 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	var parent_node = get_parent() as Node2D
 	if parent_node:
-		# Lock rotation to 0 so healthbar never spins when unit turns
 		global_rotation = 0.0
 		global_position = parent_node.global_position + bar_offset
 
-	# 1. Smooth Primary Bar Lerp
 	var need_redraw = false
 	if abs(primary_ratio - target_ratio) > 0.001:
 		primary_ratio = lerpf(primary_ratio, target_ratio, clampf(delta * 14.0, 0.0, 1.0))
@@ -54,7 +56,6 @@ func _process(delta: float) -> void:
 	else:
 		primary_ratio = target_ratio
 
-	# 2. Smooth Ghost Damage Lag Bar Lerp
 	if ghost_lag_timer > 0.0:
 		ghost_lag_timer -= delta
 	else:
@@ -64,11 +65,10 @@ func _process(delta: float) -> void:
 		else:
 			ghost_ratio = primary_ratio
 
-	# 3. Smart Visibility / Auto-hide handling
 	if not Engine.is_editor_hint() and not always_visible:
 		if auto_hide_when_full:
 			var target_alpha = 1.0
-			if target_ratio >= 0.999 and visibility_timer <= 0.0:
+			if target_ratio >= 0.999 and shield_ratio >= 0.999 and visibility_timer <= 0.0:
 				target_alpha = 0.0
 			elif visibility_timer > 0.0:
 				visibility_timer -= delta
@@ -95,17 +95,20 @@ func setup(current_val: int, max_val: int) -> void:
 	queue_redraw()
 
 func update_health(current_val: int, max_val: int = -1) -> void:
-	if max_val > 0:
-		max_hp = float(max_val)
+	if max_val > 0: max_hp = float(max_val)
 	current_hp = clampf(float(current_val), 0.0, max_hp)
-
 	var new_ratio = current_hp / max_hp
 	if new_ratio < target_ratio:
-		# Taking damage: hold ghost bar for 0.28s before draining
 		ghost_lag_timer = 0.28
-		visibility_timer = 3.5 # Stay visible for 3.5 seconds after damage
-
+		visibility_timer = 4.0
 	target_ratio = new_ratio
+	queue_redraw()
+
+func update_shield(current_val: int, max_val: int) -> void:
+	max_shield = float(max_val)
+	current_shield = float(current_val)
+	shield_ratio = (current_shield / max_shield) if max_shield > 0.0 else 0.0
+	if shield_ratio < 0.99: visibility_timer = 4.0
 	queue_redraw()
 
 func _draw() -> void:
@@ -113,13 +116,12 @@ func _draw() -> void:
 	var half_h = bar_size.y * 0.5
 	var bar_rect = Rect2(-half_w, -half_h, bar_size.x, bar_size.y)
 
-	# 1. Dark Background Plate
+	# 1. Background Plate
 	draw_rect(bar_rect, bg_color)
 
-	# 2. Ghost Bar (Trailing Damage Flash)
+	# 2. Ghost Bar
 	if ghost_ratio > 0.001:
-		var ghost_w = bar_size.x * clampf(ghost_ratio, 0.0, 1.0)
-		draw_rect(Rect2(-half_w, -half_h, ghost_w, bar_size.y), color_ghost)
+		draw_rect(Rect2(-half_w, -half_h, bar_size.x * clampf(ghost_ratio, 0.0, 1.0), bar_size.y), color_ghost)
 
 	# 3. Dynamic Primary Health Fill
 	if primary_ratio > 0.001:
@@ -127,19 +129,18 @@ func _draw() -> void:
 		var fill_color = _get_fill_color(primary_ratio)
 		draw_rect(Rect2(-half_w, -half_h, fill_w, bar_size.y), fill_color)
 
-		# Top highlight line for a crisp 3D beveled sci-fi edge
-		if bar_size.y >= 3.0:
-			var highlight_color = Color(fill_color.r + 0.25, fill_color.g + 0.25, fill_color.b + 0.25, 0.6)
-			draw_line(Vector2(-half_w, -half_h + 1), Vector2(-half_w + fill_w, -half_h + 1), highlight_color, 1.0)
+	# 4. Metallic Border
+	draw_rect(Rect2(-half_w - 1, -half_h - 1, bar_size.x + 2, bar_size.y + 2), border_color, false, 1.0)
 
-	# 4. Metallic Steel Border Frame
-	var border_rect = Rect2(-half_w - 1, -half_h - 1, bar_size.x + 2, bar_size.y + 2)
-	draw_rect(border_rect, border_color, false, 1.0)
+	# 5. Aegis Refractor Blue Shield Bar (Stacked 3px above health bar)
+	if max_shield > 0.0 and shield_ratio > 0.001:
+		var shield_y = -half_h - 4.5
+		var shield_w = bar_size.x * clampf(shield_ratio, 0.0, 1.0)
+		draw_rect(Rect2(-half_w, shield_y, bar_size.x, 2.5), bg_color)
+		draw_rect(Rect2(-half_w, shield_y, shield_w, 2.5), color_shield)
+		draw_rect(Rect2(-half_w - 1, shield_y - 1, bar_size.x + 2, 4.5), border_color, false, 1.0)
 
 func _get_fill_color(ratio: float) -> Color:
 	if ratio > 0.5:
-		var t = (ratio - 0.5) / 0.5
-		return color_medium.lerp(color_healthy, t)
-	else:
-		var t = ratio / 0.5
-		return color_critical.lerp(color_medium, t)
+		return color_medium.lerp(color_healthy, (ratio - 0.5) / 0.5)
+	return color_critical.lerp(color_medium, ratio / 0.5)

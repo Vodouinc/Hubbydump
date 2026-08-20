@@ -63,6 +63,11 @@ var wave_player_count: int = 1
 var spawn_lane_angles: Array[float] = []
 var spawn_serial: int = 0
 var objective_count: int = 0
+
+# --- GLOBAL TECH TREE UNLOCKS ---
+var tech_shields_unlocked: bool = false
+var tech_lasers_unlocked: bool = false
+var tech_nanobots_unlocked: bool = false
  
 # --------------------------------------------------
 # UI & NETWORK NODE REFERENCES (Using % Unique Names)
@@ -222,7 +227,6 @@ func _show_lobby_ui():
 	match_started = false
 	is_ready = false
 	
-	# Show all lobby elements
 	if lobby_panel: lobby_panel.show()
 	if host_button: host_button.show()
 	if join_button: join_button.show()
@@ -243,7 +247,6 @@ func _show_lobby_ui():
 func _hide_lobby_ui():
 	_clear_class_preview()
 	
-	# Hide all lobby UI elements cleanly
 	if lobby_panel: lobby_panel.hide()
 	if host_button: host_button.hide()
 	if join_button: join_button.hide()
@@ -255,10 +258,8 @@ func _hide_lobby_ui():
 	if roster_label: roster_label.hide()
 	if session_label: session_label.hide()
 	
-	# Show gameplay HUD
 	if top_bar: top_bar.show()
 
- 
 func _set_session_text(message: String) -> void:
 	if session_label:
 		session_label.text = message
@@ -329,13 +330,11 @@ func _try_start_match() -> void:
 	if ids.is_empty():
 		return
 		
-	# Verify that every player in the session has clicked READY
 	for id in ids:
 		if not player_ready.get(id, false):
 			_set_session_text("Waiting on the cadre to Ready.")
 			return
 			
-	# Start match ONLY when everyone is ready
 	_begin_match()
  
 func _session_peer_ids() -> Array[int]:
@@ -406,7 +405,6 @@ func _on_join_pressed():
 func spawn_player(peer_id: int):
 	if not multiplayer.is_server(): return
 	
-	# Guard against spawning duplicates if the player already exists
 	for p in get_tree().get_nodes_in_group("players"):
 		if p.name == str(peer_id):
 			return
@@ -440,13 +438,9 @@ func start_next_wave():
 		game_over(true)
 		return
  
-	# Field objectives begin once the team has survived the opening setup phase.
-	# They are optional, high-value sorties for the mobile Skitarii role.
 	if current_wave == 3 or current_wave == 6:
 		spawn_waaagh_idol()
 		
-	# Build a threat budget, rather than a fixed headcount. This keeps early
-	# waves useful for construction and lets extra players face mixed pressure.
 	wave_player_count = max(1, get_tree().get_nodes_in_group("players").size())
 	wave_spawn_queue = _build_wave_spawn_queue(current_wave, wave_player_count)
 	enemies_left_to_spawn = wave_spawn_queue.size()
@@ -461,8 +455,6 @@ func start_next_wave():
 		wave_timer.timeout.connect(_spawn_wave_tick)
 		add_child(wave_timer)
 		
-	# Early waves arrive slowly enough to establish defenses. Later waves gain
-	# tempo, but preserve enough spacing for targets to read as a horde.
 	wave_timer.wait_time = max(0.55, 1.45 - (current_wave * 0.09) - ((wave_player_count - 1) * 0.05))
 	wave_timer.start()
  
@@ -477,8 +469,6 @@ func _spawn_wave_tick():
 		wave_timer.stop()
  
 func _build_wave_spawn_queue(wave: int, player_count: int) -> Array[int]:
-	# Gretchin are cheap bodies, squigs are flank pressure, and Boyz are elites.
-	# Player scaling increases the available threat, not every individual stat.
 	var threat_budget = int(round((7.0 + wave * 4.0) * (1.0 + 0.65 * (player_count - 1))))
 	var unit_costs = {0: 1, 1: 2, 2: 4}
 	var roster = _get_wave_roster(wave)
@@ -507,8 +497,6 @@ func _build_wave_spawn_queue(wave: int, player_count: int) -> Array[int]:
 	return queue
  
 func _get_wave_roster(wave: int) -> Array[Dictionary]:
-	# The first three waves deliberately exclude Boyz: players need time to
-	# establish the machine-cult perimeter before proper Ork muscle arrives.
 	if wave == 1:
 		return [{"type": 0, "weight": 0.82}, {"type": 1, "weight": 0.18}]
 	if wave == 2:
@@ -553,7 +541,6 @@ func spawn_enemy(enemy_type: int = 0, lane_index: int = -1):
 	enemy_count += 1
 	var spawn_angle = randf() * TAU
 	if lane_index >= 0 and lane_index < spawn_lane_angles.size():
-		# A small spread makes each lane feel like a raiding mob, not a file.
 		spawn_angle = spawn_lane_angles[lane_index] + randf_range(-0.22, 0.22)
 	var spawn_dist = randf_range(650.0, 800.0)
 	var base_node = get_tree().get_first_node_in_group("base")
@@ -610,7 +597,6 @@ func sync_game_over(is_victory: bool):
 	if game_over_ui:
 		game_over_ui.show()
 		
-	# Update the custom drawing background script's flag dynamically
 	if bg_drawing_node:
 		bg_drawing_node.is_victory_screen = is_victory
 		bg_drawing_node.queue_redraw()
@@ -647,7 +633,6 @@ func execute_rematch():
 	if game_over_ui: 
 		game_over_ui.hide()
 	
-	# Reset wave and resource counters
 	current_wave = 0
 	active_enemies = 0
 	enemies_left_to_spawn = 0
@@ -659,11 +644,15 @@ func execute_rematch():
 	requisition_amount = 0
 	building_count = 0
 	
+	# Reset Tech Tree
+	tech_shields_unlocked = false
+	tech_lasers_unlocked = false
+	tech_nanobots_unlocked = false
+	
 	if multiplayer.is_server():
 		if wave_timer: 
 			wave_timer.stop()
 			
-		# Despawn match entities
 		for enemy in get_tree().get_nodes_in_group("enemies"): enemy.queue_free()
 		for player in get_tree().get_nodes_in_group("players"): player.queue_free()
 		for building in get_tree().get_nodes_in_group("buildings"): building.queue_free()
@@ -672,15 +661,14 @@ func execute_rematch():
 		for skull in get_tree().get_nodes_in_group("ServoSkull"): skull.queue_free()
 		for scrap in get_tree().get_nodes_in_group("scrap"): scrap.queue_free()
 		
-		# Reset base core
 		var base = get_tree().get_first_node_in_group("base")
 		if base and base.has_method("sync_base_health"):
 			base.rpc("sync_base_health", base.max_health)
 		
 		rpc("sync_resources", scrap_amount, requisition_amount)
+		rpc("sync_tech_tree", false, false, false)
 		request_navmesh_rebake()
 
-	# DO NOT close multiplayer.multiplayer_peer! Keep the connection alive.
 	match_started = false
 	for peer_id in player_ready.keys():
 		player_ready[peer_id] = false
@@ -794,13 +782,12 @@ func _custom_spawner(data) -> Node:
 				var skull = servoskull_scene.instantiate()
 				skull.name = str(data["name"])
 				skull.global_position = data["position"]
-				skull.set_multiplayer_authority(1) # Controlled by server
+				skull.set_multiplayer_authority(1)
 				
 				var owner_id = data["owner_id"]
 				var player_node = get_node_or_null(str(owner_id))
 				if player_node:
 					skull.set_owner_player(player_node)
-					# Optional: Track it on the player if you want a limit per tech-priest
 					if "active_servo_skulls" in player_node:
 						player_node.active_servo_skulls.append(skull)
 						
@@ -809,7 +796,7 @@ func _custom_spawner(data) -> Node:
 	return null
  
 # --------------------------------------------------
-# RESOURCE & BUILDING MANAGEMENT
+# RESOURCE, TECH & BUILDING MANAGEMENT
 # --------------------------------------------------
  
 func add_scrap(amount: int):
@@ -826,7 +813,28 @@ func spend_requisition(amount: int) -> bool:
 		rpc("sync_resources", scrap_amount, requisition_amount)
 		return true
 	return false
- 
+	
+func unlock_tech(tech_index: int):
+	match tech_index:
+		0: tech_shields_unlocked = true
+		1: tech_lasers_unlocked = true
+		2: tech_nanobots_unlocked = true
+	rpc("sync_tech_tree", tech_shields_unlocked, tech_lasers_unlocked, tech_nanobots_unlocked)
+
+@rpc("call_local", "reliable")
+func sync_tech_tree(shields: bool, lasers: bool, nanobots: bool):
+	tech_shields_unlocked = shields
+	tech_lasers_unlocked = lasers
+	tech_nanobots_unlocked = nanobots
+	get_tree().call_group("buildings", "_apply_tech_stats")
+
+@rpc("any_peer", "call_local", "reliable")
+func request_upgrade_distributor(building_name: String):
+	if not multiplayer.is_server(): return
+	var building = get_node_or_null(building_name)
+	if building and building.has_method("try_upgrade_distributor"):
+		building.try_upgrade_distributor()
+
 @rpc("any_peer", "call_local", "reliable")
 func request_upgrade_turret(building_name: String) -> void:
 	if not multiplayer.is_server():
@@ -863,15 +871,16 @@ func request_build_structure(build_pos: Vector2, building_type: int = 0):
 	if not multiplayer.is_server():
 		return
 		
-	var scrap_costs = [15, 25, 35]
-	var current_scrap_cost = scrap_costs[clamp(building_type, 0, scrap_costs.size() - 1)]
-	
-	var req_costs = [0, 0, 5] 
-	var current_req_cost = req_costs[clamp(building_type, 0, req_costs.size() - 1)]
-	
-	if scrap_amount >= current_scrap_cost and requisition_amount >= current_req_cost:
-		scrap_amount -= current_scrap_cost
-		requisition_amount -= current_req_cost
+	# Costs for: 0: Barricade, 1: Generator, 2: Turret, 3: Manufactorum, 4: Distributor, 5: Antenna, 6: Research Shrine
+	var scrap_costs = [15, 25, 35, 60, 20, 0, 40]
+	var req_costs   = [0,  0,  5,  25, 0,  0, 15]
+
+	var scrap_c = scrap_costs[clamp(building_type, 0, scrap_costs.size() - 1)]
+	var req_c = req_costs[clamp(building_type, 0, req_costs.size() - 1)]
+
+	if scrap_amount >= scrap_c and requisition_amount >= req_c:
+		scrap_amount -= scrap_c
+		requisition_amount -= req_c
 		
 		rpc("sync_resources", scrap_amount, requisition_amount)
 		
@@ -885,6 +894,8 @@ func request_build_structure(build_pos: Vector2, building_type: int = 0):
 		
 		if spawner:
 			spawner.spawn(building_data)
+			get_tree().call_group("buildings", "refresh_barricade_connections")
+			request_navmesh_rebake()
 
 func request_navmesh_rebake() -> void:
 	update_navmesh()

@@ -45,12 +45,10 @@ func _ready() -> void:
 
 func _setup_pulse_renderer() -> void:
 	if not has_node("ConduitPulseRenderer"):
-		conduit_pulse_renderer = Node2D.new()
+		conduit_pulse_renderer = ConduitPulseRenderer.new()
 		conduit_pulse_renderer.name = "ConduitPulseRenderer"
 		conduit_pulse_renderer.z_index = 1
 		add_child(conduit_pulse_renderer)
-		
-		conduit_pulse_renderer.set_script(load("res://SandyFloor.gd").ConduitPulseRenderer)
 	else:
 		conduit_pulse_renderer = get_node("ConduitPulseRenderer")
 
@@ -99,6 +97,7 @@ func refresh_foundations() -> void:
 
 func _gather_active_structures() -> Array[Dictionary]:
 	var list: Array[Dictionary] = []
+
 	var base_nodes = get_tree().get_nodes_in_group("base") if not Engine.is_editor_hint() else []
 	for b in base_nodes:
 		if is_instance_valid(b):
@@ -106,30 +105,26 @@ func _gather_active_structures() -> Array[Dictionary]:
 				"node": b,
 				"local_pos": to_local(b.global_position),
 				"is_base": true,
-				"radius": 115.0,
+				"radius": 130.0,
 				"type": -1
 			})
-
-	if Engine.is_editor_hint() and list.is_empty():
-		list.append({
-			"node": null,
-			"local_pos": Vector2.ZERO,
-			"is_base": true,
-			"radius": 115.0,
-			"type": -1
-		})
 
 	var building_nodes = get_tree().get_nodes_in_group("buildings") if not Engine.is_editor_hint() else []
 	for b in building_nodes:
 		if is_instance_valid(b):
 			if "is_preview" in b and b.is_preview: continue
 			var b_type = int(b.get("building_type")) if "building_type" in b else 0
-			var b_radius = 44.0
+			
+			# ONLY Heavy & Logistics buildings spread Industrial Ground
+			# (Barricades [0] and Turrets [2] DO NOT generate ground)
+			var b_radius = 0.0
 			match b_type:
-				0: b_radius = 34.0
-				1: b_radius = 52.0
-				2: b_radius = 45.0
-				3: b_radius = 58.0
+				1: b_radius = 58.0   # Generator
+				3: b_radius = 65.0   # Manufactorum
+				4: b_radius = 110.0  # Distributor (Expands Territory!)
+				5: b_radius = 120.0  # Noosphere Antenna
+				6: b_radius = 65.0   # Research Shrine
+				_: continue
 
 			list.append({
 				"node": b,

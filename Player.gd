@@ -35,19 +35,32 @@ var attack_anim_duration: float = 0.2  # Speed of the arc swing in seconds
 # Tracks enemies hit during the CURRENT swing so they aren't damaged twice
 var already_hit_enemies: Array = []
 
-# --- BUILDING SYSTEM STATE ---
-var selected_building_type: int = 0 # 0: Barricade, 1: Generator, 2: Turret
-const BUILDING_COSTS = [15, 25, 35] # Costs for Barricade, Generator, Turret
-const MIN_BUILDING_SPACING: float = 60.0 # Proximity clearance radius
-const BUILD_RANGE: float = 220.0
-const BUILD_SNAP_DISTANCE: float = 18.0
+# --- BUILDING SYSTEM & GRID STATE ---
+# Building Types: 
+# 0: Barricade (15 Scrap - Open terrain)
+# 1: Generator (25 Scrap - Requires Industrial Ground)
+# 2: Turret (35 Scrap, 5 Req - Open terrain)
+# 3: Manufactorum (60 Scrap, 25 Req - Requires Industrial Ground)
+# 4: Distributor (20 Scrap - Spreads Industrial Ground)
+# 5: Noosphere Antenna (Upgraded from Distributor via [E])
+# 6: Research Shrine (40 Scrap, 15 Req - Requires Industrial Ground)
+var selected_building_type: int = 0
+const BUILDING_COSTS = [15, 25, 35, 60, 20, 0, 40]
+const BUILD_RANGE: float = 260.0
 const CONDUIT_RANGE: float = 360.0
-const TURRET_INTERACTION_RANGE: float = 85.0
+const INTERACTION_RANGE: float = 85.0
 var building_scene = preload("res://Building.tscn")
 var is_building_mode: bool = false
 var preview_instance: Node2D = null
 var preview_is_valid: bool = false
 var preview_connection_target: Node2D = null
+
+# ==============================================================================
+# MODULAR GRID & WALL BALANCING CONSTANTS
+# ==============================================================================
+const GRID_SIZE: float = 32.0          # Base cell dimension in pixels
+const WALL_LINK_RANGE: float = 95.0    # Connects up to 2 cells cardinally (64px) & 1-2 cells diagonally (~45-90px)
+var preview_barricade_links: Array[Node2D] = []
 
 # --- BODYGUARD SYSTEM STATE ---
 var bodyguard_scene = preload("res://SkitariiBodyguard.tscn")
@@ -182,7 +195,7 @@ func _physics_process(_delta):
 		velocity = direction.normalized() * speed
 		move_and_slide()
 
-# --- BUILDING SYSTEM CONTROLS ---
+# --- BUILDING & GRID PLACEMENT SYSTEM ---
 
 func toggle_build_mode(building_type_idx: int = 0):
 	if is_building_mode and selected_building_type == building_type_idx:
@@ -211,6 +224,7 @@ func _cancel_build_mode():
 	is_building_mode = false
 	preview_is_valid = false
 	preview_connection_target = null
+	preview_barricade_links.clear()
 	if is_instance_valid(preview_instance):
 		preview_instance.queue_free()
 		preview_instance = null
@@ -220,47 +234,101 @@ func update_preview_type():
 	if is_instance_valid(preview_instance):
 		if "building_type" in preview_instance:
 			preview_instance.building_type = selected_building_type
-		# If your preview instance has a method to refresh its visual sprite/mesh:
 		if preview_instance.has_method("setup_as_preview"):
 			preview_instance.setup_as_preview()
 
-func _is_build_location_valid(build_pos: Vector2) -> bool:
-	var preview_radius = _get_structure_foundation_radius(preview_instance)
-	var structures: Array = get_tree().get_nodes_in_group("buildings")
-	structures.append_array(get_tree().get_nodes_in_group("base"))
-	for structure in structures:
-		if is_instance_valid(structure) and structure != preview_instance:
-			var required_clearance = preview_radius + _get_structure_foundation_radius(structure) + 12.0
-			if structure.global_position.distance_to(build_pos) < max(MIN_BUILDING_SPACING, required_clearance):
-				return false
-	return true
+# --- GRID FOOTPRINT & DIMENSION HELPERS ---
 
-func _get_structure_foundation_radius(node: Node2D) -> float:
-	if node.is_in_group("base"):
-		return 115.0
-	if "building_type" in node:
-		match int(node.building_type):
-			0: return 32.0
-			1: return 52.0
-			2: return 45.0
-			3: return 58.0
-	return 32.0
+func _get_building_size(type: int) -> Vector2:
+	match type:
+		-1: return Vector2(128, 128) # Main Base (4x4 tiles)
+		0:  return Vector2(32, 32)   # Barricade Post (1x1 tile)
+		1:  return Vector2(64, 64)   # Generator (2x2 tiles)
+		2:  return Vector2(32, 32)   # Turret (1x1 tile)
+		3:  return Vector2(96, 96)   # Manufactorum (3x3 tiles)
+		4:  return Vector2(32, 32)   # Distributor (1x1 tile)
+		5:  return Vector2(32, 32)   # Noosphere Antenna (1x1 tile)
+		6:  return Vector2(64, 64)   # Research Shrine (2x2 tiles)
+		_:  return Vector2(32, 32)
+
+func _get_building_rect(type: int, pos: Vector2) -> Rect2:
+	var size = _get_building_size(type)
+	return Rect2(pos - (size * 0.5), size)
+
+func _requires_industrial_ground(type: int) -> bool:
+	# Generator (1), Manufactorum (3), and Research Shrine (6) MUST be placed on industrial ground!
+	return type in [1, 3, 6]
+
+func _is_position_on_industrial_ground(pos: Vector2) -> bool:
+	var base_nodes = get_tree().get_nodes_in_group("base")
+	for b in base_nodes:
+		if is_instance_valid(b) and pos.distance_to(b.global_position) <= 145.0:
+			return true
+
+	var buildings = get_tree().get_nodes_in_group("buildings")
+	for b in buildings:
+		if not is_instance_valid(b) or b == preview_instance:
+			continue
+		var b_type = int(b.get("building_type")) if "building_type" in b else 0
+		var coverage_radius = 0.0
+		match b_type:
+			1: coverage_radius = 70.0   # Generator
+			3: coverage_radius = 80.0   # Manufactorum
+			4: coverage_radius = 125.0  # Distributor (Territory Expansion)
+			5: coverage_radius = 135.0  # Noosphere Antenna
+			6: coverage_radius = 80.0   # Research Shrine
+			_: continue
+
+		if pos.distance_to(b.global_position) <= coverage_radius:
+			return true
+
+	return false
 
 func _get_snapped_build_position(mouse_pos: Vector2) -> Vector2:
-	var snapped = mouse_pos.snapped(Vector2(8.0, 8.0))
-	var preview_radius = _get_structure_foundation_radius(preview_instance)
-	var candidates: Array = get_tree().get_nodes_in_group("buildings")
-	candidates.append_array(get_tree().get_nodes_in_group("base"))
-	for candidate in candidates:
-		if not is_instance_valid(candidate) or candidate == preview_instance:
+	var size = _get_building_size(selected_building_type)
+	var cells_x = int(round(size.x / GRID_SIZE))
+	var cells_y = int(round(size.y / GRID_SIZE))
+	
+	var snapped_x: float
+	var snapped_y: float
+	
+	# Odd cell footprints center on cell midpoints (+16px); even footprints center on grid line intersections (+0px)
+	if cells_x % 2 == 1:
+		snapped_x = floor(mouse_pos.x / GRID_SIZE) * GRID_SIZE + (GRID_SIZE * 0.5)
+	else:
+		snapped_x = round(mouse_pos.x / GRID_SIZE) * GRID_SIZE
+		
+	if cells_y % 2 == 1:
+		snapped_y = floor(mouse_pos.y / GRID_SIZE) * GRID_SIZE + (GRID_SIZE * 0.5)
+	else:
+		snapped_y = round(mouse_pos.y / GRID_SIZE) * GRID_SIZE
+		
+	return Vector2(snapped_x, snapped_y)
+
+func _is_build_location_valid(build_pos: Vector2) -> bool:
+	# 1. Industrial Ground Requirement Check
+	if _requires_industrial_ground(selected_building_type) and not _is_position_on_industrial_ground(build_pos):
+		return false
+
+	# 2. Square AABB Collision Overlap Check (Grow by -1.0px so adjacent touching tiles are valid)
+	var my_rect = Rect2(build_pos - (_get_building_size(selected_building_type) * 0.5), _get_building_size(selected_building_type)).grow(-1.0)
+	var structures = get_tree().get_nodes_in_group("buildings")
+	structures.append_array(get_tree().get_nodes_in_group("base"))
+
+	for s in structures:
+		if not is_instance_valid(s) or s == preview_instance:
 			continue
-		var outward = snapped - candidate.global_position
-		if outward.length_squared() < 0.01:
+		if "is_preview" in s and s.is_preview:
 			continue
-		var anchor = candidate.global_position + outward.normalized() * (_get_structure_foundation_radius(candidate) + preview_radius + 12.0)
-		if snapped.distance_to(anchor) <= BUILD_SNAP_DISTANCE:
-			return anchor.snapped(Vector2(4.0, 4.0))
-	return snapped
+			
+		var s_type = -1 if s.is_in_group("base") else int(s.get("building_type"))
+		var other_rect = Rect2(s.global_position - (_get_building_size(s_type) * 0.5), _get_building_size(s_type)).grow(-1.0)
+		
+		# Block placement if the two square footprints overlap
+		if my_rect.intersects(other_rect):
+			return false
+
+	return true
 
 func _find_preview_connection(build_pos: Vector2) -> Node2D:
 	var closest: Node2D = null
@@ -275,25 +343,71 @@ func _find_preview_connection(build_pos: Vector2) -> Node2D:
 			closest_distance = distance
 			closest = candidate
 	return closest
+	
+func _find_preview_barricade_links(build_pos: Vector2) -> Array[Node2D]:
+	var linked_neighbors: Array[Node2D] = []
+	if selected_building_type != 0: # Only for Barricades
+		return linked_neighbors
 
-func request_upgrade_nearby_turret() -> void:
-	var closest_turret: Node2D = null
-	var closest_distance := TURRET_INTERACTION_RANGE
+	var buildings = get_tree().get_nodes_in_group("buildings")
+	for b in buildings:
+		if not is_instance_valid(b) or b == preview_instance:
+			continue
+		if "building_type" in b and int(b.building_type) == 0:
+			if "is_preview" in b and b.is_preview:
+				continue
+			var dist = b.global_position.distance_to(build_pos)
+			if dist <= WALL_LINK_RANGE and dist > 1.0:
+				if not _is_wall_line_blocked_by_structure(build_pos, b.global_position):
+					linked_neighbors.append(b)
+	return linked_neighbors
+
+func _is_wall_line_blocked_by_structure(pos_a: Vector2, pos_b: Vector2) -> bool:
+	var structures = get_tree().get_nodes_in_group("buildings")
+	structures.append_array(get_tree().get_nodes_in_group("base"))
+	
+	for s in structures:
+		if not is_instance_valid(s) or s == preview_instance:
+			continue
+		if "building_type" in s and int(s.building_type) == 0:
+			continue # Ignore other barricades
+			
+		var s_type = -1 if s.is_in_group("base") else int(s.get("building_type"))
+		var s_pos = s.global_position
+		var s_radius = _get_building_size(s_type).x * 0.45
+
+		var seg = pos_b - pos_a
+		var l2 = seg.length_squared()
+		if l2 > 0.0:
+			var t = clampf((s_pos - pos_a).dot(seg) / l2, 0.0, 1.0)
+			var proj = pos_a + t * seg
+			if proj.distance_to(s_pos) < s_radius:
+				return true
+	return false
+
+# --- [E] INTERACTION: UPGRADE TURRET / DISTRIBUTOR ---
+
+func request_interact_nearby_structure() -> void:
+	var closest: Node2D = null
+	var closest_dist := INTERACTION_RANGE
 	for building in get_tree().get_nodes_in_group("buildings"):
 		if not is_instance_valid(building) or not ("building_type" in building):
 			continue
-		if int(building.building_type) != 2:
-			continue
-		var distance = global_position.distance_to(building.global_position)
-		if distance < closest_distance:
-			closest_distance = distance
-			closest_turret = building
-	if is_instance_valid(closest_turret):
+		var dist = global_position.distance_to(building.global_position)
+		if dist < closest_dist:
+			closest_dist = dist
+			closest = building
+
+	if is_instance_valid(closest):
 		var main_node = get_tree().get_first_node_in_group("main")
 		if main_node:
-			main_node.rpc_id(1, "request_upgrade_turret", closest_turret.name)
+			var b_type = int(closest.building_type)
+			if b_type == 2: # Turret Upgrade
+				main_node.rpc_id(1, "request_upgrade_turret", closest.name)
+			elif b_type == 4: # Distributor -> Antenna Upgrade
+				main_node.rpc_id(1, "request_upgrade_distributor", closest.name)
 
-# --- PROCESS LOOP ---
+# --- PROCESS & DRAW LOOP ---
 
 func _process(delta):
 	if is_attacking_anim:
@@ -319,19 +433,94 @@ func _process(delta):
 		preview_instance.global_position = build_pos
 		preview_is_valid = global_position.distance_to(build_pos) <= BUILD_RANGE and _is_build_location_valid(build_pos)
 		preview_connection_target = _find_preview_connection(build_pos)
+		
+		# Find which barricades will connect to this position
+		if selected_building_type == 0:
+			preview_barricade_links = _find_preview_barricade_links(build_pos)
+		else:
+			preview_barricade_links.clear()
+
 		preview_instance.modulate = Color(0.45, 1.0, 0.78, 0.66) if preview_is_valid else Color(1.0, 0.28, 0.24, 0.66)
 		queue_redraw()
 
 func _draw():
 	if is_attacking_anim:
 		draw_omnissian_axe_sweep()
+
 	if is_building_mode and is_instance_valid(preview_instance):
 		var local_build_pos = preview_instance.global_position - global_position
 		var placement_color = Color(0.35, 1.0, 0.72, 0.9) if preview_is_valid else Color(1.0, 0.25, 0.20, 0.95)
+		
+		# 1. Build Range Boundary Arc
 		draw_arc(Vector2.ZERO, BUILD_RANGE, 0.0, TAU, 48, Color(0.20, 0.75, 0.95, 0.24), 1.5)
-		draw_arc(local_build_pos, _get_structure_foundation_radius(preview_instance) + 7.0, 0.0, TAU, 24, placement_color, 2.0)
-		draw_circle(local_build_pos, 3.0, placement_color)
-		if is_instance_valid(preview_connection_target):
+		
+		# 2. HOLOGRAPHIC BARRICADE WALL LINK PREVIEWS
+		if selected_building_type == 0 and not preview_barricade_links.is_empty():
+			var wall_half_width = 8.0
+			var pulse = 0.55 + sin(Time.get_ticks_msec() * 0.008) * 0.25
+			var holo_fill = Color(0.20, 0.88, 1.0, 0.22 * pulse) if preview_is_valid else Color(1.0, 0.25, 0.20, 0.22 * pulse)
+			var holo_edge = Color(0.25, 0.92, 1.0, 0.75 * pulse) if preview_is_valid else Color(1.0, 0.28, 0.22, 0.75 * pulse)
+			var holo_truss = Color(0.35, 0.95, 1.0, 0.45 * pulse) if preview_is_valid else Color(1.0, 0.35, 0.25, 0.45 * pulse)
+
+			for neighbor in preview_barricade_links:
+				if not is_instance_valid(neighbor): continue
+				var local_neighbor_pos = neighbor.global_position - global_position
+				var dir = (local_neighbor_pos - local_build_pos).normalized()
+				var perp = dir.orthogonal() * wall_half_width
+				var span_length = local_build_pos.distance_to(local_neighbor_pos)
+
+				# Hologram Wall Plinth
+				var holo_poly = PackedVector2Array([
+					local_build_pos - perp,
+					local_neighbor_pos - perp,
+					local_neighbor_pos + perp,
+					local_build_pos + perp
+				])
+				draw_colored_polygon(holo_poly, holo_fill)
+
+				# Hologram Edge Rails
+				draw_line(local_build_pos - perp, local_neighbor_pos - perp, holo_edge, 1.5)
+				draw_line(local_build_pos + perp, local_neighbor_pos + perp, holo_edge, 1.5)
+
+				# Animated Cross-Bracing Trusses
+				var num_struts = int(span_length / 16.0)
+				for i in range(num_struts):
+					var t1 = float(i) / float(num_struts)
+					var t2 = float(i + 1) / float(num_struts)
+					var p1 = (local_build_pos - perp).lerp(local_neighbor_pos - perp, t1)
+					var p2 = (local_build_pos + perp).lerp(local_neighbor_pos + perp, t2)
+					draw_line(p1, p2, holo_truss, 1.0)
+
+				draw_arc(local_neighbor_pos, 18.0, 0.0, TAU, 16, holo_edge, 1.5)
+
+		# 3. SQUARE TACTICAL BLUEPRINT FOOTPRINT
+		var b_size = _get_building_size(selected_building_type)
+		var b_rect = Rect2(local_build_pos - (b_size * 0.5), b_size)
+		
+		# Blueprint cell fill & border
+		draw_rect(b_rect, Color(placement_color.r, placement_color.g, placement_color.b, 0.15), true)
+		draw_rect(b_rect, placement_color, false, 1.5)
+		
+		# Tactical corner brackets
+		var b_len = 6.0
+		# Top-Left
+		draw_line(b_rect.position, b_rect.position + Vector2(b_len, 0), placement_color, 2.5)
+		draw_line(b_rect.position, b_rect.position + Vector2(0, b_len), placement_color, 2.5)
+		# Top-Right
+		var tr = b_rect.position + Vector2(b_size.x, 0)
+		draw_line(tr, tr - Vector2(b_len, 0), placement_color, 2.5)
+		draw_line(tr, tr + Vector2(0, b_len), placement_color, 2.5)
+		# Bottom-Left
+		var bl = b_rect.position + Vector2(0, b_size.y)
+		draw_line(bl, bl + Vector2(b_len, 0), placement_color, 2.5)
+		draw_line(bl, bl - Vector2(0, b_len), placement_color, 2.5)
+		# Bottom-Right
+		var br = b_rect.position + b_size
+		draw_line(br, br - Vector2(b_len, 0), placement_color, 2.5)
+		draw_line(br, br - Vector2(0, b_len), placement_color, 2.5)
+		
+		# 4. Standard Conduit Target Line (for non-barricades)
+		if selected_building_type != 0 and is_instance_valid(preview_connection_target):
 			var local_target = preview_connection_target.global_position - global_position
 			draw_line(local_target, local_build_pos, Color(0.25, 0.85, 1.0, 0.45), 2.0)
 
@@ -431,7 +620,7 @@ func _unhandled_input(event):
 	if current_class == PlayerClass.MELEE:
 		if event is InputEventKey and event.pressed:
 			if event.keycode == KEY_E:
-				request_upgrade_nearby_turret()
+				request_interact_nearby_structure()
 				get_viewport().set_input_as_handled()
 				return
 			elif event.keycode == KEY_K: # Press K to deploy a Servo-skull
@@ -452,17 +641,33 @@ func _unhandled_input(event):
 				return
 			elif event.keycode == KEY_2 or event.keycode == KEY_KP_2:
 				if not is_building_mode:
-					toggle_build_mode(1)
+					toggle_build_mode(4) # Distributor (Spreads Territory)
 				else:
-					selected_building_type = 1
+					selected_building_type = 4
 					update_preview_type()
 				get_viewport().set_input_as_handled()
 				return
 			elif event.keycode == KEY_3 or event.keycode == KEY_KP_3:
 				if not is_building_mode:
-					toggle_build_mode(2)
+					toggle_build_mode(1) # Generator
+				else:
+					selected_building_type = 1
+					update_preview_type()
+				get_viewport().set_input_as_handled()
+				return
+			elif event.keycode == KEY_4 or event.keycode == KEY_KP_4:
+				if not is_building_mode:
+					toggle_build_mode(2) # Turret
 				else:
 					selected_building_type = 2
+					update_preview_type()
+				get_viewport().set_input_as_handled()
+				return
+			elif event.keycode == KEY_5 or event.keycode == KEY_KP_5:
+				if not is_building_mode:
+					toggle_build_mode(6) # Research Shrine
+				else:
+					selected_building_type = 6
 					update_preview_type()
 				get_viewport().set_input_as_handled()
 				return
@@ -483,13 +688,12 @@ func _unhandled_input(event):
 							main_node.rpc_id(1, "request_build_structure", build_pos, selected_building_type)
 						_cancel_build_mode()
 					else:
-						print("[Build System] Placement blocked: Too close to another building!")
+						print("[Build System] Placement blocked: Space occupied or lacks industrial ground!")
 				else:
 					print("[Build System] Placement blocked: Target out of range!")
 				
 				get_viewport().set_input_as_handled()
 				return
-				
 
 	# Skitarii Marshal Bodyguard & Upgrade Controls
 	if current_class == PlayerClass.RANGED and event is InputEventKey and event.pressed:
@@ -556,7 +760,6 @@ func request_spawn_servo_skull():
 	
 	# 1. Enforce Max Limit
 	if active_servo_skulls.size() >= MAX_SERVO_SKULLS:
-		print("[Servo-Skull] Max active skulls reached (%d/%d)!" % [active_servo_skulls.size(), MAX_SERVO_SKULLS])
 		return
 
 	var main_node = get_parent()

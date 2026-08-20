@@ -7,6 +7,7 @@ extends Control
 @onready var slot3_panel = get_node_or_null("HBoxContainer/Slot3")
 @onready var slot4_panel = get_node_or_null("HBoxContainer/Slot4")
 @onready var slot5_panel = get_node_or_null("HBoxContainer/Slot5")
+@onready var slot6_panel = get_node_or_null("HBoxContainer/Slot6")
 
 var local_player: Node2D = null
 var update_accumulator: float = 0.0
@@ -130,32 +131,36 @@ func refresh_hud_display():
 	# --- TECH-PRIEST (MELEE & BUILDER) ---
 	if is_techpriest:
 		var selected_type = local_player.selected_building_type if "selected_building_type" in local_player else 0
-		var costs = local_player.BUILDING_COSTS if "BUILDING_COSTS" in local_player else [15, 25, 35]
 		var is_building = local_player.is_building_mode if "is_building_mode" in local_player else false
 
-		# Slot 1: Melee Primary
+		# Slot 1: Barricade [1]
 		if slot1_panel:
 			slot1_panel.show()
-			_format_slot(slot1_panel, "LMB", "Omnissian Axe", 0, 0, current_scrap, current_req, false)
+			_format_slot(slot1_panel, "1", "Barricade", 15, 0, current_scrap, current_req, is_building and selected_type == 0)
 
-		# Slot 2: Barricade [1]
+		# Slot 2: Distributor [2]
 		if slot2_panel:
 			slot2_panel.show()
-			_format_slot(slot2_panel, "1", "Barricade", costs[0], 0, current_scrap, current_req, is_building and selected_type == 0)
+			_format_slot(slot2_panel, "2", "Distributor", 20, 0, current_scrap, current_req, is_building and selected_type == 4)
 
-		# Slot 3: Generator [2]
+		# Slot 3: Generator [3]
 		if slot3_panel:
 			slot3_panel.show()
-			_format_slot(slot3_panel, "2", "Generator", costs[1], 0, current_scrap, current_req, is_building and selected_type == 1)
+			_format_slot(slot3_panel, "3", "Generator", 25, 0, current_scrap, current_req, is_building and selected_type == 1)
 
-		# Slot 4: Turret [3]
+		# Slot 4: Turret [4]
 		if slot4_panel:
 			slot4_panel.show()
-			_format_slot(slot4_panel, "3", "Turret", costs[2], 5, current_scrap, current_req, is_building and selected_type == 2)
+			_format_slot(slot4_panel, "4", "Turret", 35, 5, current_scrap, current_req, is_building and selected_type == 2)
 
-		# Slot 5: Servo-Skull [K]
+		# Slot 5: Research Shrine [5]
 		if slot5_panel:
 			slot5_panel.show()
+			_format_slot(slot5_panel, "5", "Tech Shrine", 40, 15, current_scrap, current_req, is_building and selected_type == 6)
+		
+		# Slot 5: Servo-Skull [K]
+		if slot6_panel:
+			slot6_panel.show()
 			var max_skulls = local_player.MAX_SERVO_SKULLS if "MAX_SERVO_SKULLS" in local_player else 2
 			var current_skulls = 0
 			if "active_servo_skulls" in local_player:

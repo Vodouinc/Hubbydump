@@ -1,7 +1,7 @@
 extends Control
 class_name ResearchUI
 
-# Tech Definitions: Title, Cost, Description, Icon/Rune
+# 4 Research Techs
 const TECH_DATA = [
 	{
 		"id": 0,
@@ -23,6 +23,13 @@ const TECH_DATA = [
 		"cost": 40,
 		"rune": "🔧",
 		"desc": "Sacred nanobot swarms slowly self-repair (3.5 HP/sec) all damaged Noosphere structures when out of combat."
+	},
+	{
+		"id": 3,
+		"name": "Galvanic Scrap Siphon",
+		"cost": 25,
+		"rune": "🧲",
+		"desc": "Expands the magnetic scrap retrieval range of all Distributors & Antennas by +75% (220px -> 385px) and boosts pull velocity by +50%."
 	}
 ]
 
@@ -30,7 +37,6 @@ var panel_container: PanelContainer = null
 var cards_container: HBoxContainer = null
 var active_shrine_node: Node2D = null
 
-# Cache state so we only refresh when numbers actually change
 var last_cached_req: int = -1
 var last_cached_unlocks: Array = []
 
@@ -41,11 +47,9 @@ func _ready():
 	_build_ui_layout()
 
 func _build_ui_layout():
-	# 1. Fullscreen Root
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-	# 2. Semi-Transparent Tactical Dark Backdrop
 	var backdrop = ColorRect.new()
 	backdrop.name = "Backdrop"
 	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -53,17 +57,16 @@ func _build_ui_layout():
 	backdrop.mouse_filter = Control.MOUSE_FILTER_PASS
 	add_child(backdrop)
 
-	# 3. CenterContainer guarantees screen centering
 	var center_container = CenterContainer.new()
 	center_container.name = "CenterContainer"
 	center_container.set_anchors_preset(Control.PRESET_FULL_RECT)
 	center_container.mouse_filter = Control.MOUSE_FILTER_PASS
 	add_child(center_container)
 
-	# 4. Main Tech-Vault Panel
+	# Expanded width to 920px to fit all 4 tech cards comfortably
 	var pc = PanelContainer.new()
 	pc.name = "PanelContainer"
-	pc.custom_minimum_size = Vector2(740, 360)
+	pc.custom_minimum_size = Vector2(920, 360)
 	pc.mouse_filter = Control.MOUSE_FILTER_STOP
 	center_container.add_child(pc)
 	panel_container = pc
@@ -73,7 +76,6 @@ func _build_ui_layout():
 	vbox.add_theme_constant_override("separation", 14)
 	panel_container.add_child(vbox)
 
-	# Title Header
 	var title = Label.new()
 	title.name = "Title"
 	title.text = "◆ ARCHIVES OF THE OMNISSIAH — TECH RESEARCH ◆"
@@ -82,15 +84,13 @@ func _build_ui_layout():
 	title.add_theme_font_size_override("font_size", 16)
 	vbox.add_child(title)
 
-	# Cards Container
 	var hbox = HBoxContainer.new()
 	hbox.name = "CardsHBox"
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	hbox.add_theme_constant_override("separation", 16)
+	hbox.add_theme_constant_override("separation", 14)
 	vbox.add_child(hbox)
 	cards_container = hbox
 
-	# Close Button
 	var close = Button.new()
 	close.name = "CloseButton"
 	close.text = "CLOSE TERMINAL [ESC / E]"
@@ -111,19 +111,18 @@ func close_terminal():
 
 func _process(_delta: float):
 	if visible:
-		# Auto-close if player walks away from the shrine
 		var local_player = _get_local_player()
 		if not is_instance_valid(active_shrine_node) or not is_instance_valid(local_player) or local_player.global_position.distance_to(active_shrine_node.global_position) > 130.0:
 			close_terminal()
 			return
 
-		# ONLY refresh when Requisition or Unlocks change, NEVER every frame!
 		var main_node = get_tree().get_first_node_in_group("main")
 		var current_req = main_node.requisition_amount if main_node else 0
 		var current_unlocks = [
 			main_node.get("tech_shields_unlocked") if main_node else false,
 			main_node.get("tech_lasers_unlocked") if main_node else false,
-			main_node.get("tech_nanobots_unlocked") if main_node else false
+			main_node.get("tech_nanobots_unlocked") if main_node else false,
+			main_node.get("tech_magnet_unlocked") if main_node else false
 		]
 
 		if current_req != last_cached_req or current_unlocks != last_cached_unlocks:
@@ -146,27 +145,25 @@ func refresh_tech_cards():
 	var unlocks = [
 		main_node.get("tech_shields_unlocked") if main_node else false,
 		main_node.get("tech_lasers_unlocked") if main_node else false,
-		main_node.get("tech_nanobots_unlocked") if main_node else false
+		main_node.get("tech_nanobots_unlocked") if main_node else false,
+		main_node.get("tech_magnet_unlocked") if main_node else false
 	]
 
-	# Clear previous cards
 	for child in cards_container.get_children():
 		child.queue_free()
 
-	# Rebuild fresh cards
 	for tech in TECH_DATA:
 		var card = _create_tech_card(tech, unlocks[tech.id], current_req)
 		cards_container.add_child(card)
 
 func _create_tech_card(tech: Dictionary, is_unlocked: bool, current_req: int) -> PanelContainer:
 	var card = PanelContainer.new()
-	card.custom_minimum_size = Vector2(210, 240)
+	card.custom_minimum_size = Vector2(205, 240)
 	
 	var vbox = VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 8)
 	card.add_child(vbox)
 
-	# 1. Header with Rune
 	var header = Label.new()
 	header.text = tech.rune + " " + tech.name
 	header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -174,19 +171,17 @@ func _create_tech_card(tech: Dictionary, is_unlocked: bool, current_req: int) ->
 	header.add_theme_color_override("font_color", Color(0.95, 0.85, 0.4) if is_unlocked else Color(0.20, 0.88, 1.0))
 	vbox.add_child(header)
 
-	# 2. Cost / Status Badge
 	var cost_lbl = Label.new()
 	cost_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	if is_unlocked:
 		cost_lbl.text = "◆ RESEARCHED ◆"
 		cost_lbl.add_theme_color_override("font_color", Color(0.4, 0.95, 0.5))
 	else:
-		cost_lbl.text = "⚡ " + str(tech.cost) + " REQUISITION"
+		cost_lbl.text = "⚡ " + str(tech.cost) + " REQ"
 		var can_afford = current_req >= tech.cost
 		cost_lbl.add_theme_color_override("font_color", Color(0.9, 0.85, 0.7) if can_afford else Color(0.9, 0.25, 0.2))
 	vbox.add_child(cost_lbl)
 
-	# 3. Description
 	var desc = Label.new()
 	desc.text = tech.desc
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -195,7 +190,6 @@ func _create_tech_card(tech: Dictionary, is_unlocked: bool, current_req: int) ->
 	desc.add_theme_font_size_override("font_size", 11)
 	vbox.add_child(desc)
 
-	# 4. Action Button
 	var btn = Button.new()
 	btn.custom_minimum_size = Vector2(0, 32)
 	if is_unlocked:

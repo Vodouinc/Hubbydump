@@ -49,20 +49,21 @@ var noosphere_check_timer: float = 0.0
 var turret_target_scan_timer: float = 0.0
 var cached_target_enemy: Node2D = null
 
-
 @onready var visual_spriteNode = get_node_or_null("VisualBuildingSprite")
 @onready var turret_timer: Timer = get_node_or_null("TurretTimer")
 @onready var gen_timer: Timer = get_node_or_null("GeneratorTimer")
 @onready var collision_shape: CollisionShape2D = get_node_or_null("CollisionShape2D")
 @onready var health_bar: Node2D = get_node_or_null("HealthBar")
-var turret_light: PointLight2D = null
 
 func _ready():
 	add_to_group("buildings")
 	add_to_group("navmesh_source")
 	health_float = float(current_health)
-	
-	_setup_turret_light()
+
+	# Clean up any leftover TurretLight node in the scene tree
+	if has_node("TurretLight"):
+		get_node("TurretLight").queue_free()
+
 	_apply_type_setup()
 	
 	current_health = max_health
@@ -83,7 +84,7 @@ func _process(delta: float):
 	if is_preview:
 		return
 
-	# 1. Throttle Noosphere check to every 0.25s (instead of 60 FPS)
+	# 1. Throttle Noosphere check to every 0.25s
 	noosphere_check_timer += delta
 	if noosphere_check_timer >= 0.25:
 		noosphere_check_timer = 0.0
@@ -96,10 +97,7 @@ func _process(delta: float):
 			_process_turret_logic(delta)
 			_process_turret_laser(delta)
 
-	if building_type == Type.TURRET and is_instance_valid(turret_light):
-		turret_light.rotation = current_turret_rotation
-
-# Handle Gate automatic proximity sensor
+	# 3. Gate Sensor
 	if is_gate and ((not multiplayer.has_multiplayer_peer()) or multiplayer.is_server()):
 		gate_check_timer += delta
 		if gate_check_timer >= 0.08:
@@ -124,17 +122,15 @@ func _process_gate_sensor():
 @rpc("call_local", "reliable")
 func sync_gate_state(open_state: bool):
 	is_gate_open = open_state
-	# Disable wall colliders when gate is open for friendlies
 	for col in active_wall_colliders.values():
 		if is_instance_valid(col):
 			col.set_deferred("disabled", is_gate_open)
 
+	AudioManager.play_sfx("gate_toggle", global_position, -3.0, 1.25 if open_state else 0.8)
+
 	if visual_spriteNode and "is_gate_open" in visual_spriteNode:
 		visual_spriteNode.is_gate_open = is_gate_open
 		visual_spriteNode.queue_redraw()
-
-
-# --- UPGRADE: BARRICADE -> AIRLOCK GATE ---
 
 func try_upgrade_to_gate() -> bool:
 	if not multiplayer.is_server() or building_type != Type.BARRICADE or is_gate:
@@ -162,7 +158,6 @@ func _update_noosphere_connection():
 	var was_connected = is_noosphere_connected
 	is_noosphere_connected = false
 
-	# Base and Antennas project the Noosphere
 	var sources: Array = get_tree().get_nodes_in_group("base")
 	for b in get_tree().get_nodes_in_group("buildings"):
 		if is_instance_valid(b) and int(b.get("building_type")) == int(Type.NOOSPHERE_ANTENNA):
@@ -184,7 +179,6 @@ func _apply_tech_stats():
 	if not main_node:
 		return
 
-	# If Shield Tech is researched and building is connected to Noosphere
 	if is_noosphere_connected and main_node.get("tech_shields_unlocked"):
 		max_shield = max_health * 0.4
 	else:
@@ -198,18 +192,15 @@ func _process_server_buffs(delta: float):
 	var tech_shields = main_node.get("tech_shields_unlocked") if main_node else false
 	var tech_nanobots = main_node.get("tech_nanobots_unlocked") if main_node else false
 
-	# 1. Shield Recharge Delay
 	if shield_recharge_timer > 0.0:
 		shield_recharge_timer -= delta
 	else:
-		# Recharge Shield (Smooth float regen)
 		if is_noosphere_connected and tech_shields and current_shield < max_shield:
 			var prev_shield = int(current_shield)
 			current_shield = minf(max_shield, current_shield + SHIELD_REGEN_RATE * delta)
 			if int(current_shield) != prev_shield:
 				rpc("sync_shield", current_shield)
 
-		# Passive Nanobot Health Repair (Float accumulator fix)
 		if is_noosphere_connected and tech_nanobots and current_health < max_health:
 			health_float = minf(float(max_health), health_float + NANOBOT_REPAIR_RATE * delta)
 			var new_int_health = int(health_float)
@@ -237,7 +228,7 @@ func _process_turret_laser(delta: float):
 		if laser_damage_timer >= 0.1:
 			laser_damage_timer = 0.0
 			if laser_target.has_method("take_damage"):
-				laser_target.take_damage(4) # 40 DPS Continuous Laser
+				laser_target.take_damage(4)
 
 @rpc("call_local", "unreliable")
 func sync_laser_target(target_name: String):
@@ -285,8 +276,6 @@ func update_ui():
 		if health_bar.has_method("update_shield"):
 			health_bar.update_shield(int(current_shield), int(max_shield))
 
-# --- UPGRADE: DISTRIBUTOR -> NOOSPHERE ANTENNA ---
-
 func try_upgrade_distributor() -> bool:
 	if not multiplayer.is_server() or building_type != Type.DISTRIBUTOR:
 		return false
@@ -304,8 +293,6 @@ func sync_distributor_upgrade():
 	_apply_type_setup()
 	get_tree().call_group("buildings", "_update_noosphere_connection")
 
-# --- RESEARCH SHRINE UPGRADE PURCHASES ---
-
 func try_purchase_research(tech_index: int) -> bool:
 	if not multiplayer.is_server() or building_type != Type.RESEARCH_SHRINE:
 		return false
@@ -313,7 +300,8 @@ func try_purchase_research(tech_index: int) -> bool:
 	if not main_node:
 		return false
 
-	var costs = [20, 30, 40] # Shields (20 Req), Lasers (30 Req), Nanobots (40 Req)
+	# 0: Shields (20 Req), 1: Lasers (30 Req), 2: Nanobots (40 Req), 3: Galvanic Siphon (25 Req)
+	var costs = [20, 30, 40, 25]
 	if tech_index < 0 or tech_index >= costs.size():
 		return false
 
@@ -322,8 +310,6 @@ func try_purchase_research(tech_index: int) -> bool:
 
 	main_node.unlock_tech(tech_index)
 	return true
-
-# --- UPGRADE: TURRET ---
 
 func try_upgrade_turret() -> bool:
 	if not multiplayer.is_server() or building_type != Type.TURRET:
@@ -347,14 +333,10 @@ func sync_turret_upgrade(new_level: int) -> void:
 func _apply_turret_upgrade() -> void:
 	if is_instance_valid(turret_timer):
 		turret_timer.wait_time = TURRET_FIRE_INTERVALS[turret_upgrade_level]
-	if is_instance_valid(turret_light):
-		turret_light.energy = 0.9 + turret_upgrade_level * 0.18
 	if is_instance_valid(visual_spriteNode):
 		if "turret_upgrade_level" in visual_spriteNode:
 			visual_spriteNode.turret_upgrade_level = turret_upgrade_level
 		visual_spriteNode.queue_redraw()
-
-# --- TYPE INITIALIZATION ---
 
 func _apply_type_setup():
 	health_float = float(max_health)
@@ -371,9 +353,6 @@ func _apply_type_setup():
 		if "type" in visual_spriteNode:
 			visual_spriteNode.type = building_type
 		visual_spriteNode.queue_redraw()
-
-	if is_instance_valid(turret_light):
-		turret_light.enabled = (building_type == Type.TURRET and not is_preview)
 
 	if is_instance_valid(collision_shape) and collision_shape.shape:
 		match building_type:
@@ -416,7 +395,6 @@ func _process_turret_logic(delta: float):
 	turret_target_scan_timer += delta
 	if turret_target_scan_timer >= 0.1:
 		turret_target_scan_timer = 0.0
-		# Retain current target if still valid and in range
 		if not is_instance_valid(cached_target_enemy) or global_position.distance_to(cached_target_enemy.global_position) > TURRET_RANGE_BY_LEVEL[turret_upgrade_level]:
 			cached_target_enemy = _find_closest_enemy()
 
@@ -468,8 +446,8 @@ func _on_turret_timer_timeout():
 				"damage": TURRET_DAMAGE_BY_LEVEL[turret_upgrade_level]
 			}
 			main_node.spawner.spawn(bullet_data)
-
-# --- BARRICADE WALLS ---
+			
+			AudioManager.play_sfx("laser", global_position, -4.0)
 
 func refresh_barricade_connections():
 	if building_type != Type.BARRICADE or is_preview or not is_inside_tree():
@@ -534,39 +512,10 @@ func client_destroy():
 	get_tree().call_group("buildings", "_update_noosphere_connection")
 	queue_free()
 
-func _setup_turret_light():
-	if has_node("TurretLight"):
-		turret_light = $TurretLight
-	else:
-		turret_light = PointLight2D.new()
-		turret_light.name = "TurretLight"
-		turret_light.enabled = false
-		# DISABLED dynamic shadow mapping on 10+ lights to save 80% GPU fillrate:
-		turret_light.shadow_enabled = false
-		turret_light.energy = 0.85
-		var size = 256
-		var img = Image.create(size, size, false, Image.FORMAT_RGBA8)
-		img.fill(Color(0, 0, 0, 0))
-		var center = Vector2(float(size)/2.0, float(size)/2.0)
-		var radius = float(size) * 0.45
-		for x in range(size):
-			for y in range(size):
-				var pos = Vector2(x, y)
-				var dist = center.distance_to(pos)
-				if dist <= radius:
-					var angle_diff = abs(wrapf((pos - center).angle(), -PI, PI))
-					if angle_diff <= deg_to_rad(35.0):
-						img.set_pixel(x, y, Color(0.25, 0.75, 0.95, (1.0 - dist/radius) * 0.9))
-		turret_light.texture = ImageTexture.create_from_image(img)
-		turret_light.texture_scale = 3.2
-		turret_light.offset = Vector2(size * 0.22, 0)
-		add_child(turret_light)
-
 func setup_as_preview():
 	is_preview = true
 	remove_from_group("buildings")
 	remove_from_group("navmesh_source")
-	if is_instance_valid(turret_light): turret_light.enabled = false
 	if has_node("Shadow"): $Shadow.visible = false
 	if has_node("HealthBar"): $HealthBar.visible = false
 	if is_instance_valid(collision_shape): collision_shape.set_deferred("disabled", true)

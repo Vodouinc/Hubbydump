@@ -16,8 +16,10 @@ var is_noosphere_connected: bool = false
 var is_gate: bool = false
 var is_gate_open: bool = false
 var laser_target_node: Node2D = null
+var glow_layer: Node2D = null
 
 func _ready() -> void:
+	_setup_building_glow_layer()
 	queue_redraw()
 
 func _process(delta: float) -> void:
@@ -35,9 +37,24 @@ func _process(delta: float) -> void:
 	elif is_gate and not is_gate_open:
 		idle_timer += delta
 		needs_redraw = true # Pulsing laser gate bars
+		
+	if is_instance_valid(glow_layer):
+		glow_layer.queue_redraw()
 
 	if needs_redraw:
 		queue_redraw()
+		
+func _setup_building_glow_layer():
+	if not has_node("BuildingGlowOverlay"):
+		glow_layer = Node2D.new()
+		glow_layer.name = "BuildingGlowOverlay"
+		var mat = CanvasItemMaterial.new()
+		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+		glow_layer.material = mat
+		add_child(glow_layer)
+		glow_layer.set_script(load("res://VisualBuildingSprite.gd").BuildingGlowRenderer)
+	else:
+		glow_layer = get_node("BuildingGlowOverlay")
 
 func pulse_generator():
 	pulse_scale = 1.0
@@ -363,3 +380,36 @@ func _draw_manufactorum():
 	draw_colored_polygon(right_semi, iron_mid)
 	draw_circle(Vector2(0, -6), 4.0, cyan_plasma)
 	draw_circle(Vector2(0, -6), 5.0, brass_gold, false, 1.0)
+
+class BuildingGlowRenderer extends Node2D:
+	func _draw() -> void:
+		var p = get_parent()
+		if not p: return
+
+		# 1. Solid-State Cognis Laser Beam (Always 100% luminous across night!)
+		if is_instance_valid(p.laser_target_node):
+			var local_target = to_local(p.laser_target_node.global_position)
+			draw_line(Vector2.ZERO, local_target, Color(0.15, 0.85, 1.0, 0.35), 6.0)
+			draw_line(Vector2.ZERO, local_target, Color(0.85, 0.98, 1.0, 0.95), 2.2)
+			draw_circle(local_target, 5.0, Color(0.20, 0.88, 1.0, 0.85))
+
+		# 2. Structure Night Glows
+		match p.type:
+			1: # Generator Plasma Core
+				var core_r = 4.5 + (p.pulse_scale * 4.0)
+				draw_circle(Vector2.ZERO, core_r + 4.0, Color(0.15, 0.85, 1.0, 0.35))
+				draw_circle(Vector2.ZERO, core_r, Color.WHITE)
+			2: # Turret Targeter Eye
+				var dir = Vector2.RIGHT.rotated(p.turret_rotation)
+				draw_circle(dir * 4.0, 3.0, Color(1.0, 0.2, 0.2, 0.9))
+				draw_circle(dir * 4.0, 1.0, Color.WHITE)
+			5: # Antenna Spikes
+				for i in range(3):
+					var a = (i * TAU / 3.0) + 0.4
+					draw_circle(Vector2(cos(a), sin(a)) * 24.0, 3.5, Color(0.20, 0.88, 1.0))
+				draw_circle(Vector2.ZERO, 5.0, Color(0.20, 0.88, 1.0))
+			6: # Tech Shrine Hologram
+				var holo_pulse = 0.6 + sin(p.idle_timer * 3.5) * 0.3
+				draw_arc(Vector2.ZERO, 10.0, 0, TAU, 16, Color(0.20, 0.88, 1.0, holo_pulse), 2.0)
+				draw_circle(Vector2.ZERO, 5.0, Color(0.20, 0.88, 1.0))
+				draw_circle(Vector2.ZERO, 2.0, Color.WHITE)

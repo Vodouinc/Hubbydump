@@ -5,6 +5,11 @@ extends Area2D
 var direction: Vector2 = Vector2.RIGHT
 
 func _ready():
+	# Make bullet completely ignore night darkening so it glows brightly
+	var unshaded_mat = CanvasItemMaterial.new()
+	unshaded_mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+	material = unshaded_mat
+
 	get_tree().create_timer(3.0).timeout.connect(queue_free)
 	body_entered.connect(_on_body_entered)
 

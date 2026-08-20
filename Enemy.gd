@@ -292,6 +292,9 @@ func spawn_damage_number(amount: int, spawn_pos: Vector2) -> void:
 
 @rpc("call_local", "unreliable")
 func trigger_hit_flash() -> void:
+	
+	AudioManager.play_sfx("hit", global_position, -6.0)
+	
 	if visual_sprite:
 		visual_sprite.modulate = Color(2.0, 0.3, 0.3)
 		flash_timer = 0.12

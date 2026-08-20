@@ -12,16 +12,18 @@ extends Node2D
 @export var sand_crest_color: Color = Color(0.85, 0.70, 0.48, 0.55)
 @export var sand_pebble_color: Color = Color(0.44, 0.31, 0.19, 0.55)
 
-# --- FORGEWORLD ART SLAB PALETTE ---
+# --- FORGEWORLD LIVING METAL SLAB PALETTE ---
 @export var ferro_plate_base: Color = Color(0.11, 0.13, 0.16, 1.0)
 @export var ferro_plate_inner: Color = Color(0.17, 0.19, 0.23, 1.0)
 @export var plate_bevel_light: Color = Color(0.42, 0.48, 0.55, 1.0)
 @export var plate_bevel_dark: Color = Color(0.06, 0.07, 0.09, 1.0)
 @export var brass_trim_color: Color = Color(0.78, 0.58, 0.22, 1.0)
-@export var conduit_trench_color: Color = Color(0.08, 0.09, 0.11, 1.0)
-@export var conduit_metal_color: Color = Color(0.28, 0.32, 0.38, 1.0)
-@export var conduit_glow_color: Color = Color(0.15, 0.90, 1.0, 0.9)
-@export var max_conduit_length: float = 380.0
+
+# Discreet Living Metal Conduit Palette
+@export var conduit_trench_color: Color = Color(0.06, 0.07, 0.09, 0.95) # Recessed dark seam
+@export var conduit_metal_color: Color = Color(0.24, 0.28, 0.34, 0.85)  # Subtle alloy trace
+@export var conduit_glow_color: Color = Color(0.15, 0.85, 1.0, 0.85)   # Luminous cyan fiber
+@export var max_conduit_length: float = 280.0
 @export var territory_padding: float = 38.0
 
 # Cached geometry
@@ -48,12 +50,16 @@ func _setup_pulse_renderer() -> void:
 		conduit_pulse_renderer = ConduitPulseRenderer.new()
 		conduit_pulse_renderer.name = "ConduitPulseRenderer"
 		conduit_pulse_renderer.z_index = 1
+		
+		var mat = CanvasItemMaterial.new()
+		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+		conduit_pulse_renderer.material = mat
+		
 		add_child(conduit_pulse_renderer)
 	else:
 		conduit_pulse_renderer = get_node("ConduitPulseRenderer")
 
 func _on_node_added(node: Node) -> void:
-	# Only refresh when a relevant StaticBody2D structure changes
 	if node is StaticBody2D and (node.is_in_group("buildings") or node.is_in_group("base")):
 		call_deferred("refresh_foundations")
 
@@ -73,16 +79,20 @@ func refresh_foundations() -> void:
 
 	var raw_polygons: Array[PackedVector2Array] = []
 
+	# 1. Build territory slabs ONLY for ground-generating structures
 	for s in cached_active_structures:
-		var r: float = s.radius + territory_padding
-		raw_polygons.append(_get_polygon_points(s.local_pos, r, 20, 0.0))
+		if s.slab_radius > 0.0:
+			var r: float = s.slab_radius + territory_padding
+			raw_polygons.append(_get_polygon_points(s.local_pos, r, 20, 0.0))
 
-	for i in range(cached_active_structures.size()):
-		for j in range(i + 1, cached_active_structures.size()):
-			var s1 = cached_active_structures[i]
-			var s2 = cached_active_structures[j]
-			var r1: float = s1.radius + territory_padding
-			var r2: float = s2.radius + territory_padding
+	# 2. Corridors bridging close territory structures
+	var ground_structs = cached_active_structures.filter(func(st): return st.slab_radius > 0.0)
+	for i in range(ground_structs.size()):
+		for j in range(i + 1, ground_structs.size()):
+			var s1 = ground_structs[i]
+			var s2 = ground_structs[j]
+			var r1: float = s1.slab_radius + territory_padding
+			var r2: float = s2.slab_radius + territory_padding
 			if s1.local_pos.distance_to(s2.local_pos) <= (r1 + r2) * 1.05:
 				raw_polygons.append(_get_bridge_polygon(s1.local_pos, s2.local_pos, r1 * 0.85, r2 * 0.85))
 
@@ -106,7 +116,8 @@ func _gather_active_structures() -> Array[Dictionary]:
 				"node": b,
 				"local_pos": to_local(b.global_position),
 				"is_base": true,
-				"radius": 130.0,
+				"slab_radius": 130.0,
+				"visual_radius": 42.0,
 				"type": -1
 			})
 
@@ -116,22 +127,23 @@ func _gather_active_structures() -> Array[Dictionary]:
 			if "is_preview" in b and b.is_preview: continue
 			var b_type = int(b.get("building_type")) if "building_type" in b else 0
 			
-			# ONLY Heavy & Logistics buildings spread Industrial Ground
-			# (Barricades [0] and Turrets [2] DO NOT generate ground)
-			var b_radius = 0.0
+			var slab_r = 0.0
+			var visual_r = 18.0
 			match b_type:
-				1: b_radius = 58.0   # Generator
-				3: b_radius = 65.0   # Manufactorum
-				4: b_radius = 110.0  # Distributor (Expands Territory!)
-				5: b_radius = 120.0  # Noosphere Antenna
-				6: b_radius = 65.0   # Research Shrine
-				_: continue
+				0: slab_r = 0.0; visual_r = 16.0    # Barricade (Not wired into power conduits)
+				1: slab_r = 58.0; visual_r = 24.0   # Generator
+				2: slab_r = 0.0; visual_r = 20.0    # Turret
+				3: slab_r = 65.0; visual_r = 34.0   # Manufactorum
+				4: slab_r = 110.0; visual_r = 16.0  # Distributor
+				5: slab_r = 120.0; visual_r = 18.0  # Noosphere Antenna
+				6: slab_r = 65.0; visual_r = 28.0   # Research Shrine
 
 			list.append({
 				"node": b,
 				"local_pos": to_local(b.global_position),
 				"is_base": false,
-				"radius": b_radius,
+				"slab_radius": slab_r,
+				"visual_radius": visual_r,
 				"type": b_type
 			})
 
@@ -206,7 +218,7 @@ func _draw() -> void:
 		draw_circle(p_pos + Vector2(1.5, 2.0), p_radius, Color(0.20, 0.14, 0.08, 0.35))
 		draw_circle(p_pos, p_radius, sand_pebble_color)
 
-		# 2. Static Industrial Slabs (Drop shadow loop removed!)
+	# 2. Static Industrial Slabs
 	for slab in cached_slab_polygons:
 		draw_colored_polygon(slab, ferro_plate_base)
 
@@ -222,56 +234,99 @@ func _draw() -> void:
 		draw_polyline(closed_slab, plate_bevel_light, 2.5)
 		draw_polyline(closed_slab, brass_trim_color, 1.0)
 
-	# 3. Static Conduit Trench Cables
+	# 3. Static Recessed Living Metal Micro-Traces
 	for link in cached_conduit_links:
 		var source = cached_active_structures[link.from]
 		var target = cached_active_structures[link.to]
-		_draw_static_conduit(source.local_pos, target.local_pos, source.radius, target.radius)
+		_draw_static_conduit(source.local_pos, target.local_pos, source.visual_radius, target.visual_radius)
 
 	# 4. Base Command Plaza
 	for s in cached_active_structures:
 		if s.is_base:
-			_draw_base_command_plaza(s.local_pos, s.radius)
+			_draw_base_command_plaza(s.local_pos, s.slab_radius)
 
-func _draw_static_conduit(p1: Vector2, p2: Vector2, radius_1: float, radius_2: float) -> void:
+func _draw_static_conduit(p1: Vector2, p2: Vector2, v_radius_1: float, v_radius_2: float) -> void:
 	var direction = p2 - p1
 	var total_len = direction.length()
 	if total_len < 1.0: return
 	var dir_norm = direction.normalized()
 	
-	var start = p1 + dir_norm * (radius_1 * 0.6)
-	var finish = p2 - dir_norm * (radius_2 * 0.6)
-	if start.distance_to(finish) < 2.0: return
+	# Dock precisely to visual building rims
+	var start = p1 + dir_norm * (v_radius_1 - 1.0)
+	var finish = p2 - dir_norm * (v_radius_2 - 1.0)
+	if start.distance_to(finish) < 4.0: return
 
-	draw_line(start, finish, conduit_trench_color, 7.0)
-	draw_line(start, finish, conduit_metal_color, 3.5)
-	draw_line(start, finish, Color(conduit_glow_color.r, conduit_glow_color.g, conduit_glow_color.b, 0.3), 1.5)
+	# Discreet, etched living-metal micro-channel (sleek and integrated)
+	draw_line(start, finish, conduit_trench_color, 3.2)
+	draw_line(start, finish, conduit_metal_color, 1.6)
 
+	# Small terminal anchor rivets at each junction
+	draw_circle(start, 2.0, conduit_metal_color)
+	draw_circle(finish, 2.0, conduit_metal_color)
+
+# ==============================================================================
+# NON-CROSSING PLANAR CIRCUIT MESH (Allows Loops & Full Circuits!)
+# ==============================================================================
 func _build_conduit_network(structures: Array[Dictionary]) -> Array[Dictionary]:
 	var links: Array[Dictionary] = []
-	var powered: Array[int] = []
-	var unpowered: Array[int] = []
+	if structures.size() < 2:
+		return links
 
+	var max_conns_per_node = 3
+
+	# 1. Gather all candidate pairs sorted by distance
+	var candidates: Array[Dictionary] = []
 	for i in range(structures.size()):
-		if structures[i].is_base: powered.append(i)
-		else: unpowered.append(i)
+		for j in range(i + 1, structures.size()):
+			var s1 = structures[i]
+			var s2 = structures[j]
+			
+			# Exclude pure barricades from power cabling
+			if s1.type == 0 or s2.type == 0: continue
+			
+			var dist = s1.local_pos.distance_to(s2.local_pos)
+			if dist <= max_conduit_length and dist > 1.0:
+				candidates.append({"from": i, "to": j, "dist": dist})
 
-	while not unpowered.is_empty() and not powered.is_empty():
-		var best_parent := -1
-		var best_child := -1
-		var best_distance := INF
-		for parent_idx in powered:
-			for child_idx in unpowered:
-				var distance = structures[parent_idx].local_pos.distance_to(structures[child_idx].local_pos)
-				if distance <= max_conduit_length and distance < best_distance:
-					best_distance = distance
-					best_parent = parent_idx
-					best_child = child_idx
+	# Sort shortest first so nearby buildings link first
+	candidates.sort_custom(func(a, b): return a.dist < b.dist)
 
-		if best_child == -1: break
-		links.append({"from": best_parent, "to": best_child})
-		powered.append(best_child)
-		unpowered.erase(best_child)
+	# Track connection degrees
+	var conn_counts: Dictionary = {}
+	for i in range(structures.size()):
+		conn_counts[i] = 0
+
+	# 2. Add edges greedily, enforcing degree limits and NO LINE-CROSSINGS
+	for cand in candidates:
+		var u: int = cand.from
+		var v: int = cand.to
+
+		if conn_counts[u] >= max_conns_per_node or conn_counts[v] >= max_conns_per_node:
+			continue
+
+		var p1: Vector2 = structures[u].local_pos
+		var p2: Vector2 = structures[v].local_pos
+
+		# Check if this link intersects any already-established powerline
+		var crosses_existing = false
+		for edge in links:
+			var e1: int = edge.from
+			var e2: int = edge.to
+			# Shared endpoints are allowed (branches/junctions)
+			if u == e1 or u == e2 or v == e1 or v == e2:
+				continue
+			var ep1: Vector2 = structures[e1].local_pos
+			var ep2: Vector2 = structures[e2].local_pos
+			
+			# Built-in fast C++ 2D segment intersection
+			if Geometry2D.segment_intersects_segment(p1, p2, ep1, ep2) != null:
+				crosses_existing = true
+				break
+
+		if not crosses_existing:
+			links.append({"from": u, "to": v})
+			conn_counts[u] += 1
+			conn_counts[v] += 1
 
 	return links
 
@@ -282,10 +337,6 @@ func _draw_base_command_plaza(pos: Vector2, radius: float) -> void:
 		var angle = (float(i) / 12.0) * TAU
 		var t_pos = pos + Vector2(cos(angle), sin(angle)) * cog_radius
 		draw_rect(Rect2(t_pos - Vector2(3, 3), Vector2(6, 6)), brass_trim_color)
-
-	for dir in [Vector2.UP, Vector2.DOWN, Vector2.LEFT, Vector2.RIGHT]:
-		draw_line(pos + (dir * 20.0), pos + (dir * (radius - 8.0)), conduit_trench_color, 5.0)
-		draw_line(pos + (dir * 20.0), pos + (dir * (radius - 8.0)), conduit_glow_color, 2.0)
 
 func _get_bridge_polygon(p1: Vector2, p2: Vector2, radius_1: float, radius_2: float) -> PackedVector2Array:
 	var delta = p2 - p1
@@ -306,7 +357,7 @@ func _get_polygon_points(center: Vector2, radius: float, sides: int, angle_offse
 		points.append(center + Vector2(cos(angle), sin(angle)) * radius)
 	return points
 
-# --- NESTED CLASS: LIGHTWEIGHT CONDUIT PULSE ANIMATOR ---
+# --- NESTED CLASS: UNSHADED LIVING-METAL ENERGY PULSES ---
 class ConduitPulseRenderer extends Node2D:
 	var anim_timer: float = 0.0
 
@@ -323,8 +374,8 @@ class ConduitPulseRenderer extends Node2D:
 		var structures: Array[Dictionary] = parent.cached_active_structures
 		var glow_color: Color = parent.conduit_glow_color
 
-		var pulse_speed = 90.0
-		var pulse_spacing = 60.0
+		var pulse_speed = 85.0
+		var pulse_spacing = 50.0
 		var pulse_offset = fmod(anim_timer * pulse_speed, pulse_spacing)
 
 		for link in links:
@@ -338,14 +389,18 @@ class ConduitPulseRenderer extends Node2D:
 			if dist < 1.0: continue
 			var dir_norm = dir_vec.normalized()
 
-			var start = p1 + dir_norm * (s1.radius * 0.6)
-			var finish = p2 - dir_norm * (s2.radius * 0.6)
+			var start = p1 + dir_norm * (s1.visual_radius - 1.0)
+			var finish = p2 - dir_norm * (s2.visual_radius - 1.0)
 			var seg_len = start.distance_to(finish)
-			if seg_len < 2.0: continue
+			if seg_len < 4.0: continue
 
+			# 1. Luminous Cyan Core Filament (Unshaded across the dark!)
+			draw_line(start, finish, Color(glow_color.r, glow_color.g, glow_color.b, 0.40), 1.0)
+
+			# 2. Flowing Living-Metal Data Packets
 			var cur_dist = pulse_offset
 			while cur_dist < seg_len:
 				var pulse_pos = start + dir_norm * cur_dist
-				draw_circle(pulse_pos, 2.5, glow_color)
+				draw_circle(pulse_pos, 2.2, Color(glow_color.r, glow_color.g, glow_color.b, 0.45))
 				draw_circle(pulse_pos, 1.2, Color.WHITE)
 				cur_dist += pulse_spacing

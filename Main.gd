@@ -70,6 +70,7 @@ var tech_lasers_unlocked: bool = false
 var tech_nanobots_unlocked: bool = false
 
 var research_ui_node: Control = null
+var tech_magnet_unlocked: bool = false
  
 # --------------------------------------------------
 # UI & NETWORK NODE REFERENCES (Using % Unique Names)
@@ -107,7 +108,10 @@ var research_ui_node: Control = null
 @onready var nav_region: NavigationRegion2D = get_node_or_null("NavigationRegion2D")
  
 var my_selected_class: CharacterClass = CharacterClass.ADMECH_TECHPRIEST
+var pause_menu_ui_node: Control = null
+var active_paused_peers: Dictionary = {}
 var is_ready: bool = false
+var settings_ui_node: Control = null
  
 func _ready():
 	add_to_group("main")
@@ -135,11 +139,43 @@ func _ready():
 	_update_class_ui()
 	_refresh_lobby_roster()
 	_setup_research_ui()
+	_setup_settings_ui()
+	_setup_pause_menu_ui()
  
 # --------------------------------------------------
 # CLASS SELECTION & LOBBY UI
 # --------------------------------------------------
  
+func _setup_settings_ui():
+	if not has_node("UI/SettingsUI"):
+		var s_ui = SettingsUI.new()
+		s_ui.name = "SettingsUI"
+		$UI.add_child(s_ui)
+		settings_ui_node = s_ui
+		
+	# Connect existing host/join UI or add a Settings Button
+	_add_settings_button_to_ui()
+
+func _setup_pause_menu_ui():
+	if not has_node("UI/PauseMenuUI"):
+		var p_ui = PauseMenuUI.new()
+		p_ui.name = "PauseMenuUI"
+		$UI.add_child(p_ui)
+		pause_menu_ui_node = p_ui
+
+func _add_settings_button_to_ui():
+	# Add a settings cog button to the top bar
+	if top_bar and not top_bar.has_node("SettingsBtn"):
+		var btn = Button.new()
+		btn.name = "SettingsBtn"
+		btn.text = "⚙ AUDIO [O]"
+		btn.custom_minimum_size = Vector2(100, 28)
+		btn.pressed.connect(func():
+			if settings_ui_node and settings_ui_node.has_method("toggle_settings"):
+				settings_ui_node.toggle_settings()
+		)
+		top_bar.add_child(btn)
+
 func _setup_research_ui():
 	if not has_node("UI/ResearchUI"):
 		var r_ui = ResearchUI.new()
@@ -436,6 +472,28 @@ func select_class(chosen_class: int):
 	if multiplayer.is_server() and match_started:
 		spawn_player(sender_id)
  
+# --- MULTIPLAYER PAUSE SYNCHRONIZATION ---
+
+@rpc("any_peer", "call_local", "reliable")
+func request_set_player_paused(is_paused: bool):
+	if not multiplayer.is_server(): return
+	var sender_id = multiplayer.get_remote_sender_id()
+	if sender_id == 0: sender_id = 1
+
+	if is_paused:
+		active_paused_peers[sender_id] = true
+	else:
+		active_paused_peers.erase(sender_id)
+
+	# The game stays paused as long as AT LEAST ONE player is in their menu!
+	var should_pause = not active_paused_peers.is_empty()
+	rpc("sync_global_pause", should_pause)
+
+@rpc("call_local", "reliable")
+func sync_global_pause(is_paused: bool):
+	get_tree().paused = is_paused
+	get_tree().call_group("pause_menu", "update_global_pause_state", is_paused)
+
 # --------------------------------------------------
 # ENHANCED WAVE MANAGEMENT & COMPOSITION
 # --------------------------------------------------
@@ -669,6 +727,7 @@ func execute_rematch():
 	tech_shields_unlocked = false
 	tech_lasers_unlocked = false
 	tech_nanobots_unlocked = false
+	tech_magnet_unlocked = false
 	
 	if multiplayer.is_server():
 		if wave_timer: 
@@ -687,7 +746,7 @@ func execute_rematch():
 			base.rpc("sync_base_health", base.max_health)
 		
 		rpc("sync_resources", scrap_amount, requisition_amount)
-		rpc("sync_tech_tree", false, false, false)
+		rpc("sync_tech_tree", false, false, false, false)
 		request_navmesh_rebake()
 
 	match_started = false
@@ -840,13 +899,15 @@ func unlock_tech(tech_index: int):
 		0: tech_shields_unlocked = true
 		1: tech_lasers_unlocked = true
 		2: tech_nanobots_unlocked = true
-	rpc("sync_tech_tree", tech_shields_unlocked, tech_lasers_unlocked, tech_nanobots_unlocked)
+		3: tech_magnet_unlocked = true
+	rpc("sync_tech_tree", tech_shields_unlocked, tech_lasers_unlocked, tech_nanobots_unlocked, tech_magnet_unlocked)
 
 @rpc("call_local", "reliable")
-func sync_tech_tree(shields: bool, lasers: bool, nanobots: bool):
+func sync_tech_tree(shields: bool, lasers: bool, nanobots: bool, magnet: bool = false):
 	tech_shields_unlocked = shields
 	tech_lasers_unlocked = lasers
 	tech_nanobots_unlocked = nanobots
+	tech_magnet_unlocked = magnet
 	get_tree().call_group("buildings", "_apply_tech_stats")
 	get_tree().call_group("research_ui", "refresh_tech_cards")
 
@@ -966,7 +1027,10 @@ func _on_connected_to_server():
 func _on_peer_disconnected(id: int):
 	player_classes.erase(id)
 	player_ready.erase(id)
+	active_paused_peers.erase(id) # Clean up paused peer if they quit while paused
+	if multiplayer.is_server():
+		var should_pause = not active_paused_peers.is_empty()
+		rpc("sync_global_pause", should_pause)
+		if not match_started: _broadcast_lobby_state()
 	if has_node(str(id)):
 		get_node(str(id)).queue_free()
-	if multiplayer.is_server() and not match_started:
-		_broadcast_lobby_state()

@@ -11,7 +11,7 @@ extends Control
 
 var local_player: Node2D = null
 var update_accumulator: float = 0.0
-const UPDATE_INTERVAL: float = 0.1
+const UPDATE_INTERVAL: float = 0.08
 
 const COLOR_BG := Color(0.06, 0.07, 0.09, 0.94)
 const COLOR_BRASS := Color(0.78, 0.58, 0.22)
@@ -19,7 +19,7 @@ const COLOR_BRASS_DIM := Color(0.38, 0.28, 0.12)
 const COLOR_CYAN := Color(0.20, 0.88, 1.0)
 const COLOR_GOLD := Color(0.95, 0.75, 0.20)
 const COLOR_RED_ALERT := Color(0.90, 0.25, 0.20)
-const COLOR_DISABLED := Color(0.35, 0.38, 0.42)
+const COLOR_DISABLED := Color(0.45, 0.48, 0.52)
 
 func _ready():
 	add_to_group("ability_hud")
@@ -56,23 +56,39 @@ func setup_hud_for_player(player_node: Node2D):
 	show()
 	refresh_hud_display()
 
-func _format_slot(panel: Node, key_txt: String, name_txt: String, cost_scrap: int, cost_req: int, current_scrap: int, current_req: int, is_selected: bool, is_maxed: bool = false):
+func _format_slot(panel: Node, key_txt: String, name_txt: String, cost_scrap: int, cost_req: int, current_scrap: int, current_req: int, is_selected: bool, is_maxed: bool = false, cooldown_remaining: float = 0.0):
 	if not panel: return
 	
 	var key_lbl = panel.find_child("KeyLabel", true, false) as Label
 	var name_lbl = panel.find_child("NameLabel", true, false) as Label
 	var cost_lbl = panel.find_child("CostLabel", true, false) as Label
 
+	var on_cooldown = (cooldown_remaining > 0.0)
+
+	# 1. Keybind Badge
 	if key_lbl:
 		key_lbl.text = " " + key_txt + " "
-		key_lbl.add_theme_color_override("font_color", COLOR_CYAN if is_selected else Color(0.95, 0.95, 0.95))
+		if on_cooldown or is_maxed:
+			key_lbl.add_theme_color_override("font_color", COLOR_DISABLED)
+		else:
+			key_lbl.add_theme_color_override("font_color", COLOR_CYAN if is_selected else Color(0.95, 0.95, 0.95))
 
+	# 2. Ability Name Header
 	if name_lbl:
 		name_lbl.text = name_txt
-		name_lbl.add_theme_color_override("font_color", Color.WHITE if not is_maxed else COLOR_DISABLED)
+		if on_cooldown or is_maxed:
+			name_lbl.add_theme_color_override("font_color", COLOR_DISABLED)
+		else:
+			name_lbl.add_theme_color_override("font_color", Color.WHITE)
 
+	# 3. Cost Badge / Cooldown Countdown
 	if cost_lbl:
-		if is_maxed:
+		if on_cooldown:
+			# Live Amber Countdown: 0.1s precision when under 10 seconds!
+			var time_txt = ("%.1f" % cooldown_remaining) if cooldown_remaining < 10.0 else str(int(ceil(cooldown_remaining)))
+			cost_lbl.text = "⏳ " + time_txt + "s"
+			cost_lbl.add_theme_color_override("font_color", COLOR_GOLD)
+		elif is_maxed:
 			cost_lbl.text = "◆ MAXED ◆"
 			cost_lbl.add_theme_color_override("font_color", COLOR_DISABLED)
 		elif cost_scrap == 0 and cost_req == 0:
@@ -87,9 +103,10 @@ func _format_slot(panel: Node, key_txt: String, name_txt: String, cost_scrap: in
 			var can_afford = (current_scrap >= cost_scrap and current_req >= cost_req)
 			cost_lbl.add_theme_color_override("font_color", Color(0.9, 0.85, 0.7) if can_afford else COLOR_RED_ALERT)
 
+	# 4. Panel Styling
 	var can_afford_total = (current_scrap >= cost_scrap and current_req >= cost_req) or is_selected
-	if is_maxed:
-		panel.modulate = Color(0.55, 0.55, 0.60, 0.75)
+	if on_cooldown or is_maxed:
+		panel.modulate = Color(0.50, 0.52, 0.56, 0.75)
 		panel.scale = Vector2.ONE
 	elif is_selected:
 		var pulse = 0.85 + sin(Time.get_ticks_msec() * 0.008) * 0.15
@@ -161,32 +178,55 @@ func refresh_hud_display():
 
 	# --- SKITARII MARSHAL (RANGED COMMANDER) ---
 	else:
+		# Slot 1: Primary Shot
 		if slot1_panel:
 			slot1_panel.show()
 			_format_slot(slot1_panel, "LMB", "Radium Carbine", 0, 0, current_scrap, current_req, false)
 
+# Slot 2: Doctrina Imperative Stance [SPACE / F]
 		if slot2_panel:
 			slot2_panel.show()
+			var is_conqueror = (local_player.get("active_doctrina") == 0)
+			
+			if is_conqueror:
+				# Amber High-DPS Mode
+				var title = "CONQUEROR (DPS)"
+				_format_slot(slot2_panel, "SPACE", title, 0, 0, current_scrap, current_req, true)
+				var cost_lbl = slot2_panel.find_child("CostLabel", true, false) as Label
+				if cost_lbl:
+					cost_lbl.text = "+60% SPD / -20% ARM"
+					cost_lbl.add_theme_color_override("font_color", Color(1.0, 0.80, 0.20))
+			else:
+				# Cyan Defensive Bulwark Mode
+				var title = "PROTECTOR (ARM)"
+				_format_slot(slot2_panel, "SPACE", title, 0, 0, current_scrap, current_req, true)
+				var cost_lbl = slot2_panel.find_child("CostLabel", true, false) as Label
+				if cost_lbl:
+					cost_lbl.text = "+35% ARM / -15% SPD"
+					cost_lbl.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
+
+		# Slot 3: Squad Recruitment [N]
+		if slot3_panel:
+			slot3_panel.show()
 			var current_lvl = local_player.bodyguard_level if "bodyguard_level" in local_player else 0
 			var cost = local_player.bodyguard_cost if "bodyguard_cost" in local_player else 5
 			var is_maxed = (current_lvl >= 2)
-			_format_slot(slot2_panel, "N", "Bodyguard (" + str(current_lvl) + "/2)", 0, cost, current_scrap, current_req, false, is_maxed)
+			var squad_label = "Squad (" + str(current_lvl) + "/2)"
+			_format_slot(slot3_panel, "N", squad_label, 0, cost, current_scrap, current_req, false, is_maxed)
 
-		if slot3_panel:
-			slot3_panel.show()
+		# Slot 4: Weapon DMG Up [M]
+		if slot4_panel:
+			slot4_panel.show()
 			var dmg_lvl = local_player.damage_upgrade_level if "damage_upgrade_level" in local_player else 0
 			var max_dmg = local_player.MAX_DAMAGE_UPGRADES if "MAX_DAMAGE_UPGRADES" in local_player else 3
 			var cost = local_player.damage_upgrade_cost if "damage_upgrade_cost" in local_player else 10
 			var is_maxed = (dmg_lvl >= max_dmg)
-			_format_slot(slot3_panel, "M", "DMG Up (" + str(dmg_lvl) + "/" + str(max_dmg) + ")", 0, cost, current_scrap, current_req, false, is_maxed)
+			_format_slot(slot4_panel, "M", "DMG Up (" + str(dmg_lvl) + "/" + str(max_dmg) + ")", 0, cost, current_scrap, current_req, false, is_maxed)
 
-		if slot4_panel:
-			slot4_panel.show()
-			var spd_lvl = local_player.speed_upgrade_level if "speed_upgrade_level" in local_player else 0
-			var max_spd = local_player.MAX_SPEED_UPGRADES if "MAX_SPEED_UPGRADES" in local_player else 3
-			var cost = local_player.speed_upgrade_cost if "speed_upgrade_cost" in local_player else 10
-			var is_maxed = (spd_lvl >= max_spd)
-			_format_slot(slot4_panel, "V", "Speed Up (" + str(spd_lvl) + "/" + str(max_spd) + ")", 0, cost, current_scrap, current_req, false, is_maxed)
+		# Slot 5: Orbital Macrocannon Strike [X] (Live Countdown Display)
+		if slot5_panel:
+			slot5_panel.show()
+			var cd = local_player.get("orbital_strike_cooldown") if "orbital_strike_cooldown" in local_player else 0.0
+			_format_slot(slot5_panel, "X", "Orbital Lance", 0, 50, current_scrap, current_req, false, false, cd)
 
-		if slot5_panel: slot5_panel.hide()
 		if slot6_panel: slot6_panel.hide()

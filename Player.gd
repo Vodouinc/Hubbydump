@@ -1,6 +1,7 @@
 extends CharacterBody2D
 
 enum PlayerClass { MELEE, RANGED }
+enum Doctrina { CONQUEROR, PROTECTOR }
 
 @export var current_class: PlayerClass = PlayerClass.MELEE
 
@@ -71,6 +72,10 @@ var bodyguard_level: int = 0 # 0 = No bodyguards, 1 = One bodyguard, 2 = Two bod
 var bodyguard_instance_count: int = 0
 var active_bodyguards: Array = []
 @export var bodyguard_cost: int = 5 # Cost per upgrade level
+var active_doctrina: Doctrina = Doctrina.CONQUEROR
+var orbital_strike_cooldown: float = 0.0
+const ORBITAL_COOLDOWN_MAX: float = 45.0
+const ORBITAL_REQ_COST: int = 50
 
 # --- SKITARII MARSHAL UPGRADE SYSTEM ---
 var damage_upgrade_level: int = 0
@@ -178,10 +183,19 @@ func apply_class_stats():
 
 func take_damage(amount: int, _knockback: Vector2 = Vector2.ZERO):
 	if multiplayer.is_server():
-		var new_hp = max(0, current_health - amount)
+		var final_damage = float(amount)
+		
+		# Skitarii Marshal Stance Armor Multiplier
+		if current_class == PlayerClass.RANGED:
+			if active_doctrina == Doctrina.PROTECTOR:
+				final_damage *= 0.65 # 35% Armor Damage Reduction!
+			elif active_doctrina == Doctrina.CONQUEROR:
+				final_damage *= 1.20 # 20% Vulnerability trade-off
+				
+		var new_hp = max(0, current_health - int(final_damage))
 		rpc("sync_player_health", new_hp)
 
-@rpc("call_local", "reliable")
+@rpc("any_peer", "call_local", "reliable")
 func sync_player_health(new_hp: int):
 	current_health = new_hp
 	if health_bar and health_bar.has_method("update_health"):
@@ -447,6 +461,10 @@ func _get_closest_interactable_structure() -> Node2D:
 # --- PROCESS & DRAW LOOP ---
 
 func _process(delta):
+		# Decrement Orbital Strike timer
+	if orbital_strike_cooldown > 0.0:
+		orbital_strike_cooldown = maxf(0.0, orbital_strike_cooldown - delta)
+
 	if is_attacking_anim:
 		attack_progress += delta / attack_anim_duration
 		
@@ -485,6 +503,9 @@ func _process(delta):
 		queue_redraw()
 
 func _draw():
+# Draw Tactical Command Aura Ring beneath the Marshal
+	if current_class == PlayerClass.RANGED and _is_local_authority():
+		_draw_marshal_command_aura()
 	if is_attacking_anim:
 		draw_omnissian_axe_sweep()
 		
@@ -571,6 +592,37 @@ func _draw():
 			var local_target = preview_connection_target.global_position - global_position
 			draw_line(local_target, local_build_pos, Color(0.25, 0.85, 1.0, 0.45), 2.0)
 
+func _draw_marshal_command_aura():
+	var aura_radius = 230.0
+	var is_conq = (active_doctrina == Doctrina.CONQUEROR)
+	var pulse = 0.55 + sin(Time.get_ticks_msec() * 0.005) * 0.2
+	
+	# Stance Colors: Amber Gold for Conqueror, Luminous Cyan for Protector
+	var aura_color = Color(1.0, 0.75, 0.15, 0.35 * pulse) if is_conq else Color(0.20, 0.88, 1.0, 0.35 * pulse)
+	var edge_color = Color(1.0, 0.80, 0.20, 0.75 * pulse) if is_conq else Color(0.30, 0.92, 1.0, 0.75 * pulse)
+
+	# 1. Soft Command Ring on Sand
+	draw_arc(Vector2.ZERO, aura_radius, 0.0, TAU, 36, aura_color, 1.5)
+	draw_arc(Vector2.ZERO, aura_radius + 4.0, 0.0, TAU, 36, Color(edge_color.r, edge_color.g, edge_color.b, 0.2 * pulse), 1.0)
+
+	# 2. Rotating Stance Glyphs along the ring
+	var rot_time = Time.get_ticks_msec() * 0.0008
+	var num_glyphs = 6
+	for i in range(num_glyphs):
+		var a = rot_time + (float(i) * TAU / float(num_glyphs))
+		var pt = Vector2(cos(a), sin(a)) * aura_radius
+		if is_conq:
+			# Forward Attack Chevrons (>> >>)
+			var forward_tip = pt + Vector2(cos(a), sin(a)) * 8.0
+			var side1 = pt + Vector2(cos(a + 2.2), sin(a + 2.2)) * 6.0
+			var side2 = pt + Vector2(cos(a - 2.2), sin(a - 2.2)) * 6.0
+			draw_line(side1, forward_tip, edge_color, 1.8)
+			draw_line(side2, forward_tip, edge_color, 1.8)
+		else:
+			# Defensive Shield Nodes (🛡️)
+			draw_circle(pt, 3.0, edge_color)
+			draw_circle(pt, 1.5, Color.WHITE)
+
 func _draw_inworld_interaction_tooltip(local_pos: Vector2, b_type: int):
 	var prompt_text = ""
 	var cost_text = ""
@@ -599,7 +651,7 @@ func _draw_inworld_interaction_tooltip(local_pos: Vector2, b_type: int):
 
 	if prompt_text.is_empty(): return
 
-	# 1. Single Floating Holographic Badge Frame
+	# 1. Floating Holographic Badge Position
 	var badge_pos = local_pos + Vector2(0, -44)
 	var badge_rect = Rect2(badge_pos - Vector2(85, 13), Vector2(170, 26))
 	
@@ -607,23 +659,18 @@ func _draw_inworld_interaction_tooltip(local_pos: Vector2, b_type: int):
 	draw_rect(badge_rect, Color(0.20, 0.88, 1.0, 0.85), false, 1.2)
 	draw_line(badge_pos + Vector2(0, 13), local_pos + Vector2(0, -18), Color(0.20, 0.88, 1.0, 0.35), 1.5)
 
-	# 2. Draw Text (Crisp Left/Right separation)
+	# 2. Draw Text (Clean single pass, no overlapping duplicate calls)
 	var font = ThemeDB.fallback_font
 	var font_size = 11
 	
 	draw_string(font, badge_pos + Vector2(-78, 4), prompt_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.90, 0.86, 0.74))
-	draw_string(font, badge_pos + Vector2(10, 4), cost_text, HORIZONTAL_ALIGNMENT_RIGHT, 70, font_size, Color(0.35, 0.90, 1.0))
 	
-	# Left Action Label
-	draw_string(font, badge_pos + Vector2(-74, 4), prompt_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.90, 0.86, 0.74))
-	
-	# Right Cost Badge (Live Affordability Coloring)
 	if not cost_text.is_empty():
 		var cost_color = Color(0.35, 0.90, 1.0)
-		if cost_text.begins_with("⚡"):
+		if cost_text.begins_with("⚡") and not cost_text.contains("⚙"):
 			var cost_val = cost_text.replace("⚡ ", "").to_int()
 			cost_color = Color(0.35, 0.90, 1.0) if current_req >= cost_val else Color(0.90, 0.25, 0.20)
-		draw_string(font, badge_pos + Vector2(25, 4), cost_text, HORIZONTAL_ALIGNMENT_RIGHT, 48, font_size, cost_color)
+		draw_string(font, badge_pos + Vector2(10, 4), cost_text, HORIZONTAL_ALIGNMENT_RIGHT, 70, font_size, cost_color)
 
 func draw_omnissian_axe_sweep():
 	var eased_progress = pow(attack_progress, 2.5) 
@@ -716,7 +763,20 @@ func check_lingering_melee_hits():
 func _unhandled_input(event):
 	if not is_multiplayer_authority():
 		return
-		
+
+# Skitarii Marshal Stance and Ultimate Inputs
+	if current_class == PlayerClass.RANGED and event is InputEventKey and event.pressed:
+		if event.keycode == KEY_SPACE or event.keycode == KEY_F:
+			# Toggle Doctrina Imperative Stance
+			rpc("toggle_doctrina_imperative")
+			get_viewport().set_input_as_handled()
+			return
+		elif event.keycode == KEY_X:
+			# Trigger Orbital Macrocannon Strike at cursor position
+			rpc("request_orbital_strike", get_global_mouse_position())
+			get_viewport().set_input_as_handled()
+			return
+
 	# Allow ESC to close Tech Vault terminal if open
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 		var r_ui = get_tree().get_first_node_in_group("research_ui")
@@ -775,6 +835,7 @@ func _unhandled_input(event):
 						var main_node = get_parent()
 						if main_node:
 							main_node.rpc_id(1, "request_build_structure", build_pos, selected_building_type)
+						AudioManager.play_sfx("building_place", build_pos, 0.0)
 						_cancel_build_mode()
 					else:
 						print("[Build System] Placement blocked: Space occupied or lacks industrial ground!")
@@ -807,6 +868,68 @@ func _unhandled_input(event):
 		if can_attack:
 			var target_pos = get_global_mouse_position()
 			rpc("perform_attack", target_pos)
+
+# --- DOCTRINA & ORBITAL RPCS ---
+
+@rpc("any_peer", "call_local", "reliable")
+func toggle_doctrina_imperative():
+	active_doctrina = Doctrina.PROTECTOR if active_doctrina == Doctrina.CONQUEROR else Doctrina.CONQUEROR
+	
+	if active_doctrina == Doctrina.CONQUEROR:
+		# Conqueror: Rapid-Fire Machinegun & Fast Sprint
+		speed = 390.0
+		attack_cooldown = 0.18
+	else:
+		# Protector: Heavy Armored Bulwark & Slower Pace
+		speed = 280.0
+		attack_cooldown = 0.38
+
+	if is_multiplayer_authority():
+		var hud = get_tree().get_first_node_in_group("ability_hud")
+		if hud and hud.has_method("refresh_hud_display"):
+			hud.refresh_hud_display()
+
+@rpc("any_peer", "call_local", "reliable")
+func request_orbital_strike(target_pos: Vector2):
+	if multiplayer.is_server():
+		var main_node = get_parent()
+		if not main_node or not main_node.has_method("spend_requisition"): return
+		if orbital_strike_cooldown > 0.0: return
+		
+		if main_node.spend_requisition(ORBITAL_REQ_COST):
+			orbital_strike_cooldown = ORBITAL_COOLDOWN_MAX
+			rpc("sync_orbital_cooldown", ORBITAL_COOLDOWN_MAX) # <-- Syncs timer to all clients!
+			rpc("execute_orbital_strike_fx", target_pos)
+
+			# Deal massive kinetic damage to all enemies in the strike zone
+			var space_state = get_world_2d().direct_space_state
+			var shape = CircleShape2D.new()
+			shape.radius = 160.0
+			var query = PhysicsShapeQueryParameters2D.new()
+			query.shape = shape
+			query.transform = Transform2D(0.0, target_pos)
+			query.collide_with_bodies = true
+			var results = space_state.intersect_shape(query, 64)
+
+			for hit in results:
+				var body = hit.collider
+				if is_instance_valid(body) and (body.is_in_group("enemies") or body.is_in_group("objectives")):
+					var dir = (body.global_position - target_pos).normalized()
+					if body.has_method("take_damage"):
+						body.take_damage(220, dir * 450.0)
+
+@rpc("any_peer", "call_local", "unreliable")
+func execute_orbital_strike_fx(target_pos: Vector2):
+	AudioManager.play_sfx("orbital_strike", target_pos, 4.0)
+	# Spawn visual kinetic shockwave label and sound effect trigger
+	var blast_label = Label.new()
+	blast_label.global_position = target_pos + Vector2(-90, -20)
+	blast_label.text = "◆ ORBITAL LANCE STRIKE ◆"
+	blast_label.label_settings = LabelSettings.new()
+	blast_label.label_settings.font_color = Color(0.20, 0.90, 1.0)
+	blast_label.label_settings.font_size = 16
+	get_parent().add_child(blast_label)
+	get_tree().create_timer(1.8).timeout.connect(blast_label.queue_free)
 
 # --- BODYGUARD UPGRADE RPC SYSTEM ---
 
@@ -904,6 +1027,10 @@ func request_upgrade_damage():
 				rpc("sync_damage_upgrade", damage_upgrade_level, bullet_damage)
 
 @rpc("any_peer", "call_local", "reliable")
+func sync_orbital_cooldown(new_cd: float):
+	orbital_strike_cooldown = new_cd
+
+@rpc("any_peer", "call_local", "reliable")
 func sync_damage_upgrade(new_level: int, new_damage: int):
 	damage_upgrade_level = new_level
 	bullet_damage = new_damage
@@ -983,6 +1110,7 @@ func perform_attack(target_pos: Vector2):
 		visual_sprite.trigger_attack_fx()
 	
 	if current_class == PlayerClass.RANGED:
+		AudioManager.play_sfx("radium_shot", global_position, -3.0)
 		if multiplayer.is_server():
 			var main_node = get_parent()
 			if main_node and "bullet_count" in main_node:
@@ -1011,4 +1139,5 @@ func execute_melee_attack(target_pos: Vector2):
 	attack_progress = 0.0
 	attack_angle = attack_dir.angle()
 	already_hit_enemies.clear()
+	AudioManager.play_sfx("axe_swing", global_position, 0.0)
 	queue_redraw()

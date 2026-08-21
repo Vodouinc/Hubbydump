@@ -20,9 +20,6 @@ func _ready():
 
 func setup_building_type(is_main_base: bool):
 	if visual_sprite:
-		if is_main_base:
-			visual_sprite.type = visual_sprite.BuildingType.MAIN_BASE
-		else:
 			visual_sprite.type = visual_sprite.BuildingType.GENERATOR
 
 func set_preview_mode(enabled: bool):

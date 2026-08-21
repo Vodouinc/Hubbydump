@@ -5,48 +5,32 @@ enum Doctrina { CONQUEROR, PROTECTOR }
 
 @export var current_class: PlayerClass = PlayerClass.MELEE
 
-# --- CLASS STAT RESOURCES ---
-# Drag your tech_priest_stats.tres and skitarii_marshal_stats.tres here in the Inspector!
 @export var tech_priest_data: PlayerClassData
 @export var skitarii_marshal_data: PlayerClassData
 
-# Active stat variables used by gameplay logic
 var speed: float = 300.0
 var max_health: int = 100
 var current_health: int = 100
 
 var bullet_scene = preload("res://Bullet.tscn")
-
 var attack_cooldown: float = 0.4
 var bullet_damage: int = 20
 var can_attack: bool = true
 
+var tooltip_overlay: Node2D = null
+
 # --- SERVO-SKULL CONFIGURATION ---
 var active_servo_skulls: Array = []
-const MAX_SERVO_SKULLS: int = 2          # Maximum active skulls at once
-const SERVO_SKULL_SCRAP_COST: int = 20   # Must match AbilityHUD.gd
-const SERVO_SKULL_REQ_COST: int = 10     # Must match AbilityHUD.gd
 
 # --- MELEE ATTACK ANIMATION & HITBOX STATE ---
 var is_attacking_anim: bool = false
 var attack_progress: float = 0.0
 var attack_angle: float = 0.0
-var attack_anim_duration: float = 0.2  # Speed of the arc swing in seconds
-
-# Tracks enemies hit during the CURRENT swing so they aren't damaged twice
+var attack_anim_duration: float = 0.2
 var already_hit_enemies: Array = []
 
 # --- BUILDING SYSTEM & GRID STATE ---
-# Building Types: 
-# 0: Barricade (15 Scrap - Open terrain)
-# 1: Generator (25 Scrap - Requires Industrial Ground)
-# 2: Turret (35 Scrap, 5 Req - Open terrain)
-# 3: Manufactorum (60 Scrap, 25 Req - Requires Industrial Ground)
-# 4: Distributor (20 Scrap - Spreads Industrial Ground)
-# 5: Noosphere Antenna (Upgraded from Distributor via [E])
-# 6: Research Shrine (40 Scrap, 15 Req - Requires Industrial Ground)
 var selected_building_type: int = 0
-const BUILDING_COSTS = [15, 25, 35, 60, 15, 0, 40] # Distributor lowered from 20 -> 15 Scrap!
 const BUILD_RANGE: float = 260.0
 const CONDUIT_RANGE: float = 360.0
 const INTERACTION_RANGE: float = 85.0
@@ -59,32 +43,22 @@ var hovered_interact_building: Node2D = null
 const BARRICADE_WALL_LENGTH: float = 75.0
 const BARRICADE_SNAP_DETECTION_RANGE: float = 110.0
 
-# ==============================================================================
-# MODULAR GRID & WALL BALANCING CONSTANTS
-# ==============================================================================
-const GRID_SIZE: float = 32.0          # Base cell dimension in pixels
-const WALL_LINK_RANGE: float = 95.0    # Connects up to 2 cells cardinally (64px) & 1-2 cells diagonally (~45-90px)
+const GRID_SIZE: float = 32.0
+const WALL_LINK_RANGE: float = 95.0
 var preview_barricade_links: Array[Node2D] = []
 
 # --- BODYGUARD SYSTEM STATE ---
 var bodyguard_scene = preload("res://SkitariiBodyguard.tscn")
-var bodyguard_level: int = 0 # 0 = No bodyguards, 1 = One bodyguard, 2 = Two bodyguards
+var bodyguard_level: int = 0
 var bodyguard_instance_count: int = 0
 var active_bodyguards: Array = []
-@export var bodyguard_cost: int = 5 # Cost per upgrade level
+
 var active_doctrina: Doctrina = Doctrina.CONQUEROR
 var orbital_strike_cooldown: float = 0.0
-const ORBITAL_COOLDOWN_MAX: float = 45.0
-const ORBITAL_REQ_COST: int = 50
 
 # --- SKITARII MARSHAL UPGRADE SYSTEM ---
 var damage_upgrade_level: int = 0
-const MAX_DAMAGE_UPGRADES: int = 3
-@export var damage_upgrade_cost: int = 10
-
 var speed_upgrade_level: int = 0
-const MAX_SPEED_UPGRADES: int = 3
-@export var speed_upgrade_cost: int = 10
 
 @onready var label: Label = $Label
 @onready var camera: Camera2D = $Camera2D
@@ -109,6 +83,7 @@ func _ready():
 	set_process_unhandled_input(_is_local_authority())
 	
 	if _is_local_authority():
+		_setup_tooltip_overlay()
 		if label:
 			label.text += " [YOU]"
 		if camera:
@@ -124,7 +99,6 @@ func _ready():
 
 func set_player_class(new_class):
 	current_class = new_class
-	
 	if not is_node_ready():
 		await ready
 
@@ -160,7 +134,6 @@ func apply_class_stats():
 		if visual_sprite:
 			visual_sprite.unit_type = active_data.unit_type_id
 	else:
-		# Fallback defaults if .tres hasn't been assigned yet in the editor
 		if current_class == PlayerClass.MELEE:
 			speed = 250.0
 			max_health = 150
@@ -181,33 +154,43 @@ func apply_class_stats():
 		if hud and hud.has_method("update_hud_layout"):
 			hud.update_hud_layout()
 
-func take_damage(amount: int, _knockback: Vector2 = Vector2.ZERO):
+func take_damage(amount: int, knockback: Vector2 = Vector2.ZERO):
 	if multiplayer.is_server() or not multiplayer.has_multiplayer_peer():
 		var final_damage = float(amount)
 		
-		# Skitarii Marshal Stance Armor Multiplier
+		# Skitarii Stance Multipliers
 		if current_class == PlayerClass.RANGED:
 			if active_doctrina == Doctrina.PROTECTOR:
 				final_damage *= 0.65
 			elif active_doctrina == Doctrina.CONQUEROR:
 				final_damage *= 1.20
+
+		# Trench Cover Defense (-35% damage reduction near Barricades)
+		var main_node = get_parent()
+		if main_node and main_node.get("tech_spikes_cover_unlocked"):
+			if _is_near_friendly_barricade(45.0):
+				final_damage *= 0.65 # -35% cover reduction!
 				
 		var new_hp = max(0, current_health - int(final_damage))
 		rpc("sync_player_health", new_hp)
 		rpc("trigger_player_hit_feedback", int(final_damage))
 
-# In Player.gd -> Add this RPC function:
+func _is_near_friendly_barricade(range_limit: float) -> bool:
+	for b in get_tree().get_nodes_in_group("buildings"):
+		if is_instance_valid(b) and int(b.get("building_type")) == 0:
+			if global_position.distance_to(b.global_position) <= range_limit:
+				return true
+	return false
+
 @rpc("any_peer", "call_local", "unreliable")
 func trigger_player_hit_feedback(amount: int):
 	AudioManager.play_sfx("hit", global_position, -2.0)
 	
-	# Flash player sprite red
 	if visual_sprite:
 		visual_sprite.modulate = Color(2.5, 0.4, 0.4)
 		var tween = create_tween()
 		tween.tween_property(visual_sprite, "modulate", Color.WHITE, 0.15)
 
-	# Spawn floating combat text above player's head
 	var dmg_label = Label.new()
 	dmg_label.script = load("res://DamageNumber.gd")
 	dmg_label.global_position = global_position + Vector2(randf_range(-8, 8), -30)
@@ -273,55 +256,29 @@ func update_preview_type():
 		if preview_instance.has_method("setup_as_preview"):
 			preview_instance.setup_as_preview()
 
-# --- GRID FOOTPRINT & DIMENSION HELPERS ---
-
 func _get_building_size(type: int) -> Vector2:
-	match type:
-		-1: return Vector2(144, 144) # Main Base Core (4.5 tiles with natural clearance)
-		0:  return Vector2(32, 32)   # Barricade Post (1x1 tile)
-		1:  return Vector2(64, 64)   # Generator (2x2 tiles)
-		2:  return Vector2(48, 48)   # Turret (1.5 tiles - provides clearance for rotating barrels)
-		3:  return Vector2(96, 96)   # Manufactorum (3x3 tiles)
-		4:  return Vector2(48, 48)   # Distributor (1.5 tiles - prevents merging into generators)
-		5:  return Vector2(48, 48)   # Noosphere Antenna (1.5 tiles)
-		6:  return Vector2(72, 72)   # Research Shrine (2.25 tiles)
-		_:  return Vector2(32, 32)
-
-func _get_building_rect(type: int, pos: Vector2) -> Rect2:
-	var size = _get_building_size(type)
-	return Rect2(pos - (size * 0.5), size)
+	if type == -1:
+		return Vector2(144, 144) # Main base
+	var info = GameData.STRUCTURE_INFO.get(type, null)
+	return info["size"] if info else Vector2(32, 32)
 
 func _requires_industrial_ground(type: int) -> bool:
-	# Generator (1), Manufactorum (3), and Research Shrine (6) MUST be placed on industrial ground!
-	return type in [1, 3, 6]
+	var info = GameData.STRUCTURE_INFO.get(type, null)
+	return info["requires_industrial"] if info else false
 
 func _is_position_on_industrial_ground(pos: Vector2) -> bool:
-	# Main Base gives a huge 220px starting radius!
+	var floor_node = get_tree().get_first_node_in_group("sandy_floor")
+	if floor_node and floor_node.has_method("is_world_pos_on_grid"):
+		return floor_node.is_world_pos_on_grid(pos)
+
+	# Fallback distance check if floor is not ready
 	var base_nodes = get_tree().get_nodes_in_group("base")
 	for b in base_nodes:
-		if is_instance_valid(b) and pos.distance_to(b.global_position) <= 220.0:
+		if is_instance_valid(b) and pos.distance_to(b.global_position) <= 192.0:
 			return true
-
-	var buildings = get_tree().get_nodes_in_group("buildings")
-	for b in buildings:
-		if not is_instance_valid(b) or b == preview_instance: continue
-		var b_type = int(b.get("building_type")) if "building_type" in b else 0
-		var coverage_radius = 0.0
-		match b_type:
-			1: coverage_radius = 90.0   # Generator
-			3: coverage_radius = 110.0  # Manufactorum
-			4: coverage_radius = 150.0  # Distributor (Expands area by 150px!)
-			5: coverage_radius = 160.0  # Noosphere Antenna
-			6: coverage_radius = 100.0  # Research Shrine
-			_: continue
-
-		if pos.distance_to(b.global_position) <= coverage_radius:
-			return true
-
 	return false
 
 func _get_snapped_build_position(mouse_pos: Vector2) -> Vector2:
-	# 1. Barricade-to-Barricade Uniform 8-Way Snapping
 	if selected_building_type == 0:
 		var buildings = get_tree().get_nodes_in_group("buildings")
 		var closest_barricade: Node2D = null
@@ -338,12 +295,9 @@ func _get_snapped_build_position(mouse_pos: Vector2) -> Vector2:
 
 		if is_instance_valid(closest_barricade):
 			var to_mouse = mouse_pos - closest_barricade.global_position
-			# Snap to exact 45-degree angle (0, 45, 90, 135, 180, 225, 270, 315)
 			var angle = snapped(to_mouse.angle(), PI / 4.0)
-			# Exact uniform 75px length on all angles!
 			return (closest_barricade.global_position + Vector2.RIGHT.rotated(angle) * BARRICADE_WALL_LENGTH).snapped(Vector2(2, 2))
 
-	# 2. Standard Grid Snapping for All Other Buildings
 	var size = _get_building_size(selected_building_type)
 	var cells_x = int(round(size.x / GRID_SIZE))
 	var cells_y = int(round(size.y / GRID_SIZE))
@@ -352,13 +306,10 @@ func _get_snapped_build_position(mouse_pos: Vector2) -> Vector2:
 	return Vector2(snapped_x, snapped_y)
 
 func _is_build_location_valid(build_pos: Vector2) -> bool:
-	# 1. Industrial Ground Requirement Check
 	if _requires_industrial_ground(selected_building_type) and not _is_position_on_industrial_ground(build_pos):
 		return false
 
 	var is_placing_barricade = (selected_building_type == 0)
-	
-	# Barricades touch with tight tolerance; Heavy buildings get a 6px breathing margin
 	var placement_margin = -1.0 if is_placing_barricade else 6.0
 	var my_rect = Rect2(build_pos - (_get_building_size(selected_building_type) * 0.5), _get_building_size(selected_building_type)).grow(placement_margin)
 
@@ -373,12 +324,9 @@ func _is_build_location_valid(build_pos: Vector2) -> bool:
 
 		var s_type = -1 if s.is_in_group("base") else int(s.get("building_type"))
 		var other_is_barricade = (s_type == 0)
-
-		# Allow Barricade-to-Barricade touching for continuous curtain walls
 		var other_margin = -1.0 if (is_placing_barricade and other_is_barricade) else 6.0
 		var other_rect = Rect2(s.global_position - (_get_building_size(s_type) * 0.5), _get_building_size(s_type)).grow(other_margin)
 
-		# Block placement if the footprints crowd or overlap
 		if my_rect.intersects(other_rect):
 			return false
 
@@ -400,7 +348,7 @@ func _find_preview_connection(build_pos: Vector2) -> Node2D:
 	
 func _find_preview_barricade_links(build_pos: Vector2) -> Array[Node2D]:
 	var linked_neighbors: Array[Node2D] = []
-	if selected_building_type != 0: # Only for Barricades
+	if selected_building_type != 0:
 		return linked_neighbors
 
 	var buildings = get_tree().get_nodes_in_group("buildings")
@@ -424,7 +372,7 @@ func _is_wall_line_blocked_by_structure(pos_a: Vector2, pos_b: Vector2) -> bool:
 		if not is_instance_valid(s) or s == preview_instance:
 			continue
 		if "building_type" in s and int(s.building_type) == 0:
-			continue # Ignore other barricades
+			continue
 			
 		var s_type = -1 if s.is_in_group("base") else int(s.get("building_type"))
 		var s_pos = s.global_position
@@ -439,12 +387,15 @@ func _is_wall_line_blocked_by_structure(pos_a: Vector2, pos_b: Vector2) -> bool:
 				return true
 	return false
 
-# --- [E] INTERACTION: UPGRADE TURRET / DISTRIBUTOR / TECH SHRINE ---
-
 func request_interact_nearby_structure() -> void:
 	var r_ui = get_tree().get_first_node_in_group("research_ui")
 	if r_ui and r_ui.visible:
 		r_ui.close_terminal()
+		return
+
+	var t_ui = get_tree().get_first_node_in_group("turret_upgrade_ui")
+	if t_ui and t_ui.visible:
+		t_ui.close_modal()
 		return
 
 	var closest: Node2D = _get_closest_interactable_structure()
@@ -452,35 +403,47 @@ func request_interact_nearby_structure() -> void:
 		var main_node = get_tree().get_first_node_in_group("main")
 		if main_node:
 			var b_type = int(closest.building_type)
-			if b_type == 0: # Barricade -> Gate Upgrade!
+			if b_type == 0:
 				main_node.rpc_id(1, "request_upgrade_gate", closest.name)
-			elif b_type == 2: # Turret Upgrade
-				main_node.rpc_id(1, "request_upgrade_turret", closest.name)
-			elif b_type == 4: # Distributor -> Antenna Upgrade
+			elif b_type == 2:
+				var lvl = closest.get("turret_upgrade_level") if "turret_upgrade_level" in closest else 0
+				var spec = closest.get("turret_spec") if "turret_spec" in closest else 0
+				
+				if lvl < 3:
+					# Upgrade to next numerical tier (Lv. 2 -> Lv. 4)
+					main_node.rpc_id(1, "request_upgrade_turret", closest.name)
+				elif spec == GameData.TurretSpec.NONE:
+					# Turret is Level 4! Open Specialization Modal (Option A)
+					if t_ui and t_ui.has_method("open_modal"):
+						t_ui.open_modal(closest)
+			elif b_type == 4:
 				main_node.rpc_id(1, "request_upgrade_distributor", closest.name)
-			elif b_type == 6: # Research Shrine -> Tech Vault
+			elif b_type == 6:
 				if r_ui and r_ui.has_method("open_terminal"):
 					r_ui.open_terminal(closest)
 	
 func _get_closest_interactable_structure() -> Node2D:
 	var closest: Node2D = null
 	var closest_dist := INTERACTION_RANGE
+	
 	for building in get_tree().get_nodes_in_group("buildings"):
-		if not is_instance_valid(building) or not ("building_type" in building): continue
+		if not is_instance_valid(building) or not ("building_type" in building): 
+			continue
 		var b_type = int(building.building_type)
-		# Barricades (0 - if not gate), Turrets (2), Distributors (4), Research Shrines (6)
-		if b_type == 0 and building.get("is_gate"): continue # Already a gate
-		if not (b_type in [0, 2, 4, 6]): continue
+		# Barricade (0 - if not gate), Turret (2), Distributor (4), Research Shrine (6)
+		if b_type == 0 and building.get("is_gate"): 
+			continue
+		if not (b_type in [0, 2, 4, 6]): 
+			continue
+			
 		var dist = global_position.distance_to(building.global_position)
 		if dist < closest_dist:
 			closest_dist = dist
 			closest = building
+			
 	return closest
 
-# --- PROCESS & DRAW LOOP ---
-
 func _process(delta):
-		# Decrement Orbital Strike timer
 	if orbital_strike_cooldown > 0.0:
 		orbital_strike_cooldown = maxf(0.0, orbital_strike_cooldown - delta)
 
@@ -498,10 +461,13 @@ func _process(delta):
 		queue_redraw()
 
 	if _is_local_authority():
+		var prev_hovered = hovered_interact_building
 		hovered_interact_building = _get_closest_interactable_structure()
-		queue_redraw()
+		
+		if is_instance_valid(tooltip_overlay):
+			if hovered_interact_building != prev_hovered or is_instance_valid(hovered_interact_building):
+				tooltip_overlay.queue_redraw()
 
-	if _is_local_authority():
 		var mouse_pos = get_global_mouse_position()
 		if visual_sprite:
 			visual_sprite.look_at(mouse_pos)
@@ -512,7 +478,6 @@ func _process(delta):
 		preview_is_valid = global_position.distance_to(build_pos) <= BUILD_RANGE and _is_build_location_valid(build_pos)
 		preview_connection_target = _find_preview_connection(build_pos)
 		
-		# Find which barricades will connect to this position
 		if selected_building_type == 0:
 			preview_barricade_links = _find_preview_barricade_links(build_pos)
 		else:
@@ -522,26 +487,18 @@ func _process(delta):
 		queue_redraw()
 
 func _draw():
-# Draw Tactical Command Aura Ring beneath the Marshal
 	if current_class == PlayerClass.RANGED and _is_local_authority():
 		_draw_marshal_command_aura()
 	if is_attacking_anim:
 		draw_omnissian_axe_sweep()
 		
-	# 1. Floating In-World Contextual Interaction Tooltip
-	if _is_local_authority() and is_instance_valid(hovered_interact_building):
-		var local_b_pos = hovered_interact_building.global_position - global_position
-		_draw_inworld_interaction_tooltip(local_b_pos, int(hovered_interact_building.building_type))
-	
-	# 2. Build Preview Holograms & Blueprint Footprints
+	# Blueprint placement holograms
 	if is_building_mode and is_instance_valid(preview_instance):
 		var local_build_pos = preview_instance.global_position - global_position
 		var placement_color = Color(0.35, 1.0, 0.72, 0.9) if preview_is_valid else Color(1.0, 0.25, 0.20, 0.95)
 		
-		# Build Range Boundary Arc
 		draw_arc(Vector2.ZERO, BUILD_RANGE, 0.0, TAU, 48, Color(0.20, 0.75, 0.95, 0.24), 1.5)
 		
-		# Holographic Barricade Wall Link Previews
 		if selected_building_type == 0 and not preview_barricade_links.is_empty():
 			var wall_half_width = 8.0
 			var pulse = 0.55 + sin(Time.get_ticks_msec() * 0.008) * 0.25
@@ -556,7 +513,6 @@ func _draw():
 				var perp = dir.orthogonal() * wall_half_width
 				var span_length = local_build_pos.distance_to(local_neighbor_pos)
 
-				# Hologram Wall Plinth
 				var holo_poly = PackedVector2Array([
 					local_build_pos - perp,
 					local_neighbor_pos - perp,
@@ -564,12 +520,9 @@ func _draw():
 					local_build_pos + perp
 				])
 				draw_colored_polygon(holo_poly, holo_fill)
-
-				# Hologram Edge Rails
 				draw_line(local_build_pos - perp, local_neighbor_pos - perp, holo_edge, 1.5)
 				draw_line(local_build_pos + perp, local_neighbor_pos + perp, holo_edge, 1.5)
 
-				# Animated Cross-Bracing Trusses
 				var num_struts = int(span_length / 16.0)
 				for i in range(num_struts):
 					var t1 = float(i) / float(num_struts)
@@ -580,33 +533,25 @@ func _draw():
 
 				draw_arc(local_neighbor_pos, 18.0, 0.0, TAU, 16, holo_edge, 1.5)
 
-		# Square Tactical Blueprint Footprint
 		var b_size = _get_building_size(selected_building_type)
 		var b_rect = Rect2(local_build_pos - (b_size * 0.5), b_size)
 		
-		# Blueprint cell fill & border
 		draw_rect(b_rect, Color(placement_color.r, placement_color.g, placement_color.b, 0.15), true)
 		draw_rect(b_rect, placement_color, false, 1.5)
 		
-		# Tactical corner brackets
 		var b_len = 6.0
-		# Top-Left
 		draw_line(b_rect.position, b_rect.position + Vector2(b_len, 0), placement_color, 2.5)
 		draw_line(b_rect.position, b_rect.position + Vector2(0, b_len), placement_color, 2.5)
-		# Top-Right
 		var tr = b_rect.position + Vector2(b_size.x, 0)
 		draw_line(tr, tr - Vector2(b_len, 0), placement_color, 2.5)
 		draw_line(tr, tr + Vector2(0, b_len), placement_color, 2.5)
-		# Bottom-Left
 		var bl = b_rect.position + Vector2(0, b_size.y)
 		draw_line(bl, bl + Vector2(b_len, 0), placement_color, 2.5)
 		draw_line(bl, bl - Vector2(0, b_len), placement_color, 2.5)
-		# Bottom-Right
 		var br = b_rect.position + b_size
 		draw_line(br, br - Vector2(b_len, 0), placement_color, 2.5)
 		draw_line(br, br - Vector2(0, b_len), placement_color, 2.5)
 		
-		# Standard Conduit Target Line (for non-barricades)
 		if selected_building_type != 0 and is_instance_valid(preview_connection_target):
 			var local_target = preview_connection_target.global_position - global_position
 			draw_line(local_target, local_build_pos, Color(0.25, 0.85, 1.0, 0.45), 2.0)
@@ -616,80 +561,154 @@ func _draw_marshal_command_aura():
 	var is_conq = (active_doctrina == Doctrina.CONQUEROR)
 	var pulse = 0.55 + sin(Time.get_ticks_msec() * 0.005) * 0.2
 	
-	# Stance Colors: Amber Gold for Conqueror, Luminous Cyan for Protector
 	var aura_color = Color(1.0, 0.75, 0.15, 0.35 * pulse) if is_conq else Color(0.20, 0.88, 1.0, 0.35 * pulse)
 	var edge_color = Color(1.0, 0.80, 0.20, 0.75 * pulse) if is_conq else Color(0.30, 0.92, 1.0, 0.75 * pulse)
 
-	# 1. Soft Command Ring on Sand
 	draw_arc(Vector2.ZERO, aura_radius, 0.0, TAU, 36, aura_color, 1.5)
 	draw_arc(Vector2.ZERO, aura_radius + 4.0, 0.0, TAU, 36, Color(edge_color.r, edge_color.g, edge_color.b, 0.2 * pulse), 1.0)
 
-	# 2. Rotating Stance Glyphs along the ring
 	var rot_time = Time.get_ticks_msec() * 0.0008
 	var num_glyphs = 6
 	for i in range(num_glyphs):
 		var a = rot_time + (float(i) * TAU / float(num_glyphs))
 		var pt = Vector2(cos(a), sin(a)) * aura_radius
 		if is_conq:
-			# Forward Attack Chevrons (>> >>)
 			var forward_tip = pt + Vector2(cos(a), sin(a)) * 8.0
 			var side1 = pt + Vector2(cos(a + 2.2), sin(a + 2.2)) * 6.0
 			var side2 = pt + Vector2(cos(a - 2.2), sin(a - 2.2)) * 6.0
 			draw_line(side1, forward_tip, edge_color, 1.8)
 			draw_line(side2, forward_tip, edge_color, 1.8)
 		else:
-			# Defensive Shield Nodes (🛡️)
 			draw_circle(pt, 3.0, edge_color)
 			draw_circle(pt, 1.5, Color.WHITE)
 
-func _draw_inworld_interaction_tooltip(local_pos: Vector2, b_type: int):
-	var prompt_text = ""
-	var cost_text = ""
+func _setup_tooltip_overlay() -> void:
+	if not has_node("TooltipOverlay"):
+		tooltip_overlay = TooltipOverlayRenderer.new()
+		tooltip_overlay.name = "TooltipOverlay"
+		tooltip_overlay.z_index = 150
+		tooltip_overlay.z_as_relative = false
+		var mat = CanvasItemMaterial.new()
+		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+		tooltip_overlay.material = mat
+		add_child(tooltip_overlay)
+	else:
+		tooltip_overlay = get_node("TooltipOverlay")
+
+func render_interaction_tooltip(canvas: CanvasItem, local_pos: Vector2, b_type: int):
 	var main_node = get_tree().get_first_node_in_group("main")
-	var current_req = main_node.requisition_amount if main_node else 0
+	var cur_scrap = main_node.scrap_amount if main_node else 0
+	var cur_req = main_node.requisition_amount if main_node else 0
+
+	var action_text = ""
+	var cost_parts: Array[Dictionary] = []
+	var is_maxed = false
 
 	match b_type:
-		0: # Barricade
+		0: # Gate
 			if not hovered_interact_building.get("is_gate"):
-				prompt_text = "[E] Upgrade Gate"
-				cost_text = "⚙ 10  ⚡ 5"
+				action_text = "Upgrade Gate"
+				cost_parts.append({"text": "⚙ %d" % GameData.GATE_UPGRADE_SCRAP, "can_afford": cur_scrap >= GameData.GATE_UPGRADE_SCRAP})
+				cost_parts.append({"text": "⚡ %d" % GameData.GATE_UPGRADE_REQ, "can_afford": cur_req >= GameData.GATE_UPGRADE_REQ})
 		2: # Turret
 			var lvl = hovered_interact_building.get("turret_upgrade_level") if "turret_upgrade_level" in hovered_interact_building else 0
-			var costs = [10, 20, 35]
-			if lvl < costs.size():
-				prompt_text = "[E] Upgrade (Lv." + str(lvl + 2) + ")"
-				cost_text = "⚡ " + str(costs[lvl])
+			var spec = hovered_interact_building.get("turret_spec") if "turret_spec" in hovered_interact_building else 0
+			
+			if lvl < 3:
+				var req_cost = GameData.TURRET_UPGRADE_COSTS[lvl]
+				action_text = "Upgrade (Lv.%d)" % (lvl + 2)
+				cost_parts.append({"text": "⚡ %d" % req_cost, "can_afford": cur_req >= req_cost})
+			elif spec == GameData.TurretSpec.NONE:
+				action_text = "Sanctify Protocol"
+				cost_parts.append({"text": "⚡ 35", "can_afford": cur_req >= 35})
 			else:
-				prompt_text = "Turret Maxed"
-		4: # Distributor
-			prompt_text = "[E] Upgrade Antenna"
-			cost_text = "⚡ 15"
-		6: # Research Shrine
-			prompt_text = "[E] Tech-Vault"
-			cost_text = "OPEN"
+				var spec_info = GameData.TURRET_SPEC_INFO.get(spec, null)
+				action_text = spec_info.name if spec_info else "Sanctified"
+				is_maxed = true
+		4: # Antenna
+			action_text = "Upgrade Antenna"
+			cost_parts.append({"text": "⚡ %d" % GameData.ANTENNA_UPGRADE_REQ, "can_afford": cur_req >= GameData.ANTENNA_UPGRADE_REQ})
+		6: # Tech Vault
+			action_text = "Tech Vault"
+			cost_parts.append({"text": "OPEN", "can_afford": true})
 
-	if prompt_text.is_empty(): return
+	if action_text.is_empty():
+		return
 
-	# 1. Floating Holographic Badge Position
-	var badge_pos = local_pos + Vector2(0, -44)
-	var badge_rect = Rect2(badge_pos - Vector2(85, 13), Vector2(170, 26))
-	
-	draw_rect(badge_rect, Color(0.05, 0.07, 0.10, 0.92), true)
-	draw_rect(badge_rect, Color(0.20, 0.88, 1.0, 0.85), false, 1.2)
-	draw_line(badge_pos + Vector2(0, 13), local_pos + Vector2(0, -18), Color(0.20, 0.88, 1.0, 0.35), 1.5)
-
-	# 2. Draw Text (Clean single pass, no overlapping duplicate calls)
 	var font = ThemeDB.fallback_font
 	var font_size = 11
-	
-	draw_string(font, badge_pos + Vector2(-78, 4), prompt_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.90, 0.86, 0.74))
-	
-	if not cost_text.is_empty():
-		var cost_color = Color(0.35, 0.90, 1.0)
-		if cost_text.begins_with("⚡") and not cost_text.contains("⚙"):
-			var cost_val = cost_text.replace("⚡ ", "").to_int()
-			cost_color = Color(0.35, 0.90, 1.0) if current_req >= cost_val else Color(0.90, 0.25, 0.20)
-		draw_string(font, badge_pos + Vector2(10, 4), cost_text, HORIZONTAL_ALIGNMENT_RIGHT, 70, font_size, cost_color)
+	var key_badge_text = "[E]"
+	var key_w = font.get_string_size(key_badge_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x + 10.0
+	var action_w = font.get_string_size(action_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+
+	var cost_w = 0.0
+	if is_maxed:
+		cost_w = font.get_string_size("◆ MAX ◆", HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+	else:
+		for cp in cost_parts:
+			cost_w += font.get_string_size(cp.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x + 8.0
+
+	var total_content_w = key_w + action_w + cost_w + 24.0
+	var badge_w = maxf(170.0, total_content_w)
+	var badge_h = 24.0
+
+	var badge_pos = local_pos + Vector2(0, -38.0)
+	var badge_rect = Rect2(badge_pos - Vector2(badge_w * 0.5, badge_h * 0.5), Vector2(badge_w, badge_h))
+
+	# 1. Background Panel & Border
+	var border_color = Color(0.20, 0.88, 1.0, 0.90) if not is_maxed else Color(0.50, 0.55, 0.60, 0.70)
+	canvas.draw_rect(badge_rect, Color(0.04, 0.05, 0.08, 0.96), true)
+	canvas.draw_rect(badge_rect, border_color, false, 1.2)
+
+	# 2. Pointer Anchor Line
+	var anchor_top = badge_pos + Vector2(0, badge_h * 0.5)
+	var anchor_bottom = local_pos + Vector2(0, -14.0)
+	canvas.draw_line(anchor_top, anchor_bottom, Color(border_color.r, border_color.g, border_color.b, 0.40), 1.2)
+	canvas.draw_circle(anchor_bottom, 2.0, border_color)
+
+	# 3. [E] Keycap Badge
+	var draw_cursor_x = badge_rect.position.x + 8.0
+	var text_y = badge_pos.y + 4.0
+
+	if not is_maxed:
+		var key_rect = Rect2(Vector2(draw_cursor_x, badge_pos.y - 8.0), Vector2(key_w - 4.0, 16.0))
+		canvas.draw_rect(key_rect, Color(0.12, 0.16, 0.22, 0.95), true)
+		canvas.draw_rect(key_rect, Color(0.78, 0.58, 0.22), false, 1.0)
+		canvas.draw_string(font, Vector2(draw_cursor_x + 3.0, text_y), key_badge_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.20, 0.88, 1.0))
+		draw_cursor_x += key_w + 4.0
+	else:
+		draw_cursor_x += 4.0
+
+	# 4. Action Title
+	var title_color = Color(0.92, 0.90, 0.82) if not is_maxed else Color(0.55, 0.60, 0.65)
+	canvas.draw_string(font, Vector2(draw_cursor_x, text_y), action_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, title_color)
+
+	# 5. Resource Costs
+	var right_edge_x = badge_rect.position.x + badge_w - 8.0
+	if is_maxed:
+		canvas.draw_string(font, Vector2(right_edge_x - cost_w, text_y), "◆ MAX ◆", HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.55, 0.60, 0.65))
+	else:
+		var current_cost_x = right_edge_x
+		for i in range(cost_parts.size() - 1, -1, -1):
+			var cp = cost_parts[i]
+			var str_w = font.get_string_size(cp.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+			current_cost_x -= str_w
+			
+			var c_color = Color(0.35, 0.95, 1.0) if cp.can_afford else Color(0.95, 0.25, 0.25)
+			if cp.text == "OPEN":
+				c_color = Color(0.40, 0.95, 0.50)
+				
+			canvas.draw_string(font, Vector2(current_cost_x, text_y), cp.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, c_color)
+			current_cost_x -= 8.0
+
+# --- HIGH-Z OVERLAY RENDERER ---
+class TooltipOverlayRenderer extends Node2D:
+	func _draw() -> void:
+		var p = get_parent()
+		if not p or not is_instance_valid(p.hovered_interact_building):
+			return
+		var local_pos = to_local(p.hovered_interact_building.global_position)
+		p.render_interaction_tooltip(self, local_pos, int(p.hovered_interact_building.building_type))
 
 func draw_omnissian_axe_sweep():
 	var eased_progress = pow(attack_progress, 2.5) 
@@ -742,7 +761,6 @@ func check_lingering_melee_hits():
 	if not space_state:
 		return
 
-	# Query the physics engine in an 85px radius around the player
 	var shape = CircleShape2D.new()
 	shape.radius = 85.0
 
@@ -769,7 +787,6 @@ func check_lingering_melee_hits():
 		var to_target = target_body.global_position - global_position
 		var angle_diff = abs(axe_dir.angle_to(to_target))
 		
-		# 35-degree hit tolerance along the active axe head position
 		if angle_diff <= deg_to_rad(35.0):
 			already_hit_enemies.append(target_body)
 			if target_body.has_method("take_damage"):
@@ -777,48 +794,38 @@ func check_lingering_melee_hits():
 				var knockback_strength: float = 250.0
 				target_body.take_damage(40, knockback_dir * knockback_strength)
 
-# --- UNHANDLED INPUT (KEYBOARD & MOUSE) ---
-
 func _unhandled_input(event):
 	if not is_multiplayer_authority():
 		return
 
-	# ESC Key Hierarchy
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-		# 1. If Research Terminal is open, close it first
 		var r_ui = get_tree().get_first_node_in_group("research_ui")
 		if r_ui and r_ui.visible:
 			r_ui.close_terminal()
 			get_viewport().set_input_as_handled()
 			return
 
-		# 2. If Build Mode is active, cancel placement preview
 		if is_building_mode:
 			_cancel_build_mode()
 			get_viewport().set_input_as_handled()
 			return
 
-		# 3. Otherwise, Toggle Global Synchronized Pause Menu!
 		var p_ui = get_tree().get_first_node_in_group("pause_menu")
 		if p_ui and p_ui.has_method("toggle_my_pause_menu"):
 			p_ui.toggle_my_pause_menu()
 			get_viewport().set_input_as_handled()
 			return
 
-# Skitarii Marshal Stance and Ultimate Inputs
 	if current_class == PlayerClass.RANGED and event is InputEventKey and event.pressed:
 		if event.keycode == KEY_SPACE or event.keycode == KEY_F:
-			# Toggle Doctrina Imperative Stance
-			rpc("toggle_doctrina_imperative")
+			rpc_id(1, "request_toggle_doctrina")
 			get_viewport().set_input_as_handled()
 			return
 		elif event.keycode == KEY_X:
-			# Trigger Orbital Macrocannon Strike at cursor position
-			rpc("request_orbital_strike", get_global_mouse_position())
+			rpc_id(1, "request_orbital_strike", get_global_mouse_position())
 			get_viewport().set_input_as_handled()
 			return
 
-	# Tech-Priest Building & Support Inputs
 	if current_class == PlayerClass.MELEE:
 		if event is InputEventKey and event.pressed:
 			if event.keycode == KEY_E:
@@ -826,7 +833,7 @@ func _unhandled_input(event):
 				get_viewport().set_input_as_handled()
 				return
 			elif event.keycode == KEY_K:
-				rpc("request_spawn_servo_skull")
+				rpc_id(1, "request_spawn_servo_skull")
 				get_viewport().set_input_as_handled()
 				return
 			elif event.keycode == KEY_B or event.keycode == KEY_TAB:
@@ -834,23 +841,23 @@ func _unhandled_input(event):
 				get_viewport().set_input_as_handled()
 				return
 			elif event.keycode in [KEY_1, KEY_KP_1]:
-				toggle_build_mode(0) # Barricade
+				toggle_build_mode(0)
 				get_viewport().set_input_as_handled()
 				return
 			elif event.keycode in [KEY_2, KEY_KP_2]:
-				toggle_build_mode(4) # Distributor (Spreads Ground)
+				toggle_build_mode(4)
 				get_viewport().set_input_as_handled()
 				return
 			elif event.keycode in [KEY_3, KEY_KP_3]:
-				toggle_build_mode(1) # Generator
+				toggle_build_mode(1)
 				get_viewport().set_input_as_handled()
 				return
 			elif event.keycode in [KEY_4, KEY_KP_4]:
-				toggle_build_mode(2) # Turret
+				toggle_build_mode(2)
 				get_viewport().set_input_as_handled()
 				return
 			elif event.keycode in [KEY_5, KEY_KP_5]:
-				toggle_build_mode(6) # Research Shrine
+				toggle_build_mode(6)
 				get_viewport().set_input_as_handled()
 				return
 
@@ -870,33 +877,26 @@ func _unhandled_input(event):
 							main_node.rpc_id(1, "request_build_structure", build_pos, selected_building_type)
 						AudioManager.play_sfx("building_place", build_pos, 0.0)
 						_cancel_build_mode()
-					else:
-						print("[Build System] Placement blocked: Space occupied or lacks industrial ground!")
-				else:
-					print("[Build System] Placement blocked: Target out of range!")
-				
 				get_viewport().set_input_as_handled()
 				return
 
-	# Skitarii Marshal Bodyguard & Upgrade Controls
 	if current_class == PlayerClass.RANGED and event is InputEventKey and event.pressed:
 		if event.keycode == KEY_N:
-			if bodyguard_level < 2:
-				rpc("request_upgrade_bodyguards")
+			if bodyguard_level < GameData.MAX_BODYGUARDS:
+				rpc_id(1, "request_upgrade_bodyguards")
 				get_viewport().set_input_as_handled()
 			return
-		elif event.keycode == KEY_M: # Upgrade Weapon Damage
-			if damage_upgrade_level < MAX_DAMAGE_UPGRADES:
-				rpc("request_upgrade_damage")
+		elif event.keycode == KEY_M:
+			if damage_upgrade_level < GameData.MAX_DAMAGE_UPGRADES:
+				rpc_id(1, "request_upgrade_damage")
 				get_viewport().set_input_as_handled()
 			return
-		elif event.keycode == KEY_V: # Upgrade Movement Speed
-			if speed_upgrade_level < MAX_SPEED_UPGRADES:
-				rpc("request_upgrade_speed")
+		elif event.keycode == KEY_V:
+			if speed_upgrade_level < GameData.MAX_SPEED_UPGRADES:
+				rpc_id(1, "request_upgrade_speed")
 				get_viewport().set_input_as_handled()
 			return
 
-	# Primary Attack Execution
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		if can_attack:
 			var target_pos = get_global_mouse_position()
@@ -905,18 +905,28 @@ func _unhandled_input(event):
 # --- DOCTRINA & ORBITAL RPCS ---
 
 @rpc("any_peer", "call_local", "reliable")
-func toggle_doctrina_imperative():
+func request_toggle_doctrina():
+	if not multiplayer.is_server(): return
+	var sender_id = multiplayer.get_remote_sender_id()
+	if sender_id == 0: sender_id = 1
+	if sender_id != name.to_int(): return
+
 	active_doctrina = Doctrina.PROTECTOR if active_doctrina == Doctrina.CONQUEROR else Doctrina.CONQUEROR
 	
 	if active_doctrina == Doctrina.CONQUEROR:
-		# Conqueror: Rapid-Fire Machinegun & Fast Sprint
 		speed = 390.0
 		attack_cooldown = 0.18
 	else:
-		# Protector: Heavy Armored Bulwark & Slower Pace
 		speed = 280.0
 		attack_cooldown = 0.38
 
+	rpc("sync_doctrina", int(active_doctrina), speed, attack_cooldown)
+
+@rpc("call_local", "reliable")
+func sync_doctrina(new_doctrina: int, new_speed: float, new_cooldown: float):
+	active_doctrina = new_doctrina as Doctrina
+	speed = new_speed
+	attack_cooldown = new_cooldown
 	if is_multiplayer_authority():
 		var hud = get_tree().get_first_node_in_group("ability_hud")
 		if hud and hud.has_method("refresh_hud_display"):
@@ -924,37 +934,39 @@ func toggle_doctrina_imperative():
 
 @rpc("any_peer", "call_local", "reliable")
 func request_orbital_strike(target_pos: Vector2):
-	if multiplayer.is_server():
-		var main_node = get_parent()
-		if not main_node or not main_node.has_method("spend_requisition"): return
-		if orbital_strike_cooldown > 0.0: return
-		
-		if main_node.spend_requisition(ORBITAL_REQ_COST):
-			orbital_strike_cooldown = ORBITAL_COOLDOWN_MAX
-			rpc("sync_orbital_cooldown", ORBITAL_COOLDOWN_MAX) # <-- Syncs timer to all clients!
-			rpc("execute_orbital_strike_fx", target_pos)
+	if not multiplayer.is_server(): return
+	var sender_id = multiplayer.get_remote_sender_id()
+	if sender_id == 0: sender_id = 1
+	if sender_id != name.to_int(): return
+	
+	var main_node = get_parent()
+	if not main_node or not main_node.has_method("spend_requisition"): return
+	if orbital_strike_cooldown > 0.0: return
+	
+	if main_node.spend_requisition(GameData.ORBITAL_REQ_COST):
+		orbital_strike_cooldown = GameData.ORBITAL_COOLDOWN_MAX
+		rpc("sync_orbital_cooldown", GameData.ORBITAL_COOLDOWN_MAX)
+		rpc("execute_orbital_strike_fx", target_pos)
 
-			# Deal massive kinetic damage to all enemies in the strike zone
-			var space_state = get_world_2d().direct_space_state
-			var shape = CircleShape2D.new()
-			shape.radius = 160.0
-			var query = PhysicsShapeQueryParameters2D.new()
-			query.shape = shape
-			query.transform = Transform2D(0.0, target_pos)
-			query.collide_with_bodies = true
-			var results = space_state.intersect_shape(query, 64)
+		var space_state = get_world_2d().direct_space_state
+		var shape = CircleShape2D.new()
+		shape.radius = 160.0
+		var query = PhysicsShapeQueryParameters2D.new()
+		query.shape = shape
+		query.transform = Transform2D(0.0, target_pos)
+		query.collide_with_bodies = true
+		var results = space_state.intersect_shape(query, 64)
 
-			for hit in results:
-				var body = hit.collider
-				if is_instance_valid(body) and (body.is_in_group("enemies") or body.is_in_group("objectives")):
-					var dir = (body.global_position - target_pos).normalized()
-					if body.has_method("take_damage"):
-						body.take_damage(220, dir * 450.0)
+		for hit in results:
+			var body = hit.collider
+			if is_instance_valid(body) and (body.is_in_group("enemies") or body.is_in_group("objectives")):
+				var dir = (body.global_position - target_pos).normalized()
+				if body.has_method("take_damage"):
+					body.take_damage(220, dir * 450.0)
 
 @rpc("any_peer", "call_local", "unreliable")
 func execute_orbital_strike_fx(target_pos: Vector2):
 	AudioManager.play_sfx("orbital_strike", target_pos, 4.0)
-	# Spawn visual kinetic shockwave label and sound effect trigger
 	var blast_label = Label.new()
 	blast_label.global_position = target_pos + Vector2(-90, -20)
 	blast_label.text = "◆ ORBITAL LANCE STRIKE ◆"
@@ -964,61 +976,40 @@ func execute_orbital_strike_fx(target_pos: Vector2):
 	get_parent().add_child(blast_label)
 	get_tree().create_timer(1.8).timeout.connect(blast_label.queue_free)
 
-# --- BODYGUARD UPGRADE RPC SYSTEM ---
-
 @rpc("any_peer", "call_local", "reliable")
 func request_upgrade_bodyguards():
 	if multiplayer.is_server():
-		if bodyguard_level >= 2:
+		if bodyguard_level >= GameData.MAX_BODYGUARDS:
 			return
 			
 		var main_node = get_parent()
-		if main_node:
-			var current_requisition: int = 0
-			if "requisition_amount" in main_node:
-				current_requisition = main_node.requisition_amount
-			elif "requisition" in main_node:
-				current_requisition = main_node.requisition
-			elif main_node.has_method("get_requisition"):
-				current_requisition = main_node.get_requisition()
-			else:
-				current_requisition = 999
+		if main_node and main_node.has_method("spend_requisition"):
+			if not main_node.spend_requisition(GameData.BODYGUARD_REQ_COST):
+				return
 
-			if current_requisition >= bodyguard_cost:
-				if main_node.has_method("spend_requisition"):
-					if not main_node.spend_requisition(bodyguard_cost):
-						return
-				elif "requisition_amount" in main_node:
-					main_node.requisition_amount -= bodyguard_cost
-
-				bodyguard_level += 1
-				rpc("sync_bodyguard_level", bodyguard_level)
-				spawn_bodyguard_instance()
+			bodyguard_level += 1
+			rpc("sync_bodyguard_level", bodyguard_level)
+			spawn_bodyguard_instance()
 				
 @rpc("any_peer", "call_local", "reliable")
 func request_spawn_servo_skull():
 	if current_class != PlayerClass.MELEE or not multiplayer.is_server():
 		return
 
-	# Clean up any destroyed / freed skulls from the array
 	active_servo_skulls = active_servo_skulls.filter(func(s): return is_instance_valid(s))
 	
-	# 1. Enforce Max Limit
-	if active_servo_skulls.size() >= MAX_SERVO_SKULLS:
+	if active_servo_skulls.size() >= GameData.MAX_SERVO_SKULLS:
 		return
 
 	var main_node = get_parent()
 	if not main_node or not ("scrap_amount" in main_node and "requisition_amount" in main_node):
 		return
 
-	# 2. Enforce Resource Cost Check
-	if main_node.scrap_amount >= SERVO_SKULL_SCRAP_COST and main_node.requisition_amount >= SERVO_SKULL_REQ_COST:
-		# Deduct resources
-		main_node.scrap_amount -= SERVO_SKULL_SCRAP_COST
-		main_node.requisition_amount -= SERVO_SKULL_REQ_COST
+	if main_node.scrap_amount >= GameData.SERVO_SKULL_SCRAP_COST and main_node.requisition_amount >= GameData.SERVO_SKULL_REQ_COST:
+		main_node.scrap_amount -= GameData.SERVO_SKULL_SCRAP_COST
+		main_node.requisition_amount -= GameData.SERVO_SKULL_REQ_COST
 		main_node.rpc("sync_resources", main_node.scrap_amount, main_node.requisition_amount)
 
-		# 3. Spawn the Servo-Skull
 		if "spawner" in main_node and main_node.spawner:
 			var skull_data = {
 				"type": "servo_skull",
@@ -1033,31 +1024,17 @@ func request_spawn_servo_skull():
 @rpc("any_peer", "call_local", "reliable")
 func request_upgrade_damage():
 	if multiplayer.is_server():
-		if damage_upgrade_level >= MAX_DAMAGE_UPGRADES:
+		if damage_upgrade_level >= GameData.MAX_DAMAGE_UPGRADES:
 			return
 			
 		var main_node = get_parent()
-		if main_node:
-			var current_requisition: int = 0
-			if "requisition_amount" in main_node:
-				current_requisition = main_node.requisition_amount
-			elif "requisition" in main_node:
-				current_requisition = main_node.requisition
-			elif main_node.has_method("get_requisition"):
-				current_requisition = main_node.get_requisition()
-			else:
-				current_requisition = 999
+		if main_node and main_node.has_method("spend_requisition"):
+			if not main_node.spend_requisition(GameData.DAMAGE_UPGRADE_REQ_COST):
+				return
 
-			if current_requisition >= damage_upgrade_cost:
-				if main_node.has_method("spend_requisition"):
-					if not main_node.spend_requisition(damage_upgrade_cost):
-						return
-				elif "requisition_amount" in main_node:
-					main_node.requisition_amount -= damage_upgrade_cost
-
-				damage_upgrade_level += 1
-				bullet_damage += 10
-				rpc("sync_damage_upgrade", damage_upgrade_level, bullet_damage)
+			damage_upgrade_level += 1
+			bullet_damage += 10
+			rpc("sync_damage_upgrade", damage_upgrade_level, bullet_damage)
 
 @rpc("any_peer", "call_local", "reliable")
 func sync_orbital_cooldown(new_cd: float):
@@ -1075,31 +1052,17 @@ func sync_damage_upgrade(new_level: int, new_damage: int):
 @rpc("any_peer", "call_local", "reliable")
 func request_upgrade_speed():
 	if multiplayer.is_server():
-		if speed_upgrade_level >= MAX_SPEED_UPGRADES:
+		if speed_upgrade_level >= GameData.MAX_SPEED_UPGRADES:
 			return
 			
 		var main_node = get_parent()
-		if main_node:
-			var current_requisition: int = 0
-			if "requisition_amount" in main_node:
-				current_requisition = main_node.requisition_amount
-			elif "requisition" in main_node:
-				current_requisition = main_node.requisition
-			elif main_node.has_method("get_requisition"):
-				current_requisition = main_node.get_requisition()
-			else:
-				current_requisition = 999
+		if main_node and main_node.has_method("spend_requisition"):
+			if not main_node.spend_requisition(GameData.SPEED_UPGRADE_REQ_COST):
+				return
 
-			if current_requisition >= speed_upgrade_cost:
-				if main_node.has_method("spend_requisition"):
-					if not main_node.spend_requisition(speed_upgrade_cost):
-						return
-				elif "requisition_amount" in main_node:
-					main_node.requisition_amount -= speed_upgrade_cost
-
-				speed_upgrade_level += 1
-				speed += 35.0
-				rpc("sync_speed_upgrade", speed_upgrade_level, speed)
+			speed_upgrade_level += 1
+			speed += 35.0
+			rpc("sync_speed_upgrade", speed_upgrade_level, speed)
 
 @rpc("any_peer", "call_local", "reliable")
 func sync_speed_upgrade(new_level: int, new_speed: float):
@@ -1133,8 +1096,6 @@ func spawn_bodyguard_instance():
 			var bg = main_node.spawner.spawn(bodyguard_data)
 			if bg:
 				active_bodyguards.append(bg)
-
-# --- ATTACK RPC SYSTEM ---
 
 @rpc("any_peer", "call_local", "reliable")
 func perform_attack(target_pos: Vector2):

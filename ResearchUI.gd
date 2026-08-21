@@ -1,40 +1,10 @@
 extends Control
 class_name ResearchUI
 
-# 4 Research Techs
-const TECH_DATA = [
-	{
-		"id": 0,
-		"name": "Aegis Refractor Shields",
-		"cost": 20,
-		"rune": "🛡️",
-		"desc": "Generates a regenerating blue energy shield (40% max HP) on all structures connected to the Noosphere. Recharges after 6s out of combat."
-	},
-	{
-		"id": 1,
-		"name": "Cognis Laser Arrays",
-		"cost": 30,
-		"rune": "⚡",
-		"desc": "Connected Turrets emit a continuous 40 DPS cutting laser at priority targets in addition to standard munitions."
-	},
-	{
-		"id": 2,
-		"name": "Necro-Mechanic Nanobots",
-		"cost": 40,
-		"rune": "🔧",
-		"desc": "Sacred nanobot swarms slowly self-repair (3.5 HP/sec) all damaged Noosphere structures when out of combat."
-	},
-	{
-		"id": 3,
-		"name": "Galvanic Scrap Siphon",
-		"cost": 25,
-		"rune": "🧲",
-		"desc": "Expands the magnetic scrap retrieval range of all Distributors & Antennas by +75% (220px -> 385px) and boosts pull velocity by +50%."
-	}
-]
+const GameData = preload("res://GameData.gd")
 
 var panel_container: PanelContainer = null
-var cards_container: HBoxContainer = null
+var cards_grid: GridContainer = null
 var active_shrine_node: Node2D = null
 
 var last_cached_req: int = -1
@@ -53,7 +23,7 @@ func _build_ui_layout():
 	var backdrop = ColorRect.new()
 	backdrop.name = "Backdrop"
 	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
-	backdrop.color = Color(0.02, 0.03, 0.05, 0.65)
+	backdrop.color = Color(0.02, 0.03, 0.05, 0.70)
 	backdrop.mouse_filter = Control.MOUSE_FILTER_PASS
 	add_child(backdrop)
 
@@ -63,17 +33,16 @@ func _build_ui_layout():
 	center_container.mouse_filter = Control.MOUSE_FILTER_PASS
 	add_child(center_container)
 
-	# Expanded width to 920px to fit all 4 tech cards comfortably
 	var pc = PanelContainer.new()
 	pc.name = "PanelContainer"
-	pc.custom_minimum_size = Vector2(920, 360)
+	pc.custom_minimum_size = Vector2(920, 520)
 	pc.mouse_filter = Control.MOUSE_FILTER_STOP
 	center_container.add_child(pc)
 	panel_container = pc
 
 	var vbox = VBoxContainer.new()
 	vbox.name = "VBox"
-	vbox.add_theme_constant_override("separation", 14)
+	vbox.add_theme_constant_override("separation", 10)
 	panel_container.add_child(vbox)
 
 	var title = Label.new()
@@ -84,17 +53,21 @@ func _build_ui_layout():
 	title.add_theme_font_size_override("font_size", 16)
 	vbox.add_child(title)
 
-	var hbox = HBoxContainer.new()
-	hbox.name = "CardsHBox"
-	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	hbox.add_theme_constant_override("separation", 14)
-	vbox.add_child(hbox)
-	cards_container = hbox
+	# 3-Column Grid for all 6 Tech Upgrades
+	var grid = GridContainer.new()
+	grid.name = "CardsGrid"
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 12)
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vbox.add_child(grid)
+	cards_grid = grid
 
 	var close = Button.new()
 	close.name = "CloseButton"
 	close.text = "CLOSE TERMINAL [ESC / E]"
-	close.custom_minimum_size = Vector2(220, 34)
+	close.custom_minimum_size = Vector2(220, 32)
 	close.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	close.pressed.connect(close_terminal)
 	vbox.add_child(close)
@@ -122,7 +95,9 @@ func _process(_delta: float):
 			main_node.get("tech_shields_unlocked") if main_node else false,
 			main_node.get("tech_lasers_unlocked") if main_node else false,
 			main_node.get("tech_nanobots_unlocked") if main_node else false,
-			main_node.get("tech_magnet_unlocked") if main_node else false
+			main_node.get("tech_magnet_unlocked") if main_node else false,
+			main_node.get("tech_electro_barricades_unlocked") if main_node else false,
+			main_node.get("tech_spikes_cover_unlocked") if main_node else false
 		]
 
 		if current_req != last_cached_req or current_unlocks != last_cached_unlocks:
@@ -137,7 +112,7 @@ func _get_local_player() -> Node2D:
 	return null
 
 func refresh_tech_cards():
-	if not visible or cards_container == null: 
+	if not visible or cards_grid == null: 
 		return
 
 	var main_node = get_tree().get_first_node_in_group("main")
@@ -146,22 +121,26 @@ func refresh_tech_cards():
 		main_node.get("tech_shields_unlocked") if main_node else false,
 		main_node.get("tech_lasers_unlocked") if main_node else false,
 		main_node.get("tech_nanobots_unlocked") if main_node else false,
-		main_node.get("tech_magnet_unlocked") if main_node else false
+		main_node.get("tech_magnet_unlocked") if main_node else false,
+		main_node.get("tech_electro_barricades_unlocked") if main_node else false,
+		main_node.get("tech_spikes_cover_unlocked") if main_node else false
 	]
 
-	for child in cards_container.get_children():
+	for child in cards_grid.get_children():
 		child.queue_free()
 
-	for tech in TECH_DATA:
-		var card = _create_tech_card(tech, unlocks[tech.id], current_req)
-		cards_container.add_child(card)
+	for tech in GameData.TECH_DATA:
+		var is_unlocked = unlocks[tech.id] if tech.id < unlocks.size() else false
+		var card = _create_tech_card(tech, is_unlocked, current_req)
+		cards_grid.add_child(card)
 
 func _create_tech_card(tech: Dictionary, is_unlocked: bool, current_req: int) -> PanelContainer:
 	var card = PanelContainer.new()
-	card.custom_minimum_size = Vector2(205, 240)
+	card.custom_minimum_size = Vector2(280, 190)
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	
 	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 8)
+	vbox.add_theme_constant_override("separation", 6)
 	card.add_child(vbox)
 
 	var header = Label.new()
@@ -169,6 +148,7 @@ func _create_tech_card(tech: Dictionary, is_unlocked: bool, current_req: int) ->
 	header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	header.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	header.add_theme_color_override("font_color", Color(0.95, 0.85, 0.4) if is_unlocked else Color(0.20, 0.88, 1.0))
+	header.add_theme_font_size_override("font_size", 12)
 	vbox.add_child(header)
 
 	var cost_lbl = Label.new()
@@ -180,6 +160,7 @@ func _create_tech_card(tech: Dictionary, is_unlocked: bool, current_req: int) ->
 		cost_lbl.text = "⚡ " + str(tech.cost) + " REQ"
 		var can_afford = current_req >= tech.cost
 		cost_lbl.add_theme_color_override("font_color", Color(0.9, 0.85, 0.7) if can_afford else Color(0.9, 0.25, 0.2))
+	cost_lbl.add_theme_font_size_override("font_size", 11)
 	vbox.add_child(cost_lbl)
 
 	var desc = Label.new()
@@ -187,11 +168,11 @@ func _create_tech_card(tech: Dictionary, is_unlocked: bool, current_req: int) ->
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	desc.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	desc.add_theme_color_override("font_color", Color(0.75, 0.78, 0.82))
-	desc.add_theme_font_size_override("font_size", 11)
+	desc.add_theme_font_size_override("font_size", 10)
 	vbox.add_child(desc)
 
 	var btn = Button.new()
-	btn.custom_minimum_size = Vector2(0, 32)
+	btn.custom_minimum_size = Vector2(0, 28)
 	if is_unlocked:
 		btn.text = "ACTIVE"
 		btn.disabled = true

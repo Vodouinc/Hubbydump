@@ -65,7 +65,6 @@ func _format_slot(panel: Node, key_txt: String, name_txt: String, cost_scrap: in
 
 	var on_cooldown = (cooldown_remaining > 0.0)
 
-	# 1. Keybind Badge
 	if key_lbl:
 		key_lbl.text = " " + key_txt + " "
 		if on_cooldown or is_maxed:
@@ -73,7 +72,6 @@ func _format_slot(panel: Node, key_txt: String, name_txt: String, cost_scrap: in
 		else:
 			key_lbl.add_theme_color_override("font_color", COLOR_CYAN if is_selected else Color(0.95, 0.95, 0.95))
 
-	# 2. Ability Name Header
 	if name_lbl:
 		name_lbl.text = name_txt
 		if on_cooldown or is_maxed:
@@ -81,10 +79,8 @@ func _format_slot(panel: Node, key_txt: String, name_txt: String, cost_scrap: in
 		else:
 			name_lbl.add_theme_color_override("font_color", Color.WHITE)
 
-	# 3. Cost Badge / Cooldown Countdown
 	if cost_lbl:
 		if on_cooldown:
-			# Live Amber Countdown: 0.1s precision when under 10 seconds!
 			var time_txt = ("%.1f" % cooldown_remaining) if cooldown_remaining < 10.0 else str(int(ceil(cooldown_remaining)))
 			cost_lbl.text = "⏳ " + time_txt + "s"
 			cost_lbl.add_theme_color_override("font_color", COLOR_GOLD)
@@ -103,7 +99,6 @@ func _format_slot(panel: Node, key_txt: String, name_txt: String, cost_scrap: in
 			var can_afford = (current_scrap >= cost_scrap and current_req >= cost_req)
 			cost_lbl.add_theme_color_override("font_color", Color(0.9, 0.85, 0.7) if can_afford else COLOR_RED_ALERT)
 
-	# 4. Panel Styling
 	var can_afford_total = (current_scrap >= cost_scrap and current_req >= cost_req) or is_selected
 	if on_cooldown or is_maxed:
 		panel.modulate = Color(0.50, 0.52, 0.56, 0.75)
@@ -141,32 +136,37 @@ func refresh_hud_display():
 		# Slot 1: Barricade [1]
 		if slot1_panel:
 			slot1_panel.show()
-			_format_slot(slot1_panel, "1", "Barricade", 15, 0, current_scrap, current_req, is_building and selected_type == 0)
+			var info = GameData.STRUCTURE_INFO[GameData.StructureType.BARRICADE]
+			_format_slot(slot1_panel, "1", info.name, info.scrap, info.req, current_scrap, current_req, is_building and selected_type == 0)
 
 		# Slot 2: Distributor [2]
 		if slot2_panel:
 			slot2_panel.show()
-			_format_slot(slot2_panel, "2", "Distributor", 20, 0, current_scrap, current_req, is_building and selected_type == 4)
+			var info = GameData.STRUCTURE_INFO[GameData.StructureType.DISTRIBUTOR]
+			_format_slot(slot2_panel, "2", info.name, info.scrap, info.req, current_scrap, current_req, is_building and selected_type == 4)
 
 		# Slot 3: Generator [3]
 		if slot3_panel:
 			slot3_panel.show()
-			_format_slot(slot3_panel, "3", "Generator", 25, 0, current_scrap, current_req, is_building and selected_type == 1)
+			var info = GameData.STRUCTURE_INFO[GameData.StructureType.GENERATOR]
+			_format_slot(slot3_panel, "3", info.name, info.scrap, info.req, current_scrap, current_req, is_building and selected_type == 1)
 
 		# Slot 4: Turret [4]
 		if slot4_panel:
 			slot4_panel.show()
-			_format_slot(slot4_panel, "4", "Turret", 35, 5, current_scrap, current_req, is_building and selected_type == 2)
+			var info = GameData.STRUCTURE_INFO[GameData.StructureType.TURRET]
+			_format_slot(slot4_panel, "4", info.name, info.scrap, info.req, current_scrap, current_req, is_building and selected_type == 2)
 
 		# Slot 5: Research Shrine [5]
 		if slot5_panel:
 			slot5_panel.show()
-			_format_slot(slot5_panel, "5", "Tech Shrine", 40, 15, current_scrap, current_req, is_building and selected_type == 6)
+			var info = GameData.STRUCTURE_INFO[GameData.StructureType.RESEARCH_SHRINE]
+			_format_slot(slot5_panel, "5", info.name, info.scrap, info.req, current_scrap, current_req, is_building and selected_type == 6)
 
 		# Slot 6: Servo-Skull [K]
 		if slot6_panel:
 			slot6_panel.show()
-			var max_skulls = local_player.MAX_SERVO_SKULLS if "MAX_SERVO_SKULLS" in local_player else 2
+			var max_skulls = GameData.MAX_SERVO_SKULLS
 			var current_skulls = 0
 			if "active_servo_skulls" in local_player:
 				local_player.active_servo_skulls = local_player.active_servo_skulls.filter(func(s): return is_instance_valid(s))
@@ -174,7 +174,7 @@ func refresh_hud_display():
 
 			var is_maxed = (current_skulls >= max_skulls)
 			var skull_name = "Servo-Skull (" + str(current_skulls) + "/" + str(max_skulls) + ")"
-			_format_slot(slot6_panel, "K", skull_name, 20, 10, current_scrap, current_req, false, is_maxed)
+			_format_slot(slot6_panel, "K", skull_name, GameData.SERVO_SKULL_SCRAP_COST, GameData.SERVO_SKULL_REQ_COST, current_scrap, current_req, false, is_maxed)
 
 	# --- SKITARII MARSHAL (RANGED COMMANDER) ---
 	else:
@@ -183,23 +183,19 @@ func refresh_hud_display():
 			slot1_panel.show()
 			_format_slot(slot1_panel, "LMB", "Radium Carbine", 0, 0, current_scrap, current_req, false)
 
-# Slot 2: Doctrina Imperative Stance [SPACE / F]
+		# Slot 2: Doctrina Imperative Stance [SPACE / F]
 		if slot2_panel:
 			slot2_panel.show()
 			var is_conqueror = (local_player.get("active_doctrina") == 0)
 			
 			if is_conqueror:
-				# Amber High-DPS Mode
-				var title = "CONQUEROR (DPS)"
-				_format_slot(slot2_panel, "SPACE", title, 0, 0, current_scrap, current_req, true)
+				_format_slot(slot2_panel, "SPACE", "CONQUEROR (DPS)", 0, 0, current_scrap, current_req, true)
 				var cost_lbl = slot2_panel.find_child("CostLabel", true, false) as Label
 				if cost_lbl:
 					cost_lbl.text = "+60% SPD / -20% ARM"
 					cost_lbl.add_theme_color_override("font_color", Color(1.0, 0.80, 0.20))
 			else:
-				# Cyan Defensive Bulwark Mode
-				var title = "PROTECTOR (ARM)"
-				_format_slot(slot2_panel, "SPACE", title, 0, 0, current_scrap, current_req, true)
+				_format_slot(slot2_panel, "SPACE", "PROTECTOR (ARM)", 0, 0, current_scrap, current_req, true)
 				var cost_lbl = slot2_panel.find_child("CostLabel", true, false) as Label
 				if cost_lbl:
 					cost_lbl.text = "+35% ARM / -15% SPD"
@@ -209,24 +205,21 @@ func refresh_hud_display():
 		if slot3_panel:
 			slot3_panel.show()
 			var current_lvl = local_player.bodyguard_level if "bodyguard_level" in local_player else 0
-			var cost = local_player.bodyguard_cost if "bodyguard_cost" in local_player else 5
-			var is_maxed = (current_lvl >= 2)
-			var squad_label = "Squad (" + str(current_lvl) + "/2)"
-			_format_slot(slot3_panel, "N", squad_label, 0, cost, current_scrap, current_req, false, is_maxed)
+			var is_maxed = (current_lvl >= GameData.MAX_BODYGUARDS)
+			var squad_label = "Squad (" + str(current_lvl) + "/" + str(GameData.MAX_BODYGUARDS) + ")"
+			_format_slot(slot3_panel, "N", squad_label, 0, GameData.BODYGUARD_REQ_COST, current_scrap, current_req, false, is_maxed)
 
 		# Slot 4: Weapon DMG Up [M]
 		if slot4_panel:
 			slot4_panel.show()
 			var dmg_lvl = local_player.damage_upgrade_level if "damage_upgrade_level" in local_player else 0
-			var max_dmg = local_player.MAX_DAMAGE_UPGRADES if "MAX_DAMAGE_UPGRADES" in local_player else 3
-			var cost = local_player.damage_upgrade_cost if "damage_upgrade_cost" in local_player else 10
-			var is_maxed = (dmg_lvl >= max_dmg)
-			_format_slot(slot4_panel, "M", "DMG Up (" + str(dmg_lvl) + "/" + str(max_dmg) + ")", 0, cost, current_scrap, current_req, false, is_maxed)
+			var is_maxed = (dmg_lvl >= GameData.MAX_DAMAGE_UPGRADES)
+			_format_slot(slot4_panel, "M", "DMG Up (" + str(dmg_lvl) + "/" + str(GameData.MAX_DAMAGE_UPGRADES) + ")", 0, GameData.DAMAGE_UPGRADE_REQ_COST, current_scrap, current_req, false, is_maxed)
 
-		# Slot 5: Orbital Macrocannon Strike [X] (Live Countdown Display)
+		# Slot 5: Orbital Lance Strike [X]
 		if slot5_panel:
 			slot5_panel.show()
 			var cd = local_player.get("orbital_strike_cooldown") if "orbital_strike_cooldown" in local_player else 0.0
-			_format_slot(slot5_panel, "X", "Orbital Lance", 0, 50, current_scrap, current_req, false, false, cd)
+			_format_slot(slot5_panel, "X", "Orbital Lance", 0, GameData.ORBITAL_REQ_COST, current_scrap, current_req, false, false, cd)
 
 		if slot6_panel: slot6_panel.hide()

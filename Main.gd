@@ -1,8 +1,10 @@
 extends Node2D
- 
+
+const GameData = preload("res://GameData.gd")
+
 const PORT = 7000
 const DEFAULT_IP = "127.0.0.1"
- 
+
 # --------------------------------------------------
 # CLASS DEFINITIONS & DATA
 # --------------------------------------------------
@@ -12,7 +14,7 @@ enum CharacterClass {
 	SISTER_OF_BATTLE,
 	SPACE_MARINE
 }
- 
+
 const CLASS_DATA = {
 	CharacterClass.ADMECH_TECHPRIEST: {
 		"name": "Tech-Priest Enginseer",
@@ -25,35 +27,34 @@ const CLASS_DATA = {
 		"role": "Recon & Direct Combat"
 	}
 }
- 
+
 @export var max_waves: int = 15
- 
+
 var player_scene = preload("res://Player.tscn")
 var enemy_scene = preload("res://Enemy.tscn")
 var bullet_scene = preload("res://Bullet.tscn")
 var scrap_scene = preload("res://Scrap.tscn")
 var building_scene = preload("res://Building.tscn")
 var waaagh_idol_scene = preload("res://WaaaghIdol.tscn")
- 
+
 # Class Preview Node
 var class_preview_node: Node2D = null
- 
+
 var peer: ENetMultiplayerPeer
 var enemy_count: int = 0
 var bullet_count: int = 0
 var building_count: int = 0
- 
+
 # Resource Totals
 var scrap_amount: int = 40
 var requisition_amount: int = 10
- 
+
 # Class Tracking per Peer ID
 var player_classes: Dictionary = {}
 var player_ready: Dictionary = {}
 var match_started: bool = false
- 
-# Wave Management
 
+# Wave Management
 const WAVE_NARRATIVE_TITLES = [
 	"LOST RECON SCOUTS",               # Wave 1
 	"PROBING WARBAND RAID",             # Wave 2
@@ -82,19 +83,21 @@ var wave_player_count: int = 1
 var spawn_lane_angles: Array[float] = []
 var spawn_serial: int = 0
 var objective_count: int = 0
-var wave_squad_queue: Array[Dictionary] = [] # Queue of { "lane": int, "units": Array[int], "delay": float }
+var wave_squad_queue: Array[Dictionary] = []
 var current_squad_timer: float = 0.0
 
 # --- GLOBAL TECH TREE UNLOCKS ---
 var tech_shields_unlocked: bool = false
 var tech_lasers_unlocked: bool = false
 var tech_nanobots_unlocked: bool = false
+var tech_magnet_unlocked: bool = false
+var tech_electro_barricades_unlocked: bool = false
+var tech_spikes_cover_unlocked: bool = false
 
 var research_ui_node: Control = null
-var tech_magnet_unlocked: bool = false
- 
+
 # --------------------------------------------------
-# UI & NETWORK NODE REFERENCES (Using % Unique Names)
+# UI & NETWORK NODE REFERENCES
 # --------------------------------------------------
 @onready var ui_layer: CanvasLayer = get_node_or_null("UI")
 @onready var hud_root: Control = get_node_or_null("%RootControl")
@@ -127,13 +130,19 @@ var tech_magnet_unlocked: bool = false
 
 # Navigation Node Reference
 @onready var nav_region: NavigationRegion2D = get_node_or_null("NavigationRegion2D")
- 
+
 var my_selected_class: CharacterClass = CharacterClass.ADMECH_TECHPRIEST
 var pause_menu_ui_node: Control = null
 var active_paused_peers: Dictionary = {}
 var is_ready: bool = false
 var settings_ui_node: Control = null
- 
+
+# --- WAVE PACING TIMERS ---
+var wave_prep_timer: float = 0.0
+var is_wave_preparing: bool = false
+const WAVE_PREP_DURATION: float = 8.0
+const WAVE_BREAK_DURATION: float = 14.0
+
 func _ready():
 	add_to_group("main")
 	if hud_root:
@@ -162,19 +171,35 @@ func _ready():
 	_setup_research_ui()
 	_setup_settings_ui()
 	_setup_pause_menu_ui()
- 
+	_setup_turret_upgrade_ui()
+
+func _setup_turret_upgrade_ui():
+	if not has_node("UI/TurretUpgradeUI"):
+		var t_ui = TurretUpgradeUI.new()
+		t_ui.name = "TurretUpgradeUI"
+		$UI.add_child(t_ui)
+
+func _process(delta: float) -> void:
+	if multiplayer.is_server() and is_wave_preparing:
+		wave_prep_timer -= delta
+		if wave_prep_timer > 0.0:
+			var sec_left = int(ceil(wave_prep_timer))
+			var msg = "⚠️ AUSPEX DETECTION: INCOMING ASSAULT IN %ds..." % sec_left
+			rpc("sync_wave_info", current_wave, msg)
+		else:
+			is_wave_preparing = false
+			_begin_wave_spawning()
+
 # --------------------------------------------------
 # CLASS SELECTION & LOBBY UI
 # --------------------------------------------------
- 
+
 func _setup_settings_ui():
 	if not has_node("UI/SettingsUI"):
 		var s_ui = SettingsUI.new()
 		s_ui.name = "SettingsUI"
 		$UI.add_child(s_ui)
 		settings_ui_node = s_ui
-		
-	# Connect existing host/join UI or add a Settings Button
 	_add_settings_button_to_ui()
 
 func _setup_pause_menu_ui():
@@ -185,7 +210,6 @@ func _setup_pause_menu_ui():
 		pause_menu_ui_node = p_ui
 
 func _add_settings_button_to_ui():
-	# Add a settings cog button to the top bar
 	if top_bar and not top_bar.has_node("SettingsBtn"):
 		var btn = Button.new()
 		btn.name = "SettingsBtn"
@@ -211,7 +235,7 @@ func _update_class_ui():
 			class_label.text = class_info["name"] + "\n" + class_info["role"]
 		_update_class_preview()
 		_style_class_buttons()
- 
+
 func _style_class_buttons() -> void:
 	var selected := Color(0.35, 0.90, 1.0, 1.0)
 	var idle := Color.WHITE
@@ -219,7 +243,7 @@ func _style_class_buttons() -> void:
 		techpriest_button.modulate = selected if my_selected_class == CharacterClass.ADMECH_TECHPRIEST else idle
 	if skitarii_button:
 		skitarii_button.modulate = selected if my_selected_class == CharacterClass.SKITARII_MARSHAL else idle
- 
+
 func _update_class_preview() -> void:
 	if match_started:
 		return
@@ -246,22 +270,22 @@ func _update_class_preview() -> void:
 		
 	preview_player.position = Vector2(430, 310)
 	add_child(preview_player)
- 
+
 func _clear_class_preview() -> void:
 	if is_instance_valid(class_preview_node):
 		class_preview_node.free()
 		class_preview_node = null
- 
+
 func _on_techpriest_selected():
 	my_selected_class = CharacterClass.ADMECH_TECHPRIEST
 	_update_class_ui()
 	_sync_lobby_loadout()
- 
+
 func _on_skitarii_selected():
 	my_selected_class = CharacterClass.SKITARII_MARSHAL
 	_update_class_ui()
 	_sync_lobby_loadout()
- 
+
 func _on_ready_pressed():
 	if not _is_in_session():
 		_set_session_text("Host or join a session first.")
@@ -269,15 +293,15 @@ func _on_ready_pressed():
 	is_ready = not is_ready
 	_update_ready_button()
 	_sync_lobby_loadout()
- 
+
 func _update_ready_button() -> void:
 	if ready_button:
 		ready_button.text = "UNREADY" if is_ready else "READY UP"
 		ready_button.disabled = not _is_in_session()
- 
+
 func _is_in_session() -> bool:
 	return multiplayer.has_multiplayer_peer() and multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED
- 
+
 func _sync_lobby_loadout():
 	if not _is_in_session() or match_started:
 		_refresh_lobby_roster()
@@ -289,7 +313,7 @@ func _sync_lobby_loadout():
 		_try_start_match()
 	else:
 		rpc_id(1, "report_lobby_loadout", int(my_selected_class), is_ready)
- 
+
 func _show_lobby_ui():
 	match_started = false
 	is_ready = false
@@ -330,7 +354,7 @@ func _hide_lobby_ui():
 func _set_session_text(message: String) -> void:
 	if session_label:
 		session_label.text = message
- 
+
 func _refresh_lobby_roster() -> void:
 	if not roster_label:
 		return
@@ -338,7 +362,7 @@ func _refresh_lobby_roster() -> void:
 		roster_label.text = "No vox-link. Host a forge-fane or join an IP."
 		_set_session_text("Standing by.")
 		return
- 
+
 	var lines: PackedStringArray = []
 	var ids: Array = player_classes.keys()
 	ids.sort()
@@ -349,12 +373,12 @@ func _refresh_lobby_roster() -> void:
 		var you = "  (you)" if _is_local_peer(int(id)) else ""
 		lines.append("%s  —  %s%s" % [class_info["name"], ready_mark, you])
 	roster_label.text = "\n".join(lines) if not lines.is_empty() else "Cadre assembling..."
- 
+
 func _is_local_peer(id: int) -> bool:
 	if not _is_in_session():
 		return id == 1
 	return id == multiplayer.get_unique_id()
- 
+
 func _broadcast_lobby_state() -> void:
 	if not multiplayer.is_server():
 		return
@@ -363,7 +387,7 @@ func _broadcast_lobby_state() -> void:
 		payload.append([int(id), int(player_classes[id]), player_ready.get(id, false)])
 	rpc("sync_lobby_state", payload, match_started)
 	_refresh_lobby_roster()
- 
+
 @rpc("any_peer", "reliable")
 func report_lobby_loadout(chosen_class: int, ready: bool) -> void:
 	if not multiplayer.is_server() or match_started:
@@ -375,7 +399,7 @@ func report_lobby_loadout(chosen_class: int, ready: bool) -> void:
 	player_ready[sender_id] = ready
 	_broadcast_lobby_state()
 	_try_start_match()
- 
+
 @rpc("authority", "call_local", "reliable")
 func sync_lobby_state(payload: Array, started: bool) -> void:
 	player_classes.clear()
@@ -389,7 +413,7 @@ func sync_lobby_state(payload: Array, started: bool) -> void:
 	_refresh_lobby_roster()
 	if started and not match_started:
 		_begin_match_local()
- 
+
 func _try_start_match() -> void:
 	if not multiplayer.is_server() or match_started:
 		return
@@ -403,14 +427,14 @@ func _try_start_match() -> void:
 			return
 			
 	_begin_match()
- 
+
 func _session_peer_ids() -> Array[int]:
 	var ids: Array[int] = [1]
 	if multiplayer.has_multiplayer_peer():
 		for peer_id in multiplayer.get_peers():
 			ids.append(int(peer_id))
 	return ids
- 
+
 func _begin_match() -> void:
 	if not multiplayer.is_server() or match_started:
 		return
@@ -420,11 +444,11 @@ func _begin_match() -> void:
 	for id in _session_peer_ids():
 		spawn_player(id)
 	start_next_wave()
- 
+
 @rpc("authority", "call_local", "reliable")
 func sync_match_started() -> void:
 	_begin_match_local()
- 
+
 func _begin_match_local() -> void:
 	match_started = true
 	_hide_lobby_ui()
@@ -432,7 +456,7 @@ func _begin_match_local() -> void:
 		resource_label.text = "SCRAP  0    REQ  0"
 	if wave_info_label:
 		wave_info_label.text = "PERIMETER ARMED"
- 
+
 func _on_host_pressed():
 	if multiplayer.has_multiplayer_peer():
 		multiplayer.multiplayer_peer.close()
@@ -454,7 +478,7 @@ func _on_host_pressed():
 	_update_ready_button()
 	_set_session_text("Hosting on port %d — Ready when the cadre is set." % PORT)
 	_broadcast_lobby_state()
- 
+
 func _on_join_pressed():
 	if multiplayer.has_multiplayer_peer():
 		multiplayer.multiplayer_peer.close()
@@ -468,7 +492,7 @@ func _on_join_pressed():
 		_update_ready_button()
 	else:
 		_set_session_text("Failed to reach %s." % ip)
- 
+
 func spawn_player(peer_id: int):
 	if not multiplayer.is_server(): return
 	
@@ -484,7 +508,7 @@ func spawn_player(peer_id: int):
 	}
 	if spawner:
 		spawner.spawn(spawn_data)
- 
+
 @rpc("any_peer", "call_local", "reliable")
 func select_class(chosen_class: int):
 	var sender_id = multiplayer.get_remote_sender_id()
@@ -492,7 +516,7 @@ func select_class(chosen_class: int):
 	player_classes[sender_id] = chosen_class
 	if multiplayer.is_server() and match_started:
 		spawn_player(sender_id)
- 
+
 # --- MULTIPLAYER PAUSE SYNCHRONIZATION ---
 
 @rpc("any_peer", "call_local", "reliable")
@@ -506,7 +530,6 @@ func request_set_player_paused(is_paused: bool):
 	else:
 		active_paused_peers.erase(sender_id)
 
-	# The game stays paused as long as AT LEAST ONE player is in their menu!
 	var should_pause = not active_paused_peers.is_empty()
 	rpc("sync_global_pause", should_pause)
 
@@ -518,7 +541,7 @@ func sync_global_pause(is_paused: bool):
 # --------------------------------------------------
 # ENHANCED WAVE MANAGEMENT & COMPOSITION
 # --------------------------------------------------
- 
+
 func start_next_wave():
 	if not multiplayer.is_server(): return
 	
@@ -526,8 +549,7 @@ func start_next_wave():
 	if current_wave > max_waves:
 		game_over(true)
 		return
- 
-	# Dynamic Totem Drops: A new war camp drops into the desert every 2 waves!
+
 	if current_wave in [2, 4, 6, 8, 10, 12, 14]:
 		spawn_waaagh_idol()
 		
@@ -538,30 +560,36 @@ func start_next_wave():
 	enemies_left_to_spawn = 0
 	for squad in wave_squad_queue:
 		enemies_left_to_spawn += squad["units"].size()
-		
+
+	# Start the 8-Second Auspex Warning Window
+	is_wave_preparing = true
+	wave_prep_timer = WAVE_PREP_DURATION
+	
+	rpc("sync_incoming_threat_lanes", spawn_lane_angles)
+	rpc("trigger_wave_alert_sfx")
+
+@rpc("call_local", "reliable")
+func trigger_wave_alert_sfx():
+	AudioManager.play_sfx("gate_toggle", Vector2.ZERO, 3.0, 0.6)
+
+func _begin_wave_spawning():
 	is_wave_active = true
 	_broadcast_wave_hud()
-	
-		# Broadcast attack angles to all player Auspex radars!
-	rpc("sync_incoming_threat_lanes", spawn_lane_angles)
 	
 	if wave_timer == null:
 		wave_timer = Timer.new()
 		wave_timer.timeout.connect(_spawn_squad_tick)
 		add_child(wave_timer)
 		
-	# Waves arrive faster if 3+ totems are active!
-	var speed_up = 0.75 if get_active_totem_count() >= 3 else 1.0
-	wave_timer.wait_time = 2.0 * speed_up
+	var speed_up = 0.8 if get_active_totem_count() >= 3 else 1.0
+	wave_timer.wait_time = 1.5 * speed_up
 	wave_timer.start()
 
- 
 func _spawn_squad_tick():
 	if not wave_squad_queue.is_empty():
 		var squad = wave_squad_queue.pop_front()
 		_spawn_tactical_squad(squad)
 		
-		# Set delay until the NEXT squad assault arrives (creates a push -> clear -> push rhythm!)
 		if not wave_squad_queue.is_empty():
 			var next_squad = wave_squad_queue.front()
 			wave_timer.wait_time = next_squad["delay"]
@@ -571,22 +599,23 @@ func _spawn_squad_tick():
 	else:
 		wave_timer.stop()
 
-## Spawns an entire squad clustered together in their assigned lane
 func _spawn_tactical_squad(squad: Dictionary):
 	var lane_idx: int = squad["lane"]
 	var units: Array = squad["units"]
 	
 	var base_node = get_tree().get_first_node_in_group("base")
-	var center_pos = base_node.global_position if base_node else Vector2(500, 500)
+	var center_pos = base_node.global_position if base_node else Vector2.ZERO
 	
-	var lane_angle = spawn_lane_angles[lane_idx % spawn_lane_angles.size()]
-	var spawn_dist = randf_range(700.0, 850.0)
-	var squad_center = center_pos + Vector2.RIGHT.rotated(lane_angle) * spawn_dist
+	var base_lane_angle = spawn_lane_angles[lane_idx % spawn_lane_angles.size()]
+	var fanned_angle = base_lane_angle + randf_range(-0.25, 0.25)
+	
+	# Spawn far out into deep desert wasteland
+	var spawn_dist = randf_range(1200.0, 1550.0)
+	var squad_center = center_pos + Vector2.RIGHT.rotated(fanned_angle) * spawn_dist
 	
 	for unit_type in units:
 		enemy_count += 1
-		# Cluster units within 45px radius of squad center (Meatshields screen heavy units!)
-		var offset = Vector2.RIGHT.rotated(randf() * TAU) * randf_range(10.0, 48.0)
+		var offset = Vector2.RIGHT.rotated(randf() * TAU) * randf_range(15.0, 55.0)
 		var spawn_pos = squad_center + offset
 		
 		var enemy_data = {
@@ -603,24 +632,52 @@ func _spawn_tactical_squad(squad: Dictionary):
 			active_enemies += 1
 			enemies_left_to_spawn = max(0, enemies_left_to_spawn - 1)
 			
-	rpc("sync_wave_info", current_wave, "WAVE " + str(current_wave) + "/" + str(max_waves) + " — " + str(enemies_left_to_spawn + active_enemies) + " CONTACTS")
+	_broadcast_wave_hud()
+
+func notify_enemy_defeated():
+	if multiplayer.is_server():
+		active_enemies = max(0, active_enemies - 1)
+		
+		if enemies_left_to_spawn <= 0 and active_enemies == 0 and is_wave_active:
+			is_wave_active = false
+			rpc("sync_incoming_threat_lanes", [])
+			rpc("sync_wave_info", current_wave, "◆ PERIMETER SECURED ◆ Re-arm and fortify (%ds)..." % int(WAVE_BREAK_DURATION))
+			
+			var break_tween = create_tween()
+			break_tween.tween_interval(WAVE_BREAK_DURATION)
+			break_tween.tween_callback(start_next_wave)
+
+func _build_spawn_lanes(wave: int, player_count: int) -> Array[float]:
+	var lanes: Array[float] = []
+	var primary_angle = randf() * TAU
+	lanes.append(primary_angle)
+
+	if wave >= 4:
+		var flank_offset = randf_range(PI * 0.35, PI * 0.65) * (1.0 if randf() > 0.5 else -1.0)
+		lanes.append(primary_angle + flank_offset)
+
+	if wave >= 8:
+		var rear_angle = primary_angle + PI + randf_range(-0.4, 0.4)
+		lanes.append(rear_angle)
+
+	if wave >= 12 and player_count >= 2:
+		lanes.append(primary_angle + PI * 0.5 + randf_range(-0.3, 0.3))
+
+	return lanes
 
 # ===========================================================================
-# WAAAGH mechanics
+# WAAAGH MECHANICS
 # ===========================================================================
 func notify_totem_destroyed():
-	# Deferred call ensures the queue_free() node is excluded from the count
 	call_deferred("_broadcast_wave_hud")
 
 func get_active_totem_count() -> int:
 	return get_tree().get_nodes_in_group("objectives").size()
 
-## Each active totem grants +12% speed to all attacking Orks
 func get_waaagh_speed_multiplier() -> float:
 	var count = get_active_totem_count()
 	return 1.0 + (count * 0.12)
 
-## Each active totem grants +10% damage to all attacking Orks
 func get_waaagh_damage_multiplier() -> float:
 	var count = get_active_totem_count()
 	return 1.0 + (count * 0.10)
@@ -631,8 +688,6 @@ func _broadcast_wave_hud():
 	var threat_tag = " | 🔥 WAAAGH! THREAT: " + str(totem_count) + " (+" + str(buff_pct) + "% SPD)" if totem_count > 0 else ""
 	var hud_msg = "WAVE " + str(current_wave) + "/" + str(max_waves) + " — " + str(enemies_left_to_spawn + active_enemies) + " CONTACTS" + threat_tag
 	rpc("sync_wave_info", current_wave, hud_msg)
-
-
 
 # ==============================================================================
 # SQUAD FORMATION GENERATOR
@@ -652,7 +707,6 @@ func _build_wave_squads(wave: int, player_count: int) -> Array[Dictionary]:
 				affordable.append(t)
 				
 		if affordable.is_empty():
-			# Dump leftover points into a small gretchin chaff pack
 			squads.append({
 				"lane": lane_counter % max(1, spawn_lane_angles.size()),
 				"units": [0, 0, 0],
@@ -675,7 +729,6 @@ func _build_wave_squads(wave: int, player_count: int) -> Array[Dictionary]:
 func _get_available_squad_templates(wave: int) -> Array[Dictionary]:
 	var templates: Array[Dictionary] = []
 	
-	# 1. Gretchin Meatshield Swarm (Early & Flank distraction)
 	templates.append({
 		"name": "gretchin_swarm",
 		"cost": 6,
@@ -683,7 +736,6 @@ func _get_available_squad_templates(wave: int) -> Array[Dictionary]:
 		"delay": 3.5
 	})
 	
-	# 2. Squig Flank Stampede (Fast rushers)
 	if wave >= 2:
 		templates.append({
 			"name": "squig_pack",
@@ -692,133 +744,44 @@ func _get_available_squad_templates(wave: int) -> Array[Dictionary]:
 			"delay": 4.0
 		})
 		
-	# 3. Ork Boy Patrol (Frontline infantry + chaff screen)
 	if wave >= 3:
 		templates.append({
 			"name": "boyz_squad",
 			"cost": 12,
-			"units": [2, 2, 0, 0, 0, 0], # 2 Boyz screened by 4 Gretchin
+			"units": [2, 2, 0, 0, 0, 0],
 			"delay": 4.5
 		})
 		
-	# 4. Stormboy Jump Assault (Leapers bypass walls)
 	if wave >= 6:
 		templates.append({
 			"name": "stormboy_raiders",
 			"cost": 12,
-			"units": [3, 3, 3, 1], # 3 Stormboyz + 1 Squig
+			"units": [3, 3, 3, 1],
 			"delay": 5.0
 		})
 		
-	# 5. Nob Warband (Armored Boss with Bodyguards & Meatshields)
 	if wave >= 8:
 		templates.append({
 			"name": "nob_warband",
 			"cost": 20,
-			"units": [4, 2, 2, 0, 0, 0, 0], # 1 Nob + 2 Boyz + 4 Gretchin meatshields!
+			"units": [4, 2, 2, 0, 0, 0, 0],
 			"delay": 6.0
 		})
 		
-	# 6. Armored Siege Column (Late game heavy assault)
 	if wave >= 11:
 		templates.append({
 			"name": "armored_column",
 			"cost": 28,
-			"units": [4, 4, 3, 3, 2, 1, 1], # 2 Nobz, 2 Stormboyz, 1 Boy, 2 Squigs
+			"units": [4, 4, 3, 3, 2, 1, 1],
 			"delay": 7.0
 		})
 		
 	return templates
- 
-func _build_wave_spawn_queue(wave: int, player_count: int) -> Array[int]:
-	var threat_budget = int(round((12.0 + pow(wave, 1.35) * 5.8) * (1.0 + 0.65 * (player_count - 1))))
-	# Unit threat costs: 0: Gretchin (1), 1: Squig (2), 2: Boy (4), 3: Stormboy (3), 4: Nob (8)
-	var unit_costs = {0: 1, 1: 2, 2: 4, 3: 3, 4: 8}
-	var roster = _get_wave_roster(wave)
-	var queue: Array[int] = []
- 
-	while threat_budget > 0:
-		var affordable: Array[Dictionary] = []
-		var total_weight := 0.0
-		for entry in roster:
-			if unit_costs[entry.type] <= threat_budget:
-				affordable.append(entry)
-				total_weight += entry.weight
-		if affordable.is_empty(): break
- 
-		var roll = randf() * total_weight
-		var chosen_type: int = affordable.back().type
-		for entry in affordable:
-			roll -= entry.weight
-			if roll <= 0.0: chosen_type = entry.type; break
-		queue.append(chosen_type)
-		threat_budget -= unit_costs[chosen_type]
- 
-	return queue
 
-
-func _get_wave_roster(wave: int) -> Array[Dictionary]:
-	if wave <= 2:
-		return [{"type": 0, "weight": 0.80}, {"type": 1, "weight": 0.20}]
-	elif wave <= 5:
-		return [{"type": 0, "weight": 0.45}, {"type": 1, "weight": 0.35}, {"type": 2, "weight": 0.20}]
-	elif wave <= 8:
-		# Stormboyz start leaping over walls!
-		return [{"type": 0, "weight": 0.30}, {"type": 1, "weight": 0.30}, {"type": 2, "weight": 0.25}, {"type": 3, "weight": 0.15}]
-	elif wave <= 11:
-		# Ork Nobz arrive!
-		return [{"type": 0, "weight": 0.20}, {"type": 1, "weight": 0.25}, {"type": 2, "weight": 0.25}, {"type": 3, "weight": 0.20}, {"type": 4, "weight": 0.10}]
-	else:
-		# Late Game Waves (12-15): Heavy armored Nobz & Stormboy swarms!
-		return [{"type": 0, "weight": 0.10}, {"type": 1, "weight": 0.25}, {"type": 2, "weight": 0.25}, {"type": 3, "weight": 0.25}, {"type": 4, "weight": 0.15}]
-
-func _build_spawn_lanes(wave: int, player_count: int) -> Array[float]:
-	var lane_count = 1
-	if wave >= 4: lane_count += 1
-	if wave >= 8: lane_count += 1
-	if wave >= 12 and player_count >= 2: lane_count += 1
- 
-	var lanes: Array[float] = []
-	var first_angle = randf() * TAU
-	for i in range(lane_count):
-		lanes.append(first_angle + (TAU * float(i) / float(lane_count)))
-	return lanes
- 
-func notify_enemy_defeated():
-	if multiplayer.is_server():
-		active_enemies = max(0, active_enemies - 1)
-		
-		if enemies_left_to_spawn <= 0 and active_enemies == 0 and is_wave_active:
-			is_wave_active = false
-			rpc("sync_incoming_threat_lanes", []) # Clear threat pointers when wave is cleared
-			rpc("sync_wave_info", current_wave, "WAVE CLEARED! Re-arm the perimeter — next wave in 10s...")
-			get_tree().create_timer(10.0).timeout.connect(start_next_wave)
- 
 # --------------------------------------------------
 # GAME OVER & REMATCH
 # --------------------------------------------------
- 
-func spawn_enemy(enemy_type: int = 0, lane_index: int = -1):
-	if not multiplayer.is_server(): return
-	
-	enemy_count += 1
-	var spawn_angle = randf() * TAU
-	if lane_index >= 0 and lane_index < spawn_lane_angles.size():
-		spawn_angle = spawn_lane_angles[lane_index] + randf_range(-0.22, 0.22)
-	var spawn_dist = randf_range(650.0, 800.0)
-	var base_node = get_tree().get_first_node_in_group("base")
-	var center_pos = base_node.global_position if base_node else Vector2(500, 500)
-	
-	var enemy_data = {
-		"type": "enemy",
-		"name": "Enemy_" + str(enemy_count),
-		"enemy_type": enemy_type,
-		"position": center_pos + Vector2.RIGHT.rotated(spawn_angle) * spawn_dist
-	}
-	
-	if spawner:
-		spawner.spawn(enemy_data)
- 
+
 func spawn_waaagh_idol() -> void:
 	if not multiplayer.is_server():
 		return
@@ -826,7 +789,6 @@ func spawn_waaagh_idol() -> void:
 	var base_node = get_tree().get_first_node_in_group("base")
 	var center_pos = base_node.global_position if base_node else Vector2(500, 500)
 	
-	# Spawn 700 to 1000px out into the desert terrain!
 	var camp_pos = center_pos + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(720.0, 1020.0)
 	
 	if spawner:
@@ -836,14 +798,13 @@ func spawn_waaagh_idol() -> void:
 			"position": camp_pos
 		})
 		
-		# Spawn 6-10 camp defenders (Gretchen + Squigs + Boyz)
 		var total_guards = 6 + int(current_wave * 0.5)
 		for i in range(total_guards):
 			var guard_type = 0
-			if i % 3 == 0: guard_type = 1 # Squig
-			elif i % 5 == 0 and current_wave >= 6: guard_type = 2 # Ork Boy
+			if i % 3 == 0: guard_type = 1
+			elif i % 5 == 0 and current_wave >= 6: guard_type = 2
 			spawn_objective_defender(camp_pos, guard_type)
- 
+
 func spawn_objective_defender(objective_pos: Vector2, enemy_type: int) -> void:
 	if not spawner:
 		return
@@ -858,12 +819,12 @@ func spawn_objective_defender(objective_pos: Vector2, enemy_type: int) -> void:
 		"guard_anchor": objective_pos,
 		"counts_toward_wave": false
 	})
- 
+
 func game_over(is_victory: bool):
 	if multiplayer.is_server():
 		if wave_timer: wave_timer.stop()
 		rpc("sync_game_over", is_victory)
- 
+
 @rpc("call_local", "reliable")
 func sync_game_over(is_victory: bool):
 	if game_over_ui:
@@ -891,15 +852,15 @@ func sync_game_over(is_victory: bool):
 			if sb is StyleBoxFlat:
 				sb.bg_color = theme_color
 				game_over_panel.add_theme_stylebox_override("panel", sb)
- 
+
 func _on_restart_pressed():
 	rpc_id(1, "request_rematch")
- 
+
 @rpc("any_peer", "call_local", "reliable")
 func request_rematch():
 	if not multiplayer.is_server(): return
 	rpc("execute_rematch")
- 
+
 @rpc("call_local", "reliable")
 func execute_rematch():
 	if game_over_ui: 
@@ -909,6 +870,7 @@ func execute_rematch():
 	active_enemies = 0
 	enemies_left_to_spawn = 0
 	is_wave_active = false
+	is_wave_preparing = false
 	wave_spawn_queue.clear()
 	spawn_lane_angles.clear()
 	spawn_serial = 0
@@ -917,11 +879,12 @@ func execute_rematch():
 	building_count = 0
 	wave_squad_queue.clear()
 	
-	# Reset Tech Tree
 	tech_shields_unlocked = false
 	tech_lasers_unlocked = false
 	tech_nanobots_unlocked = false
 	tech_magnet_unlocked = false
+	tech_electro_barricades_unlocked = false
+	tech_spikes_cover_unlocked = false
 	
 	if multiplayer.is_server():
 		if wave_timer: 
@@ -958,11 +921,11 @@ func execute_rematch():
 @rpc("call_local", "reliable")
 func sync_incoming_threat_lanes(lane_angles: Array):
 	get_tree().call_group("navigation_pointers", "set_threat_lanes", lane_angles)
- 
+
 # --------------------------------------------------
 # CUSTOM SPAWNER
 # --------------------------------------------------
- 
+
 func _custom_spawner(data) -> Node:
 	if typeof(data) == TYPE_ARRAY and data.size() > 0:
 		data = data[0]
@@ -1005,7 +968,7 @@ func _custom_spawner(data) -> Node:
 				enemy.name = str(data["name"])
 				enemy.position = data["position"]
 				if "enemy_type" in data:
-					enemy.type = int(data["enemy_type"]) # Explicit int cast
+					enemy.type = int(data["enemy_type"])
 				if "is_objective_guard" in data:
 					enemy.is_objective_guard = data["is_objective_guard"]
 				if "guard_anchor" in data:
@@ -1057,7 +1020,6 @@ func _custom_spawner(data) -> Node:
 				idol.name = str(data["name"])
 				idol.position = data["position"]
 				return idol
-			
 			"servo_skull":
 				var servoskull_scene = preload("res://ServoSkull.tscn")
 				var skull = servoskull_scene.instantiate()
@@ -1073,21 +1035,21 @@ func _custom_spawner(data) -> Node:
 						player_node.active_servo_skulls.append(skull)
 						
 				return skull
- 
+
 	return null
- 
+
 # --------------------------------------------------
 # RESOURCE, TECH & BUILDING MANAGEMENT
 # --------------------------------------------------
- 
+
 func add_scrap(amount: int):
 	scrap_amount += amount
 	rpc("sync_resources", scrap_amount, requisition_amount)
- 
+
 func add_requisition(amount: int):
 	requisition_amount += amount
 	rpc("sync_resources", scrap_amount, requisition_amount)
- 
+
 func spend_requisition(amount: int) -> bool:
 	if requisition_amount >= amount:
 		requisition_amount -= amount
@@ -1101,14 +1063,18 @@ func unlock_tech(tech_index: int):
 		1: tech_lasers_unlocked = true
 		2: tech_nanobots_unlocked = true
 		3: tech_magnet_unlocked = true
-	rpc("sync_tech_tree", tech_shields_unlocked, tech_lasers_unlocked, tech_nanobots_unlocked, tech_magnet_unlocked)
+		4: tech_electro_barricades_unlocked = true
+		5: tech_spikes_cover_unlocked = true
+	rpc("sync_tech_tree", tech_shields_unlocked, tech_lasers_unlocked, tech_nanobots_unlocked, tech_magnet_unlocked, tech_electro_barricades_unlocked, tech_spikes_cover_unlocked)
 
 @rpc("call_local", "reliable")
-func sync_tech_tree(shields: bool, lasers: bool, nanobots: bool, magnet: bool = false):
+func sync_tech_tree(shields: bool, lasers: bool, nanobots: bool, magnet: bool = false, electro_walls: bool = false, spikes_cover: bool = false):
 	tech_shields_unlocked = shields
 	tech_lasers_unlocked = lasers
 	tech_nanobots_unlocked = nanobots
 	tech_magnet_unlocked = magnet
+	tech_electro_barricades_unlocked = electro_walls
+	tech_spikes_cover_unlocked = spikes_cover
 	get_tree().call_group("buildings", "_apply_tech_stats")
 	get_tree().call_group("research_ui", "refresh_tech_cards")
 
@@ -1118,6 +1084,13 @@ func request_upgrade_gate(building_name: String) -> void:
 	var building = _find_building_by_name(building_name)
 	if is_instance_valid(building) and building.has_method("try_upgrade_to_gate"):
 		building.try_upgrade_to_gate()
+
+@rpc("any_peer", "call_local", "reliable")
+func request_specialize_turret(building_name: String, spec_id: int) -> void:
+	if not multiplayer.is_server(): return
+	var building = _find_building_by_name(building_name)
+	if is_instance_valid(building) and building.has_method("try_specialize_turret"):
+		building.try_specialize_turret(spec_id)
 
 @rpc("any_peer", "call_local", "reliable")
 func request_upgrade_turret(building_name: String) -> void:
@@ -1131,7 +1104,6 @@ func request_upgrade_turret(building_name: String) -> void:
 		return
 	if not ("building_type" in building and int(building.building_type) == 2):
 		return
-	# Widen from 85.0 to 120.0 to account for larger 48px building footprints:
 	if player.global_position.distance_to(building.global_position) > 120.0:
 		return
 	if building.has_method("try_upgrade_turret"):
@@ -1148,7 +1120,7 @@ func request_upgrade_distributor(building_name: String) -> void:
 func request_purchase_research(building_name: String, tech_index: int) -> void:
 	if not multiplayer.is_server(): return
 	var building = _find_building_by_name(building_name)
-	if is_instance_valid(building) and int(building.get("building_type")) == 6: # Research Shrine
+	if is_instance_valid(building) and int(building.get("building_type")) == 6:
 		if building.has_method("try_purchase_research"):
 			building.try_purchase_research(tech_index)
 
@@ -1157,31 +1129,31 @@ func _find_building_by_name(b_name: String) -> Node2D:
 	for b in get_tree().get_nodes_in_group("buildings"):
 		if is_instance_valid(b) and b.name == b_name: return b
 	return null
- 
+
 @rpc("call_local", "reliable")
 func sync_resources(scrap: int, requisition: int):
 	scrap_amount = scrap
 	requisition_amount = requisition
 	if resource_label:
 		resource_label.text = "⚙ SCRAP: %d      ⚡ REQUISITION: %d" % [scrap_amount, requisition_amount]
- 
+
 @rpc("call_local", "reliable")
 func sync_wave_info(wave_number: int, message: String):
 	current_wave = wave_number
 	if wave_info_label:
 		wave_info_label.text = message
- 
+
 @rpc("any_peer", "call_local", "reliable")
 func request_build_structure(build_pos: Vector2, building_type: int = 0):
 	if not multiplayer.is_server():
 		return
 		
-	# Costs for: 0: Barricade, 1: Generator, 2: Turret, 3: Manufactorum, 4: Distributor, 5: Antenna, 6: Research Shrine
-	var scrap_costs = [15, 25, 35, 60, 20, 0, 40]
-	var req_costs   = [0,  0,  5,  25, 0,  0, 15]
+	var info = GameData.STRUCTURE_INFO.get(building_type, null)
+	if not info:
+		return
 
-	var scrap_c = scrap_costs[clamp(building_type, 0, scrap_costs.size() - 1)]
-	var req_c = req_costs[clamp(building_type, 0, req_costs.size() - 1)]
+	var scrap_c = info["scrap"]
+	var req_c = info["req"]
 
 	if scrap_amount >= scrap_c and requisition_amount >= req_c:
 		scrap_amount -= scrap_c
@@ -1204,18 +1176,18 @@ func request_build_structure(build_pos: Vector2, building_type: int = 0):
 
 func request_navmesh_rebake() -> void:
 	update_navmesh()
- 
+
 func update_navmesh():
 	if not nav_region:
 		nav_region = get_node_or_null("NavigationRegion2D")
 		
 	if nav_region:
 		nav_region.call_deferred("bake_navigation_polygon", true)
- 
+
 # --------------------------------------------------
 # NETWORK SIGNALS
 # --------------------------------------------------
- 
+
 func _on_peer_connected(id: int):
 	if not multiplayer.is_server():
 		return
@@ -1230,16 +1202,16 @@ func _on_peer_connected(id: int):
 		rpc_id(id, "sync_match_started")
 	else:
 		_broadcast_lobby_state()
- 
+
 func _on_connected_to_server():
 	_set_session_text("Linked. Select a class and Ready when the cadre is set.")
 	_update_ready_button()
 	_sync_lobby_loadout()
- 
+
 func _on_peer_disconnected(id: int):
 	player_classes.erase(id)
 	player_ready.erase(id)
-	active_paused_peers.erase(id) # Clean up paused peer if they quit while paused
+	active_paused_peers.erase(id)
 	if multiplayer.is_server():
 		var should_pause = not active_paused_peers.is_empty()
 		rpc("sync_global_pause", should_pause)

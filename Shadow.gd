@@ -92,7 +92,7 @@ func _update_shadow_size() -> void:
 		var type_val = int(parent.get("type"))
 		match type_val:
 			0: calculated_size = Vector2(18.0, 10.0) # Gretchin
-			1: calculated_size = Vector2(28.0, 16.0) # Squig
+			1: calculated_size = Vector2(16.0, 9.0)  # Compact Squig
 			2: calculated_size = Vector2(36.0, 20.0) # Ork Boy
 			_: calculated_size = Vector2(24.0, 14.0)
 		return
@@ -111,7 +111,7 @@ func _update_shadow_size() -> void:
 				1: calculated_size = Vector2(62.0, 32.0); ground_offset = Vector2(0.0, 6.0) # Generator
 				2: calculated_size = Vector2(52.0, 26.0); ground_offset = Vector2(0.0, 6.0) # Turret
 				3: calculated_size = Vector2(80.0, 42.0); ground_offset = Vector2(0.0, 8.0) # Manufactorum
-				4, 5: calculated_size = Vector2(46.0, 24.0); ground_offset = Vector2(0.0, 6.0) # Pylons
+				4, 5: calculated_size = Vector2(18.0, 10.0); ground_offset = Vector2(0.0, 3.0) # Small Relay Pylon
 				6: calculated_size = Vector2(72.0, 36.0); ground_offset = Vector2(0.0, 8.0) # Tech Shrine
 				_: calculated_size = Vector2(46.0, 24.0)
 		elif parent.name.begins_with("Base") or parent.is_in_group("base"):

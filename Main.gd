@@ -1,6 +1,13 @@
 extends Node2D
 
 const GameData = preload("res://GameData.gd")
+const MinimapUI = preload("res://MinimapUI.gd")
+const BaseUpgradeUI = preload("res://BaseUpgradeUI.gd")
+const TurretUpgradeUI = preload("res://TurretUpgradeUI.gd")
+const ResearchUI = preload("res://ResearchUI.gd")
+const PauseMenuUI = preload("res://PauseMenuUI.gd")
+const SettingsUI = preload("res://SettingsUI.gd")
+const WaveHUD = preload("res://WaveHUD.gd") # <-- Add this line
 
 const PORT = 7000
 const DEFAULT_IP = "127.0.0.1"
@@ -48,6 +55,15 @@ var building_count: int = 0
 # Resource Totals
 var scrap_amount: int = 40
 var requisition_amount: int = 10
+
+# Radar
+var base_radar_level: int = 0
+var wave_hud_node: Control = null
+var total_wave_enemies_cached: int = 0
+
+# Ork Citadel & Flankers
+var flanker_raid_timer: float = 30.0
+var ork_citadel_node: Node2D = null
 
 # Class Tracking per Peer ID
 var player_classes: Dictionary = {}
@@ -156,7 +172,27 @@ func _ready():
 	if ready_button: ready_button.pressed.connect(_on_ready_pressed)
 	
 	if game_over_ui: game_over_ui.hide()
-	if top_bar: top_bar.hide()
+	
+	# Hide the legacy top_bar and wave_info_label so they don't ghost behind WaveHUD
+	if top_bar: top_bar.show()
+	if wave_info_label: wave_info_label.hide()
+	
+	# Initialize Wave HUD Widget
+	if not has_node("UI/WaveHUD"):
+		var w_hud = WaveHUD.new()
+		w_hud.name = "WaveHUD"
+		$UI.add_child(w_hud)
+		wave_hud_node = w_hud
+	
+	if not has_node("UI/MinimapUI"):
+		var m_ui = MinimapUI.new()
+		m_ui.name = "MinimapUI"
+		$UI.add_child(m_ui)
+
+	if not has_node("UI/BaseUpgradeUI"):
+		var b_ui = BaseUpgradeUI.new()
+		b_ui.name = "BaseUpgradeUI"
+		$UI.add_child(b_ui)
 	
 	# Network signals
 	multiplayer.peer_connected.connect(_on_peer_connected)
@@ -180,15 +216,21 @@ func _setup_turret_upgrade_ui():
 		$UI.add_child(t_ui)
 
 func _process(delta: float) -> void:
-	if multiplayer.is_server() and is_wave_preparing:
-		wave_prep_timer -= delta
-		if wave_prep_timer > 0.0:
-			var sec_left = int(ceil(wave_prep_timer))
-			var msg = "⚠️ AUSPEX DETECTION: INCOMING ASSAULT IN %ds..." % sec_left
-			rpc("sync_wave_info", current_wave, msg)
-		else:
-			is_wave_preparing = false
-			_begin_wave_spawning()
+	if multiplayer.is_server():
+		# 1. Wave Preparation Warning Countdown
+		if is_wave_preparing:
+			wave_prep_timer -= delta
+			if wave_prep_timer <= 0.0:
+				is_wave_preparing = false
+				_begin_wave_spawning()
+			_broadcast_wave_hud()
+
+		# 2. Random Edge Flanker Raids
+		if is_wave_active:
+			flanker_raid_timer -= delta
+			if flanker_raid_timer <= 0.0:
+				flanker_raid_timer = randf_range(28.0, 42.0)
+				_spawn_flanker_raid()
 
 # --------------------------------------------------
 # CLASS SELECTION & LOBBY UI
@@ -443,6 +485,8 @@ func _begin_match() -> void:
 	rpc("sync_match_started")
 	for id in _session_peer_ids():
 		spawn_player(id)
+	_spawn_map_scrap_deposits()
+	_spawn_ork_mega_camp()
 	start_next_wave()
 
 @rpc("authority", "call_local", "reliable")
@@ -560,17 +604,144 @@ func start_next_wave():
 	enemies_left_to_spawn = 0
 	for squad in wave_squad_queue:
 		enemies_left_to_spawn += squad["units"].size()
+	total_wave_enemies_cached = enemies_left_to_spawn
 
 	# Start the 8-Second Auspex Warning Window
 	is_wave_preparing = true
 	wave_prep_timer = WAVE_PREP_DURATION
+	_broadcast_wave_hud()
 	
-	rpc("sync_incoming_threat_lanes", spawn_lane_angles)
-	rpc("trigger_wave_alert_sfx")
+	# Only alert with threat vectors if Tier 2 Auspex is unlocked!
+	if base_radar_level >= GameData.BaseRadarTier.TIER_2_AUSPEX:
+		rpc("sync_incoming_threat_lanes", spawn_lane_angles)
+		rpc("trigger_wave_alert_sfx")
+	else:
+		rpc("sync_incoming_threat_lanes", [])
+
+@rpc("any_peer", "call_local", "reliable")
+func request_upgrade_base_radar():
+	if not multiplayer.is_server(): return
+	var next_tier = base_radar_level + 1
+	if next_tier > GameData.BaseRadarTier.TIER_3_NOOSPHERE: return
+	
+	var info = GameData.BASE_RADAR_UPGRADE_INFO[next_tier]
+	if scrap_amount >= info.scrap and requisition_amount >= info.req:
+		scrap_amount -= info.scrap
+		requisition_amount -= info.req
+		base_radar_level = next_tier
+		rpc("sync_resources", scrap_amount, requisition_amount)
+		rpc("sync_base_radar_tier", base_radar_level)
+		AudioManager.play_sfx("building_place", Vector2.ZERO, 3.0, 1.4)
+
+@rpc("call_local", "reliable")
+func sync_base_radar_tier(new_tier: int):
+	base_radar_level = new_tier
+	get_tree().call_group("base_upgrade_ui", "_refresh_display")
 
 @rpc("call_local", "reliable")
 func trigger_wave_alert_sfx():
-	AudioManager.play_sfx("gate_toggle", Vector2.ZERO, 3.0, 0.6)
+	AudioManager.play_sfx("klaxon_alert", Vector2.ZERO, 3.0, 1.0)
+
+func _spawn_ork_mega_camp():
+	if not multiplayer.is_server() or not spawner: return
+	
+	var base_node = get_tree().get_first_node_in_group("base")
+	var base_pos = base_node.global_position if base_node else Vector2(500, 500)
+
+	# 1. Spawn Citadel in a distant desert quadrant (1400px - 1600px away)
+	var camp_angle = randf_range(-PI, PI)
+	var camp_dist = randf_range(1400.0, 1600.0)
+	var camp_pos = (base_pos + Vector2.RIGHT.rotated(camp_angle) * camp_dist).snapped(Vector2(32, 32))
+
+	spawner.spawn({
+		"type": "ork_citadel",
+		"name": "OrkCitadel_Core",
+		"position": camp_pos
+	})
+
+	# 2. Arrange Scrap Heaps in a defensive horseshoe around the FLANKS and REAR
+	var dir_to_player = (base_pos - camp_pos).normalized()
+	var flank_left = camp_pos + dir_to_player.rotated(2.2) * 110.0
+	var flank_right = camp_pos + dir_to_player.rotated(-2.2) * 110.0
+	var fortress_rear = camp_pos - (dir_to_player * 110.0)
+	var heap_positions = [flank_left, flank_right, fortress_rear]
+
+	for i in range(heap_positions.size()):
+		spawner.spawn({
+			"type": "ork_scrap_heap",
+			"name": "OrkScrapHeap_" + str(i + 1),
+			"position": heap_positions[i].snapped(Vector2(32, 32))
+		})
+
+	# 3. Spawn Elite Warboss Guard at the Citadel
+	spawner.spawn({
+		"type": "enemy",
+		"name": "CitadelBoss_Nob",
+		"enemy_type": 4, # Nob
+		"position": camp_pos + (dir_to_player * 60.0),
+		"is_objective_guard": true,
+		"guard_anchor": camp_pos,
+		"counts_toward_wave": false
+	})
+
+func _spawn_flanker_raid():
+	if not spawner: return
+	var base_node = get_tree().get_first_node_in_group("base")
+	var base_pos = base_node.global_position if base_node else Vector2.ZERO
+	
+	var edge_angle = randf() * TAU
+	var edge_pos = base_pos + Vector2.RIGHT.rotated(edge_angle) * 1500.0
+	
+	var raid_types = [1, 1, 3]
+	for t in raid_types:
+		enemy_count += 1
+		spawner.spawn({
+			"type": "enemy",
+			"name": "Flanker_" + str(enemy_count),
+			"enemy_type": t,
+			"position": edge_pos + Vector2.RIGHT.rotated(randf() * TAU) * 35.0,
+			"is_objective_guard": false,
+			"counts_toward_wave": false
+		})
+
+## Spawns wave units in the open forward muster grounds facing the player base
+func _spawn_tactical_squad(squad: Dictionary):
+	var units: Array = squad["units"]
+	var citadel = get_tree().get_first_node_in_group("ork_citadel")
+	var base_node = get_tree().get_first_node_in_group("base")
+	var base_pos = base_node.global_position if base_node else Vector2.ZERO
+	
+	var spawn_origin = Vector2(1400, 1400)
+	if is_instance_valid(citadel):
+		spawn_origin = citadel.global_position
+	else:
+		spawn_origin = base_pos + Vector2(1200, 0)
+
+	var dir_to_base = (base_pos - spawn_origin).normalized()
+	var forward_cone_angle = dir_to_base.angle() + randf_range(-0.50, 0.50)
+	var spawn_dist = randf_range(140.0, 240.0)
+	var squad_center = spawn_origin + Vector2.RIGHT.rotated(forward_cone_angle) * spawn_dist
+
+	for unit_type in units:
+		enemy_count += 1
+		var offset = Vector2.RIGHT.rotated(randf() * TAU) * randf_range(15.0, 55.0)
+		var spawn_pos = squad_center + offset
+		
+		var enemy_data = {
+			"type": "enemy",
+			"name": "Enemy_" + str(enemy_count),
+			"enemy_type": unit_type,
+			"position": spawn_pos,
+			"is_objective_guard": false,
+			"counts_toward_wave": true
+		}
+		
+		if spawner:
+			spawner.spawn(enemy_data)
+			active_enemies += 1
+			enemies_left_to_spawn = max(0, enemies_left_to_spawn - 1)
+			
+	_broadcast_wave_hud()
 
 func _begin_wave_spawning():
 	is_wave_active = true
@@ -598,41 +769,6 @@ func _spawn_squad_tick():
 			wave_timer.stop()
 	else:
 		wave_timer.stop()
-
-func _spawn_tactical_squad(squad: Dictionary):
-	var lane_idx: int = squad["lane"]
-	var units: Array = squad["units"]
-	
-	var base_node = get_tree().get_first_node_in_group("base")
-	var center_pos = base_node.global_position if base_node else Vector2.ZERO
-	
-	var base_lane_angle = spawn_lane_angles[lane_idx % spawn_lane_angles.size()]
-	var fanned_angle = base_lane_angle + randf_range(-0.25, 0.25)
-	
-	# Spawn far out into deep desert wasteland
-	var spawn_dist = randf_range(1200.0, 1550.0)
-	var squad_center = center_pos + Vector2.RIGHT.rotated(fanned_angle) * spawn_dist
-	
-	for unit_type in units:
-		enemy_count += 1
-		var offset = Vector2.RIGHT.rotated(randf() * TAU) * randf_range(15.0, 55.0)
-		var spawn_pos = squad_center + offset
-		
-		var enemy_data = {
-			"type": "enemy",
-			"name": "Enemy_" + str(enemy_count),
-			"enemy_type": unit_type,
-			"position": spawn_pos,
-			"is_objective_guard": false,
-			"counts_toward_wave": true
-		}
-		
-		if spawner:
-			spawner.spawn(enemy_data)
-			active_enemies += 1
-			enemies_left_to_spawn = max(0, enemies_left_to_spawn - 1)
-			
-	_broadcast_wave_hud()
 
 func notify_enemy_defeated():
 	if multiplayer.is_server():
@@ -672,7 +808,7 @@ func notify_totem_destroyed():
 	call_deferred("_broadcast_wave_hud")
 
 func get_active_totem_count() -> int:
-	return get_tree().get_nodes_in_group("objectives").size()
+	return get_tree().get_nodes_in_group("waaagh_totems").size()
 
 func get_waaagh_speed_multiplier() -> float:
 	var count = get_active_totem_count()
@@ -683,11 +819,35 @@ func get_waaagh_damage_multiplier() -> float:
 	return 1.0 + (count * 0.10)
 
 func _broadcast_wave_hud():
-	var totem_count = get_active_totem_count()
-	var buff_pct = int(totem_count * 12)
-	var threat_tag = " | 🔥 WAAAGH! THREAT: " + str(totem_count) + " (+" + str(buff_pct) + "% SPD)" if totem_count > 0 else ""
-	var hud_msg = "WAVE " + str(current_wave) + "/" + str(max_waves) + " — " + str(enemies_left_to_spawn + active_enemies) + " CONTACTS" + threat_tag
-	rpc("sync_wave_info", current_wave, hud_msg)
+	if not multiplayer.is_server(): return
+	
+	var totems = get_active_totem_count()
+	var spd_buff = int(totems * 12)
+	var dmg_buff = int(totems * 10)
+	var title = WAVE_NARRATIVE_TITLES[clampi(current_wave - 1, 0, WAVE_NARRATIVE_TITLES.size() - 1)]
+
+	rpc("sync_wave_telemetry",
+		current_wave,
+		max_waves,
+		title,
+		is_wave_preparing,
+		wave_prep_timer,
+		(not is_wave_active and not is_wave_preparing),
+		0.0,
+		active_enemies + enemies_left_to_spawn,
+		total_wave_enemies_cached,
+		totems,
+		spd_buff,
+		dmg_buff
+	)
+
+@rpc("call_local", "reliable")
+func sync_wave_telemetry(wave: int, max_w: int, title_txt: String, preparing: bool, prep_left: float, on_break: bool, break_left: float, contacts_active: int, contacts_total: int, totems: int, spd_buff: int, dmg_buff: int):
+	current_wave = wave
+	if not is_instance_valid(wave_hud_node):
+		wave_hud_node = get_tree().get_first_node_in_group("wave_hud")
+	if wave_hud_node and wave_hud_node.has_method("update_telemetry"):
+		wave_hud_node.update_telemetry(wave, max_w, title_txt, preparing, prep_left, on_break, break_left, contacts_active, contacts_total, totems, spd_buff, dmg_buff)
 
 # ==============================================================================
 # SQUAD FORMATION GENERATOR
@@ -897,13 +1057,17 @@ func execute_rematch():
 		for bg in get_tree().get_nodes_in_group("bodyguards"): bg.queue_free()
 		for skull in get_tree().get_nodes_in_group("ServoSkull"): skull.queue_free()
 		for scrap in get_tree().get_nodes_in_group("scrap"): scrap.queue_free()
+		for dep in get_tree().get_nodes_in_group("scrap_deposits"): dep.queue_free()
+		for cit in get_tree().get_nodes_in_group("ork_citadel"): cit.queue_free()
+		for heap in get_tree().get_nodes_in_group("ork_structures"): heap.queue_free()
 		
 		var base = get_tree().get_first_node_in_group("base")
 		if base and base.has_method("sync_base_health"):
 			base.rpc("sync_base_health", base.max_health)
 		
 		rpc("sync_resources", scrap_amount, requisition_amount)
-		rpc("sync_tech_tree", false, false, false, false)
+		rpc("sync_tech_tree", false, false, false, false, false, false)
+		rpc("sync_base_radar_tier", 0)
 		rpc("sync_incoming_threat_lanes", [])
 		request_navmesh_rebake()
 
@@ -963,6 +1127,24 @@ func _custom_spawner(data) -> Node:
 						x_offset = (player_index * 50.0) - 50.0
 				player.position = base_pos + Vector2(x_offset, 100.0)
 				return player
+			"scrap_deposit":
+				var dep = StaticBody2D.new()
+				dep.set_script(load("res://ScrapDeposit.gd"))
+				dep.name = str(data["name"])
+				dep.position = data["position"]
+				return dep
+			"ork_citadel":
+				var cit = StaticBody2D.new()
+				cit.set_script(load("res://OrkCitadel.gd"))
+				cit.name = str(data["name"])
+				cit.position = data["position"]
+				return cit
+			"ork_scrap_heap":
+				var heap = StaticBody2D.new()
+				heap.set_script(load("res://OrkScrapHeap.gd"))
+				heap.name = str(data["name"])
+				heap.position = data["position"]
+				return heap
 			"enemy":
 				var enemy = enemy_scene.instantiate()
 				enemy.name = str(data["name"])
@@ -1037,6 +1219,33 @@ func _custom_spawner(data) -> Node:
 				return skull
 
 	return null
+
+func _spawn_map_scrap_deposits():
+	if not multiplayer.is_server() or not spawner: return
+	
+	var base_node = get_tree().get_first_node_in_group("base")
+	var base_pos = base_node.global_position if base_node else Vector2(500, 500)
+
+	var start_angles = [PI * 0.75, -PI * 0.25]
+	for i in range(start_angles.size()):
+		var angle = start_angles[i]
+		var dist = 240.0 + (i * 40.0)
+		var dep_pos = (base_pos + Vector2.RIGHT.rotated(angle) * dist).snapped(Vector2(32, 32))
+		spawner.spawn({
+			"type": "scrap_deposit",
+			"name": "ScrapDeposit_Start_" + str(i + 1),
+			"position": dep_pos
+		})
+
+	for i in range(5):
+		var angle = (float(i) * TAU / 5.0) + randf_range(-0.3, 0.3)
+		var dist = randf_range(650.0, 1050.0)
+		var dep_pos = (base_pos + Vector2.RIGHT.rotated(angle) * dist).snapped(Vector2(32, 32))
+		spawner.spawn({
+			"type": "scrap_deposit",
+			"name": "ScrapDeposit_Wild_" + str(i + 1),
+			"position": dep_pos
+		})
 
 # --------------------------------------------------
 # RESOURCE, TECH & BUILDING MANAGEMENT
@@ -1135,7 +1344,8 @@ func sync_resources(scrap: int, requisition: int):
 	scrap_amount = scrap
 	requisition_amount = requisition
 	if resource_label:
-		resource_label.text = "⚙ SCRAP: %d      ⚡ REQUISITION: %d" % [scrap_amount, requisition_amount]
+		resource_label.text = "⚙ %d SCRAP   ⚡ %d REQ" % [scrap_amount, requisition_amount]
+		resource_label.add_theme_color_override("font_color", Color(0.95, 0.85, 0.5))
 
 @rpc("call_local", "reliable")
 func sync_wave_info(wave_number: int, message: String):

@@ -18,6 +18,38 @@ enum TurretSpec {
 	ARC_BLASTER = 3
 }
 
+# --- BASE SANCTUM RADAR UPGRADE TIERS ---
+enum BaseRadarTier {
+	NONE = 0,
+	TIER_1_CARTOGRAPH = 1,
+	TIER_2_AUSPEX = 2,
+	TIER_3_NOOSPHERE = 3
+}
+
+const BASE_RADAR_UPGRADE_INFO = {
+	BaseRadarTier.TIER_1_CARTOGRAPH: {
+		"name": "Omnissian Cartograph",
+		"icon": "🗺️",
+		"scrap": 25,
+		"req": 10,
+		"desc": "Unlocks the Tactical Minimap and Fullscreen Map [M] tracking all friendly outposts, foundries, and scrap deposits."
+	},
+	BaseRadarTier.TIER_2_AUSPEX: {
+		"name": "Long-Range Auspex Array",
+		"icon": "📡",
+		"scrap": 45,
+		"req": 25,
+		"desc": "Enables the 8s Early Warning Vector System for assaults and adds periodic radar sweeps revealing hostile positions."
+	},
+	BaseRadarTier.TIER_3_NOOSPHERE: {
+		"name": "Noospheric Global Uplink",
+		"icon": "👁️",
+		"scrap": 70,
+		"req": 50,
+		"desc": "Continuous real-time tracking of all hostiles, WAAAGH! Totems, and the Ork Warboss Citadel across the entire map."
+	}
+}
+
 const STRUCTURE_INFO = {
 	StructureType.BARRICADE: {
 		"name": "Barricade",
@@ -43,7 +75,7 @@ const STRUCTURE_INFO = {
 		"scrap": 25,
 		"req": 0,
 		"max_hp": 100,
-		"size": Vector2(64, 64),
+		"size": Vector2(48, 48),
 		"requires_industrial": true
 	},
 	StructureType.TURRET: {
@@ -52,25 +84,26 @@ const STRUCTURE_INFO = {
 		"scrap": 35,
 		"req": 5,
 		"max_hp": 90,
-		"size": Vector2(48, 48),
+		"size": Vector2(36, 36),
+		"requires_industrial": false
+	},
+	StructureType.MANUFACTORUM: {
+		"name": "Scrap Foundry",
+		"key": "5",
+		"scrap": 30,
+		"req": 5,
+		"max_hp": 220,
+		"size": Vector2(56, 56),
+		"requires_deposit": true,
 		"requires_industrial": false
 	},
 	StructureType.RESEARCH_SHRINE: {
 		"name": "Tech Shrine",
-		"key": "5",
+		"key": "6",
 		"scrap": 40,
 		"req": 15,
 		"max_hp": 200,
-		"size": Vector2(72, 72),
-		"requires_industrial": true
-	},
-	StructureType.MANUFACTORUM: {
-		"name": "Manufactorum",
-		"key": "",
-		"scrap": 60,
-		"req": 25,
-		"max_hp": 250,
-		"size": Vector2(96, 96),
+		"size": Vector2(56, 56),
 		"requires_industrial": true
 	},
 	StructureType.NOOSPHERE_ANTENNA: {
@@ -84,9 +117,7 @@ const STRUCTURE_INFO = {
 	}
 }
 
-
-
-# --- UPGRADES & ABILITY CONSTANTS ---
+# --- TURRET PROGRESSION & SPECIALIZATIONS ---
 const TURRET_UPGRADE_COSTS: Array[int] = [10, 20, 35]
 const TURRET_DAMAGE_BY_LEVEL: Array[int] = [12, 16, 22, 30]
 const TURRET_FIRE_INTERVALS: Array[float] = [0.45, 0.36, 0.28, 0.22]
@@ -145,6 +176,10 @@ const MAX_DAMAGE_UPGRADES: int = 3
 
 const SPEED_UPGRADE_REQ_COST: int = 10
 const MAX_SPEED_UPGRADES: int = 3
+
+# --- ORK MEGA-CAMP & STRUCTURES ---
+const ORK_CITADEL_MAX_HEALTH: int = 2500
+const ORK_SCRAP_HEAP_MAX_HEALTH: int = 400
 
 # --- RESEARCH TECH TREE ---
 const TECH_DATA: Array[Dictionary] = [

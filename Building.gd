@@ -23,6 +23,11 @@ const NANOBOT_REPAIR_RATE: float = 3.5
 var is_noosphere_connected: bool = false
 const NOOSPHERE_BROADCAST_RADIUS: float = 240.0
 
+# --- FOUNDRY ---
+var foundry_timer: float = 0.0
+const FOUNDRY_INTERVAL: float = 4.0
+const FOUNDRY_SCRAP_YIELD: int = 5
+
 # --- TURRET & LASER STATE ---
 var current_turret_rotation: float = 0.0
 var is_preview: bool = false
@@ -94,6 +99,13 @@ func _process(delta: float):
 		noosphere_check_timer = 0.0
 		_update_noosphere_connection()
 
+# Host/Server Scrap Foundry Mining Loop
+	if ((not multiplayer.has_multiplayer_peer()) or multiplayer.is_server()) and building_type == Type.MANUFACTORUM:
+		foundry_timer += delta
+		if foundry_timer >= FOUNDRY_INTERVAL:
+			foundry_timer = 0.0
+			_produce_foundry_scrap()
+
 	if (not multiplayer.has_multiplayer_peer()) or multiplayer.is_server():
 		_process_server_buffs(delta)
 		if building_type == Type.TURRET:
@@ -105,6 +117,26 @@ func _process(delta: float):
 		if gate_check_timer >= 0.08:
 			gate_check_timer = 0.0
 			_process_gate_sensor()
+
+func _produce_foundry_scrap():
+	var main_node = get_tree().get_first_node_in_group("main")
+	if main_node and main_node.has_method("add_scrap"):
+		main_node.add_scrap(FOUNDRY_SCRAP_YIELD)
+		rpc("trigger_foundry_smoke_fx")
+
+@rpc("call_local", "unreliable")
+func trigger_foundry_smoke_fx():
+	AudioManager.play_sfx("building_place", global_position, -6.0, 1.6)
+	
+	# Floating resource popup above the foundry
+	var label = Label.new()
+	label.script = load("res://DamageNumber.gd")
+	label.global_position = global_position + Vector2(-15, -34)
+	get_tree().current_scene.add_child(label)
+	label.text = "+%d Scrap" % FOUNDRY_SCRAP_YIELD
+	label.label_settings = LabelSettings.new()
+	label.label_settings.font_color = Color(0.95, 0.75, 0.20)
+	label.label_settings.font_size = 13
 
 func _process_gate_sensor():
 	var should_open = false
@@ -419,16 +451,19 @@ func _apply_type_setup():
 		match building_type:
 			Type.DISTRIBUTOR, Type.NOOSPHERE_ANTENNA:
 				if not (collision_shape.shape is CircleShape2D): collision_shape.shape = CircleShape2D.new()
-				collision_shape.shape.radius = 7.0 # Compact solid bollard post
+				collision_shape.shape.radius = 7.0
 			Type.BARRICADE:
 				if not (collision_shape.shape is CircleShape2D): collision_shape.shape = CircleShape2D.new()
-				collision_shape.shape.radius = 16.0
-			Type.GENERATOR, Type.TURRET:
+				collision_shape.shape.radius = 12.0
+			Type.TURRET:
+				if not (collision_shape.shape is CircleShape2D): collision_shape.shape = CircleShape2D.new()
+				collision_shape.shape.radius = 14.0 # Allows tight walkways around turrets
+			Type.GENERATOR:
 				if not (collision_shape.shape is RectangleShape2D): collision_shape.shape = RectangleShape2D.new()
-				collision_shape.shape.size = Vector2(28, 28) if building_type == Type.TURRET else Vector2(56, 56)
+				collision_shape.shape.size = Vector2(38, 38) # Slimmed down from 56x56
 			Type.MANUFACTORUM, Type.RESEARCH_SHRINE:
 				if not (collision_shape.shape is RectangleShape2D): collision_shape.shape = RectangleShape2D.new()
-				collision_shape.shape.size = Vector2(88, 88)
+				collision_shape.shape.size = Vector2(46, 46) # Slimmed down from 88x88
 
 	if not multiplayer.is_server(): return
 
@@ -570,7 +605,7 @@ func _on_turret_timer_timeout():
 					_execute_arc_chain_lightning(cached_target_enemy)
 
 func _execute_volkite_piercing_ray(start_pos: Vector2, end_pos: Vector2):
-	AudioManager.play_sfx("orbital_strike", global_position, 0.0, 1.8)
+	AudioManager.play_sfx("volkite_beam", global_position, 2.0, 1.0)
 	var space = get_world_2d().direct_space_state
 	var shape = SegmentShape2D.new()
 	shape.a = start_pos
@@ -587,7 +622,7 @@ func _execute_volkite_piercing_ray(start_pos: Vector2, end_pos: Vector2):
 				body.take_damage(GameData.TURRET_SPEC_INFO[GameData.TurretSpec.VOLKITE_CULVERIN].damage)
 
 func _execute_arc_chain_lightning(primary_target: Node2D):
-	AudioManager.play_sfx("gate_toggle", global_position, 2.0, 1.6)
+	AudioManager.play_sfx("arc_lightning", global_position, 2.0, 1.0)
 	var chain_points: Array[Vector2] = [primary_target.global_position]
 	
 	if primary_target.has_method("take_damage"):
@@ -624,38 +659,84 @@ func trigger_arc_lightning_fx(points: Array):
 		visual_spriteNode.queue_redraw()
 
 func refresh_barricade_connections():
-	if building_type != Type.BARRICADE or is_preview or not is_inside_tree():
-		return
+	# Call global solver to rebuild the entire barricade network cleanly
+	rebuild_all_barricade_connections(get_tree())
 
+static func rebuild_all_barricade_connections(tree: SceneTree) -> void:
+	if not tree: return
+
+	var all_barricades: Array[Node2D] = []
+	for b in tree.get_nodes_in_group("buildings"):
+		if is_instance_valid(b) and not b.get("is_preview") and int(b.get("building_type")) == int(Type.BARRICADE):
+			all_barricades.append(b)
+
+	# 1. Reset all neighbor lists
+	for b in all_barricades:
+		b.connected_neighbor_ids.clear()
+
+	# 2. Collect all candidate pairs within WALL_LINK_RANGE (95px)
 	var candidates: Array[Dictionary] = []
-	var neighbor_offsets: Array[Vector2] = []
-	connected_neighbor_ids.clear()
+	for i in range(all_barricades.size()):
+		for j in range(i + 1, all_barricades.size()):
+			var b1 = all_barricades[i]
+			var b2 = all_barricades[j]
+			var dist = b1.global_position.distance_to(b2.global_position)
+			if dist <= WALL_LINK_RANGE and dist > 5.0:
+				candidates.append({"b1": b1, "b2": b2, "dist": dist})
 
-	for building in get_tree().get_nodes_in_group("buildings"):
-		if not is_instance_valid(building) or building == self: continue
-		if "building_type" in building and int(building.building_type) == int(Type.BARRICADE):
-			if "is_preview" in building and building.is_preview: continue
-			var dist = global_position.distance_to(building.global_position)
-			if dist <= WALL_LINK_RANGE and dist > 1.0:
-				candidates.append({"node": building, "dist": dist})
-
-	# Sort by distance and only connect to the 2 closest neighboring barricades!
+	# 3. Sort by shortest distance first
 	candidates.sort_custom(func(a, b): return a.dist < b.dist)
-	var max_conns = 2
-	var selected_neighbors: Array[Node2D] = []
 
-	for i in range(min(candidates.size(), max_conns)):
-		var neighbor: Node2D = candidates[i].node
-		selected_neighbors.append(neighbor)
-		connected_neighbor_ids.append(neighbor.get_instance_id())
-		if get_instance_id() < neighbor.get_instance_id():
-			neighbor_offsets.append(to_local(neighbor.global_position))
+	# 4. Degree-constrained matching: Max 2 connections per post (No side-spurs!)
+	var degree: Dictionary = {}
+	for b in all_barricades:
+		degree[b.get_instance_id()] = 0
 
-	if visual_spriteNode and "wall_connections" in visual_spriteNode:
-		visual_spriteNode.wall_connections = neighbor_offsets
-		visual_spriteNode.queue_redraw()
+	var valid_edges: Array[Dictionary] = []
 
-	_update_wall_colliders(selected_neighbors)
+	for edge in candidates:
+		var id1 = edge.b1.get_instance_id()
+		var id2 = edge.b2.get_instance_id()
+
+		# Only connect if BOTH posts have fewer than 2 connections!
+		if degree[id1] < 2 and degree[id2] < 2:
+			var p1 = edge.b1.global_position
+			var p2 = edge.b2.global_position
+			var crosses = false
+
+			# Reject edges that physically cross an already established wall
+			for existing in valid_edges:
+				var eid1 = existing.b1.get_instance_id()
+				var eid2 = existing.b2.get_instance_id()
+				if id1 == eid1 or id1 == eid2 or id2 == eid1 or id2 == eid2:
+					continue
+				if Geometry2D.segment_intersects_segment(p1, p2, existing.b1.global_position, existing.b2.global_position) != null:
+					crosses = true
+					break
+
+			if not crosses:
+				degree[id1] += 1
+				degree[id2] += 1
+				valid_edges.append(edge)
+				edge.b1.connected_neighbor_ids.append(id2)
+				edge.b2.connected_neighbor_ids.append(id1)
+
+	# 5. Apply clean visuals and physics colliders
+	for b in all_barricades:
+		var offsets: Array[Vector2] = []
+		var neighbor_nodes: Array[Node2D] = []
+		for n_id in b.connected_neighbor_ids:
+			var neighbor = instance_from_id(n_id) as Node2D
+			if is_instance_valid(neighbor):
+				neighbor_nodes.append(neighbor)
+				if b.get_instance_id() < n_id:
+					offsets.append(b.to_local(neighbor.global_position))
+
+		if b.visual_spriteNode and "wall_connections" in b.visual_spriteNode:
+			b.visual_spriteNode.wall_connections = offsets
+			b.visual_spriteNode.queue_redraw()
+
+		b._update_wall_colliders(neighbor_nodes)
 
 func _update_wall_colliders(neighbors: Array[Node2D]):
 	for id in active_wall_colliders.keys():
@@ -693,6 +774,7 @@ func destroy_building():
 func client_destroy():
 	get_tree().call_group("sandy_floor", "refresh_foundations")
 	get_tree().call_group("buildings", "_update_noosphere_connection")
+	call_deferred("refresh_barricade_connections")
 	queue_free()
 
 func setup_as_preview():

@@ -282,16 +282,22 @@ func _get_snapped_build_position(mouse_pos: Vector2) -> Vector2:
 	if selected_building_type == 0:
 		var buildings = get_tree().get_nodes_in_group("buildings")
 		var closest_barricade: Node2D = null
-		var closest_d = BARRICADE_SNAP_DETECTION_RANGE
+		var closest_score = BARRICADE_SNAP_DETECTION_RANGE
 
 		for b in buildings:
 			if not is_instance_valid(b) or b == preview_instance: continue
 			if "building_type" in b and int(b.building_type) == 0:
 				if "is_preview" in b and b.is_preview: continue
+				
 				var d = mouse_pos.distance_to(b.global_position)
-				if d < closest_d and d > 20.0:
-					closest_d = d
-					closest_barricade = b
+				if d < BARRICADE_SNAP_DETECTION_RANGE and d > 20.0:
+					# Prioritize open endpoints (< 2 connections) over completed middle walls!
+					var conns = b.connected_neighbor_ids.size() if "connected_neighbor_ids" in b else 0
+					var score = d if conns < 2 else d + 50.0
+					
+					if score < closest_score:
+						closest_score = score
+						closest_barricade = b
 
 		if is_instance_valid(closest_barricade):
 			var to_mouse = mouse_pos - closest_barricade.global_position
@@ -306,31 +312,41 @@ func _get_snapped_build_position(mouse_pos: Vector2) -> Vector2:
 	return Vector2(snapped_x, snapped_y)
 
 func _is_build_location_valid(build_pos: Vector2) -> bool:
+	# Scrap Foundry (Type 3) MUST be placed on top of an unoccupied Scrap Deposit
+	if selected_building_type == 3:
+		var nearest_deposit = _find_nearest_unoccupied_deposit(build_pos, 32.0)
+		if not is_instance_valid(nearest_deposit):
+			return false
+
 	if _requires_industrial_ground(selected_building_type) and not _is_position_on_industrial_ground(build_pos):
 		return false
 
 	var is_placing_barricade = (selected_building_type == 0)
-	var placement_margin = -1.0 if is_placing_barricade else 6.0
+	var placement_margin = -1.0 if is_placing_barricade else 4.0
 	var my_rect = Rect2(build_pos - (_get_building_size(selected_building_type) * 0.5), _get_building_size(selected_building_type)).grow(placement_margin)
 
 	var structures = get_tree().get_nodes_in_group("buildings")
 	structures.append_array(get_tree().get_nodes_in_group("base"))
 
 	for s in structures:
-		if not is_instance_valid(s) or s == preview_instance:
-			continue
-		if "is_preview" in s and s.is_preview:
-			continue
-
+		if not is_instance_valid(s) or s == preview_instance: continue
+		if "is_preview" in s and s.is_preview: continue
 		var s_type = -1 if s.is_in_group("base") else int(s.get("building_type"))
 		var other_is_barricade = (s_type == 0)
-		var other_margin = -1.0 if (is_placing_barricade and other_is_barricade) else 6.0
+		var other_margin = -1.0 if (is_placing_barricade and other_is_barricade) else 4.0
 		var other_rect = Rect2(s.global_position - (_get_building_size(s_type) * 0.5), _get_building_size(s_type)).grow(other_margin)
 
 		if my_rect.intersects(other_rect):
 			return false
 
 	return true
+
+func _find_nearest_unoccupied_deposit(pos: Vector2, max_dist: float) -> Node2D:
+	for dep in get_tree().get_nodes_in_group("scrap_deposits"):
+		if is_instance_valid(dep) and not dep.get("is_occupied"):
+			if pos.distance_to(dep.global_position) <= max_dist:
+				return dep
+	return null
 
 func _find_preview_connection(build_pos: Vector2) -> Node2D:
 	var closest: Node2D = null
@@ -352,16 +368,23 @@ func _find_preview_barricade_links(build_pos: Vector2) -> Array[Node2D]:
 		return linked_neighbors
 
 	var buildings = get_tree().get_nodes_in_group("buildings")
+	var candidates: Array[Dictionary] = []
+
 	for b in buildings:
-		if not is_instance_valid(b) or b == preview_instance:
-			continue
+		if not is_instance_valid(b) or b == preview_instance: continue
 		if "building_type" in b and int(b.building_type) == 0:
-			if "is_preview" in b and b.is_preview:
-				continue
+			if "is_preview" in b and b.is_preview: continue
 			var dist = b.global_position.distance_to(build_pos)
-			if dist <= WALL_LINK_RANGE and dist > 1.0:
-				if not _is_wall_line_blocked_by_structure(build_pos, b.global_position):
-					linked_neighbors.append(b)
+			if dist <= WALL_LINK_RANGE and dist > 5.0:
+				var conns = b.connected_neighbor_ids.size() if "connected_neighbor_ids" in b else 0
+				# Only link to posts that can accept another connection (< 2)
+				if conns < 2 and not _is_wall_line_blocked_by_structure(build_pos, b.global_position):
+					candidates.append({"node": b, "dist": dist})
+
+	candidates.sort_custom(func(a, b): return a.dist < b.dist)
+	for i in range(min(candidates.size(), 2)):
+		linked_neighbors.append(candidates[i].node)
+
 	return linked_neighbors
 
 func _is_wall_line_blocked_by_structure(pos_a: Vector2, pos_b: Vector2) -> bool:
@@ -398,6 +421,19 @@ func request_interact_nearby_structure() -> void:
 		t_ui.close_modal()
 		return
 
+	var b_ui = get_tree().get_first_node_in_group("base_upgrade_ui")
+	if b_ui and b_ui.visible:
+		b_ui.close_terminal()
+		return
+
+	# 1. Check Main Base interaction (Sanctum Auspex Terminal)
+	var base_node = get_tree().get_first_node_in_group("base")
+	if is_instance_valid(base_node) and global_position.distance_to(base_node.global_position) <= 125.0:
+		if b_ui and b_ui.has_method("open_terminal"):
+			b_ui.open_terminal()
+			return
+
+	# 2. Check nearby buildings
 	var closest: Node2D = _get_closest_interactable_structure()
 	if is_instance_valid(closest):
 		var main_node = get_tree().get_first_node_in_group("main")
@@ -410,10 +446,8 @@ func request_interact_nearby_structure() -> void:
 				var spec = closest.get("turret_spec") if "turret_spec" in closest else 0
 				
 				if lvl < 3:
-					# Upgrade to next numerical tier (Lv. 2 -> Lv. 4)
 					main_node.rpc_id(1, "request_upgrade_turret", closest.name)
 				elif spec == GameData.TurretSpec.NONE:
-					# Turret is Level 4! Open Specialization Modal (Option A)
 					if t_ui and t_ui.has_method("open_modal"):
 						t_ui.open_modal(closest)
 			elif b_type == 4:
@@ -798,10 +832,24 @@ func _unhandled_input(event):
 	if not is_multiplayer_authority():
 		return
 
+# Toggle Fullscreen Holo-Map [M]
+	if event is InputEventKey and event.pressed and event.keycode == KEY_M:
+		var m_ui = get_tree().get_first_node_in_group("minimap_ui")
+		if m_ui and m_ui.has_method("toggle_fullscreen_map"):
+			m_ui.toggle_fullscreen_map()
+			get_viewport().set_input_as_handled()
+			return
+
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 		var r_ui = get_tree().get_first_node_in_group("research_ui")
 		if r_ui and r_ui.visible:
 			r_ui.close_terminal()
+			get_viewport().set_input_as_handled()
+			return
+
+		var t_ui = get_tree().get_first_node_in_group("turret_upgrade_ui")
+		if t_ui and t_ui.visible:
+			t_ui.close_modal()
 			get_viewport().set_input_as_handled()
 			return
 
@@ -853,11 +901,15 @@ func _unhandled_input(event):
 				get_viewport().set_input_as_handled()
 				return
 			elif event.keycode in [KEY_4, KEY_KP_4]:
-				toggle_build_mode(2)
+				toggle_build_mode(2) # Turret
 				get_viewport().set_input_as_handled()
 				return
 			elif event.keycode in [KEY_5, KEY_KP_5]:
-				toggle_build_mode(6)
+				toggle_build_mode(3) # Scrap Foundry (Manufactorum)
+				get_viewport().set_input_as_handled()
+				return
+			elif event.keycode in [KEY_6, KEY_KP_6]:
+				toggle_build_mode(6) # Tech Shrine
 				get_viewport().set_input_as_handled()
 				return
 

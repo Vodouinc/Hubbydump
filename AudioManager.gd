@@ -4,7 +4,7 @@ extends Node
 var sfx_library: Dictionary = {}
 var player_pool: Array[AudioStreamPlayer2D] = []
 var music_player: AudioStreamPlayer = null
-const POOL_SIZE: int = 16
+const POOL_SIZE: int = 18
 
 const SETTINGS_FILE = "user://audio_settings.cfg"
 
@@ -30,7 +30,6 @@ func _ready():
 # ------------------------------------------------------------------------------
 
 func _setup_audio_buses():
-	# Ensure "Music" and "SFX" buses exist
 	if AudioServer.get_bus_index("Music") == -1:
 		AudioServer.add_bus()
 		var music_idx = AudioServer.bus_count - 1
@@ -168,7 +167,7 @@ func _generate_soundtrack():
 func _create_music_player():
 	music_player = AudioStreamPlayer.new()
 	music_player.name = "MusicPlayer"
-	music_player.bus = "Music" # Routed to Music bus!
+	music_player.bus = "Music"
 	add_child(music_player)
 
 func play_music(loop: bool = true):
@@ -180,20 +179,66 @@ func stop_music():
 	if music_player: music_player.stop()
 
 # ------------------------------------------------------------------------------
-# 3. PROCEDURAL SFX GENERATOR
+# 3. GRIMDARK PROCEDURAL SFX GENERATOR
 # ------------------------------------------------------------------------------
 
 func _generate_sound_effects():
-	sfx_library["laser"] = _synth_pitch_sweep(880.0, 220.0, 0.18, "sine")
-	sfx_library["radium_shot"] = _synth_gunshot(0.12)
-	sfx_library["axe_swing"] = _synth_whoosh(0.18)
-	sfx_library["building_place"] = _synth_pneumatic_clank(0.22)
-	sfx_library["hit"] = _synth_impact(0.10)
-	sfx_library["orbital_strike"] = _synth_heavy_explosion(1.4)
-	sfx_library["scrap_pickup"] = _synth_chime([587.33, 880.0], 0.14)
-	sfx_library["gate_toggle"] = _synth_pitch_sweep(320.0, 640.0, 0.15, "square")
+	# Kinetic & Heavy Weapons
+	sfx_library["radium_shot"] = _synth_heavy_bolter_shot(0.18)
+	sfx_library["laser"] = _synth_autocannon_thud(0.14) # Base Turret rapid kinetic thump
+	sfx_library["autocannon"] = _synth_autocannon_thud(0.14)
+	
+	# High-Tech Omnissian Energy Weapons
+	sfx_library["volkite_beam"] = _synth_volkite_ray(0.32)
+	sfx_library["arc_lightning"] = _synth_arc_lightning(0.24)
+	
+	# Melee & Impact
+	sfx_library["axe_swing"] = _synth_heavy_cleave(0.20)
+	sfx_library["hit"] = _synth_heavy_impact(0.14)
+	sfx_library["orbital_strike"] = _synth_cataclysmic_explosion(1.5)
+	
+	# Mechanical Fortifications & Environment
+	sfx_library["building_place"] = _synth_pneumatic_clamp(0.24)
+	sfx_library["gate_toggle"] = _synth_blast_gate(0.22)
+	sfx_library["scrap_pickup"] = _synth_brass_cog_clink(0.16)
+	sfx_library["klaxon_alert"] = _synth_vox_klaxon(0.75)
 
-func _synth_pitch_sweep(start_freq: float, end_freq: float, duration: float, wave_type: String = "sine") -> AudioStreamWAV:
+# --- 1. HEAVY KINETIC BOLTER / RADIUM SHOT ---
+func _synth_heavy_bolter_shot(duration: float) -> AudioStreamWAV:
+	var sample_rate = 22050
+	var total_samples = int(sample_rate * duration)
+	var byte_data = PackedByteArray()
+	byte_data.resize(total_samples * 2)
+
+	var phase_sub = 0.0
+	var phase_body = 0.0
+
+	for i in range(total_samples):
+		var t = float(i) / float(total_samples)
+		
+		# Layer 1: High-velocity transient crack (Noise + Pitch drop)
+		var noise = randf_range(-1.0, 1.0) * pow(1.0 - t, 6.0) * 0.85
+		
+		# Layer 2: Heavy 55Hz sub-bass thump
+		var sub_freq = lerpf(180.0, 48.0, pow(t, 0.4))
+		phase_sub += (sub_freq * TAU) / sample_rate
+		var sub_body = sin(phase_sub) * pow(1.0 - t, 2.2) * 0.95
+		
+		# Layer 3: Mechanical chamber punch & radioactive rasp
+		phase_body += (lerpf(360.0, 90.0, t) * TAU) / sample_rate
+		var mech_punch = (1.0 if sin(phase_body) > 0.0 else -1.0) * pow(1.0 - t, 3.5) * 0.35
+		
+		# Analog saturation (Warm tube overdrive clipping)
+		var raw_mix = (noise * 0.7 + sub_body * 0.8 + mech_punch * 0.4) * 1.5
+		var sample_val = clampf(raw_mix - (raw_mix * raw_mix * raw_mix) * 0.15, -1.0, 1.0)
+
+		var int16_val = int(sample_val * 32767.0)
+		byte_data.encode_s16(i * 2, int16_val)
+
+	return _create_stream_from_bytes(byte_data, sample_rate)
+
+# --- 2. RAPID AUTOCANNON / TURRET KINETIC THUD ---
+func _synth_autocannon_thud(duration: float) -> AudioStreamWAV:
 	var sample_rate = 22050
 	var total_samples = int(sample_rate * duration)
 	var byte_data = PackedByteArray()
@@ -202,15 +247,103 @@ func _synth_pitch_sweep(start_freq: float, end_freq: float, duration: float, wav
 	var phase = 0.0
 	for i in range(total_samples):
 		var t = float(i) / float(total_samples)
-		phase += (lerpf(start_freq, end_freq, pow(t, 0.5)) * TAU) / sample_rate
-		var sample_val = sin(phase) if wave_type == "sine" else (1.0 if sin(phase) > 0.0 else -1.0)
-		var envelope = (1.0 - t) * (1.0 - t)
-		var int16_val = int(clampf(sample_val * envelope * 32767.0, -32768.0, 32767.0))
-		byte_data.encode_s16(i * 2, int16_val)
+		
+		# Heavy thud pitch drop (240Hz -> 60Hz)
+		var freq = lerpf(260.0, 58.0, pow(t, 0.5))
+		phase += (freq * TAU) / sample_rate
+		var tone = sin(phase) * 0.85
+		
+		# Sharp metallic breach slap
+		var snap = randf_range(-0.6, 0.6) * (1.0 - t * 5.0 if t < 0.2 else 0.0)
+		var env = pow(1.0 - t, 2.8)
+		
+		var sample_val = clampf((tone + snap) * env * 1.3, -1.0, 1.0)
+		byte_data.encode_s16(i * 2, int(sample_val * 32767.0))
 
 	return _create_stream_from_bytes(byte_data, sample_rate)
 
-func _synth_gunshot(duration: float) -> AudioStreamWAV:
+# --- 3. VOLKITE SEARING THERMAL RAY ---
+func _synth_volkite_ray(duration: float) -> AudioStreamWAV:
+	var sample_rate = 22050
+	var total_samples = int(sample_rate * duration)
+	var byte_data = PackedByteArray()
+	byte_data.resize(total_samples * 2)
+
+	var fm_mod_phase = 0.0
+	var carrier_phase = 0.0
+
+	for i in range(total_samples):
+		var t = float(i) / float(total_samples)
+		
+		# Ominous 55Hz carrier modulated by 165Hz harmonic
+		fm_mod_phase += (165.0 * TAU) / sample_rate
+		var mod = sin(fm_mod_phase) * 60.0
+		
+		carrier_phase += ((75.0 + mod) * TAU) / sample_rate
+		var drone = sin(carrier_phase) * 0.65
+		
+		# Incinerating thermal hiss
+		var frying_hiss = randf_range(-0.45, 0.45) * sin(t * PI)
+		var env = sin(t * PI) * (1.0 - t * 0.3)
+		
+		var raw = (drone + frying_hiss) * env * 1.4
+		var sample_val = clampf(raw, -1.0, 1.0)
+		byte_data.encode_s16(i * 2, int(sample_val * 32767.0))
+
+	return _create_stream_from_bytes(byte_data, sample_rate)
+
+# --- 4. HEAVY ARC LIGHTNING DISCHARGE ---
+func _synth_arc_lightning(duration: float) -> AudioStreamWAV:
+	var sample_rate = 22050
+	var total_samples = int(sample_rate * duration)
+	var byte_data = PackedByteArray()
+	byte_data.resize(total_samples * 2)
+
+	var phase1 = 0.0
+	var phase2 = 0.0
+
+	for i in range(total_samples):
+		var t = float(i) / float(total_samples)
+		
+		# Detuned saw breakdown
+		phase1 += (lerpf(420.0, 80.0, t) * TAU) / sample_rate
+		phase2 += (lerpf(395.0, 85.0, t) * TAU) / sample_rate
+		var saw = (fmod(phase1, TAU) / PI - 1.0) * 0.4 + (fmod(phase2, TAU) / PI - 1.0) * 0.4
+		
+		# Aggressive plasma crackle
+		var crackle = randf_range(-0.8, 0.8) * (1.0 - t)
+		var env = pow(1.0 - t, 1.6)
+		
+		var sample_val = clampf((saw * 0.6 + crackle * 0.7) * env * 1.5, -1.0, 1.0)
+		byte_data.encode_s16(i * 2, int(sample_val * 32767.0))
+
+	return _create_stream_from_bytes(byte_data, sample_rate)
+
+# --- 5. HEAVY SERVO POWER-AXE CLEAVE ---
+func _synth_heavy_cleave(duration: float) -> AudioStreamWAV:
+	var sample_rate = 22050
+	var total_samples = int(sample_rate * duration)
+	var byte_data = PackedByteArray()
+	byte_data.resize(total_samples * 2)
+
+	var servo_phase = 0.0
+	for i in range(total_samples):
+		var t = float(i) / float(total_samples)
+		
+		# Pitch-rising hydraulic servo whine
+		servo_phase += (lerpf(110.0, 340.0, t) * TAU) / sample_rate
+		var servo = sin(servo_phase) * 0.35 * sin(t * PI)
+		
+		# Heavy blade wind displacement
+		var whoosh = randf_range(-0.7, 0.7) * sin(t * PI) * 0.75
+		
+		var sample_val = clampf((servo + whoosh) * 1.3, -1.0, 1.0)
+		byte_data.encode_s16(i * 2, int(sample_val * 32767.0))
+
+	return _create_stream_from_bytes(byte_data, sample_rate)
+
+# --- 6. CRUNCHY KINETIC IMPACT ---
+func _synth_heavy_impact(duration: float) -> AudioStreamWAV:
 	var sample_rate = 22050
 	var total_samples = int(sample_rate * duration)
 	var byte_data = PackedByteArray()
@@ -219,50 +352,20 @@ func _synth_gunshot(duration: float) -> AudioStreamWAV:
 	var phase = 0.0
 	for i in range(total_samples):
 		var t = float(i) / float(total_samples)
-		phase += (lerpf(600.0, 120.0, t) * TAU) / sample_rate
-		var noise = randf_range(-1.0, 1.0)
-		var square = 1.0 if sin(phase) > 0.0 else -1.0
-		var sample_val = lerpf(square, noise, 0.4)
-		var envelope = pow(1.0 - t, 3.0)
-		var int16_val = int(clampf(sample_val * envelope * 32767.0, -32768.0, 32767.0))
-		byte_data.encode_s16(i * 2, int16_val)
+		
+		# Low bone/metal thud (140Hz -> 38Hz drop)
+		phase += (lerpf(160.0, 38.0, pow(t, 0.3)) * TAU) / sample_rate
+		var thud = sin(phase) * 0.9
+		var crunch = randf_range(-0.6, 0.6) * (1.0 - t * 3.5 if t < 0.28 else 0.0)
+		var env = pow(1.0 - t, 2.0)
+		
+		var sample_val = clampf((thud + crunch) * env * 1.5, -1.0, 1.0)
+		byte_data.encode_s16(i * 2, int(sample_val * 32767.0))
 
 	return _create_stream_from_bytes(byte_data, sample_rate)
 
-func _synth_whoosh(duration: float) -> AudioStreamWAV:
-	var sample_rate = 22050
-	var total_samples = int(sample_rate * duration)
-	var byte_data = PackedByteArray()
-	byte_data.resize(total_samples * 2)
-
-	for i in range(total_samples):
-		var t = float(i) / float(total_samples)
-		var noise = randf_range(-1.0, 1.0)
-		var envelope = sin(t * PI) * 0.8
-		var int16_val = int(clampf(noise * envelope * 32767.0, -32768.0, 32767.0))
-		byte_data.encode_s16(i * 2, int16_val)
-
-	return _create_stream_from_bytes(byte_data, sample_rate)
-
-func _synth_pneumatic_clank(duration: float) -> AudioStreamWAV:
-	var sample_rate = 22050
-	var total_samples = int(sample_rate * duration)
-	var byte_data = PackedByteArray()
-	byte_data.resize(total_samples * 2)
-
-	var phase = 0.0
-	for i in range(total_samples):
-		var t = float(i) / float(total_samples)
-		phase += (180.0 * TAU) / sample_rate
-		var tone = sin(phase) * 0.6
-		var hiss = randf_range(-0.5, 0.5) * (1.0 - t)
-		var sample_val = (tone + hiss) * (1.0 - t)
-		var int16_val = int(clampf(sample_val * 32767.0, -32768.0, 32767.0))
-		byte_data.encode_s16(i * 2, int16_val)
-
-	return _create_stream_from_bytes(byte_data, sample_rate)
-
-func _synth_heavy_explosion(duration: float) -> AudioStreamWAV:
+# --- 7. CATACLYSMIC ORBITAL / STIKKBOMB EXPLOSION ---
+func _synth_cataclysmic_explosion(duration: float) -> AudioStreamWAV:
 	var sample_rate = 22050
 	var total_samples = int(sample_rate * duration)
 	var byte_data = PackedByteArray()
@@ -271,17 +374,25 @@ func _synth_heavy_explosion(duration: float) -> AudioStreamWAV:
 	var sub_phase = 0.0
 	for i in range(total_samples):
 		var t = float(i) / float(total_samples)
-		sub_phase += (lerpf(90.0, 25.0, t) * TAU) / sample_rate
-		var sub_bass = sin(sub_phase) * 0.75
-		var rumble_noise = randf_range(-1.0, 1.0) * 0.5
-		var envelope = pow(1.0 - t, 1.5)
-		var sample_val = (sub_bass + rumble_noise) * envelope
-		var int16_val = int(clampf(sample_val * 32767.0, -32768.0, 32767.0))
-		byte_data.encode_s16(i * 2, int16_val)
+		
+		# Devastating sub-bass drop (85Hz -> 24Hz)
+		sub_phase += (lerpf(88.0, 24.0, pow(t, 0.3)) * TAU) / sample_rate
+		var sub_bass = sin(sub_phase) * 0.95
+		
+		# Distorted blast shockwave noise
+		var rumble = randf_range(-1.0, 1.0) * pow(1.0 - t, 1.3) * 0.7
+		var initial_crack = randf_range(-1.0, 1.0) * (1.0 - t * 10.0 if t < 0.10 else 0.0)
+		
+		var env = pow(1.0 - t, 1.2)
+		var raw = (sub_bass + rumble + initial_crack) * env * 1.6
+		var sample_val = clampf(raw - (raw * raw * raw) * 0.12, -1.0, 1.0)
+		
+		byte_data.encode_s16(i * 2, int(sample_val * 32767.0))
 
 	return _create_stream_from_bytes(byte_data, sample_rate)
 
-func _synth_impact(duration: float) -> AudioStreamWAV:
+# --- 8. PNEUMATIC CONSTRUCTION CLAMP ---
+func _synth_pneumatic_clamp(duration: float) -> AudioStreamWAV:
 	var sample_rate = 22050
 	var total_samples = int(sample_rate * duration)
 	var byte_data = PackedByteArray()
@@ -290,29 +401,78 @@ func _synth_impact(duration: float) -> AudioStreamWAV:
 	var phase = 0.0
 	for i in range(total_samples):
 		var t = float(i) / float(total_samples)
-		phase += (lerpf(280.0, 60.0, t) * TAU) / sample_rate
-		var thud = sin(phase) * 0.8
-		var click = randf_range(-0.4, 0.4) * (1.0 - t * 4.0 if t < 0.25 else 0.0)
-		var sample_val = (thud + click) * (1.0 - t)
-		var int16_val = int(clampf(sample_val * 32767.0, -32768.0, 32767.0))
-		byte_data.encode_s16(i * 2, int16_val)
+		
+		# Hydraulic locking ring tone
+		phase += (140.0 * TAU) / sample_rate
+		var tone = sin(phase) * 0.5 * pow(1.0 - t, 3.0)
+		var hiss = randf_range(-0.55, 0.55) * (1.0 - t) * (1.0 - t)
+		
+		var sample_val = clampf((tone + hiss) * 1.3, -1.0, 1.0)
+		byte_data.encode_s16(i * 2, int(sample_val * 32767.0))
 
 	return _create_stream_from_bytes(byte_data, sample_rate)
 
-func _synth_chime(frequencies: Array, duration: float) -> AudioStreamWAV:
+# --- 9. MOTORIZED BLAST GATE ---
+func _synth_blast_gate(duration: float) -> AudioStreamWAV:
 	var sample_rate = 22050
 	var total_samples = int(sample_rate * duration)
 	var byte_data = PackedByteArray()
 	byte_data.resize(total_samples * 2)
 
+	var phase = 0.0
 	for i in range(total_samples):
 		var t = float(i) / float(total_samples)
-		var sample_val = 0.0
-		for freq in frequencies:
-			sample_val += sin((freq * TAU * float(i)) / sample_rate)
-		sample_val = (sample_val / float(frequencies.size())) * (1.0 - t)
-		var int16_val = int(clampf(sample_val * 32767.0, -32768.0, 32767.0))
-		byte_data.encode_s16(i * 2, int16_val)
+		
+		phase += (lerpf(220.0, 90.0, t) * TAU) / sample_rate
+		var motor = (1.0 if sin(phase) > 0.0 else -1.0) * 0.4
+		var air_release = randf_range(-0.4, 0.4) * (1.0 - t)
+		
+		var sample_val = clampf((motor + air_release) * (1.0 - t * 0.5), -1.0, 1.0)
+		byte_data.encode_s16(i * 2, int(sample_val * 32767.0))
+
+	return _create_stream_from_bytes(byte_data, sample_rate)
+
+# --- 10. SOLID BRASS COG CLINK ---
+func _synth_brass_cog_clink(duration: float) -> AudioStreamWAV:
+	var sample_rate = 22050
+	var total_samples = int(sample_rate * duration)
+	var byte_data = PackedByteArray()
+	byte_data.resize(total_samples * 2)
+
+	var p1 = 0.0; var p2 = 0.0
+	for i in range(total_samples):
+		var t = float(i) / float(total_samples)
+		
+		# Dual high-frequency resonant gear chime (1480Hz & 2240Hz)
+		p1 += (1480.0 * TAU) / sample_rate
+		p2 += (2240.0 * TAU) / sample_rate
+		var ring = (sin(p1) * 0.5 + sin(p2) * 0.5) * pow(1.0 - t, 2.5)
+		var mechanical_click = randf_range(-0.4, 0.4) * (1.0 - t * 8.0 if t < 0.12 else 0.0)
+		
+		var sample_val = clampf((ring + mechanical_click) * 1.2, -1.0, 1.0)
+		byte_data.encode_s16(i * 2, int(sample_val * 32767.0))
+
+	return _create_stream_from_bytes(byte_data, sample_rate)
+
+# --- 11. AUSPEX THREAT WAR-HORN KLAXON ---
+func _synth_vox_klaxon(duration: float) -> AudioStreamWAV:
+	var sample_rate = 22050
+	var total_samples = int(sample_rate * duration)
+	var byte_data = PackedByteArray()
+	byte_data.resize(total_samples * 2)
+
+	var p1 = 0.0; var p2 = 0.0
+	for i in range(total_samples):
+		var t = float(i) / float(total_samples)
+		
+		# Dissonant dual brass horn tones (110Hz & 117Hz) creating menacing warble
+		p1 += (110.0 * TAU) / sample_rate
+		p2 += (117.0 * TAU) / sample_rate
+		var horn = ((1.0 if sin(p1) > 0.0 else -1.0) * 0.45 + (1.0 if sin(p2) > 0.0 else -1.0) * 0.45)
+		var env = sin(t * PI) * (0.8 + sin(t * TAU * 4.0) * 0.2)
+		
+		var sample_val = clampf(horn * env * 1.3, -1.0, 1.0)
+		byte_data.encode_s16(i * 2, int(sample_val * 32767.0))
 
 	return _create_stream_from_bytes(byte_data, sample_rate)
 
@@ -332,8 +492,8 @@ func _create_audio_pool():
 	for i in range(POOL_SIZE):
 		var p = AudioStreamPlayer2D.new()
 		p.name = "AudioPoolPlayer_" + str(i)
-		p.bus = "SFX" # Routed to SFX bus!
-		p.max_distance = 1200.0
+		p.bus = "SFX"
+		p.max_distance = 1400.0
 		add_child(p)
 		player_pool.append(p)
 
@@ -345,6 +505,6 @@ func play_sfx(sfx_name: String, world_pos: Vector2 = Vector2.ZERO, volume_db: fl
 			p.stream = sfx_library[sfx_name]
 			p.global_position = world_pos
 			p.volume_db = volume_db
-			p.pitch_scale = pitch_scale * randf_range(0.94, 1.06)
+			p.pitch_scale = pitch_scale * randf_range(0.95, 1.05)
 			p.play()
 			return

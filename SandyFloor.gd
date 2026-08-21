@@ -86,7 +86,7 @@ func _gather_active_structures() -> Array[Dictionary]:
 				"node": b,
 				"local_pos": to_local(b.global_position),
 				"is_base": true,
-				"radius": 192.0,
+				"radius": 256.0, # Expanded from 192px -> 256px for a spacious starting courtyard!
 				"visual_radius": 44.0,
 				"type": -1
 			})

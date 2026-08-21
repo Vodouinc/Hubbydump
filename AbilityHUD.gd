@@ -27,10 +27,18 @@ func _ready():
 	_setup_slot_containers()
 
 func _setup_slot_containers():
+	set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	if is_instance_valid(ability_container):
+		ability_container.alignment = BoxContainer.ALIGNMENT_CENTER
+		ability_container.add_theme_constant_override("separation", 10)
+		ability_container.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+
 	var slots = [slot1_panel, slot2_panel, slot3_panel, slot4_panel, slot5_panel, slot6_panel]
 	for slot in slots:
 		if slot is PanelContainer or slot is Panel:
-			slot.custom_minimum_size = Vector2(105, 68)
+			slot.custom_minimum_size = Vector2(105, 66)
 
 func _process(delta):
 	if not is_instance_valid(local_player):
@@ -157,24 +165,17 @@ func refresh_hud_display():
 			var info = GameData.STRUCTURE_INFO[GameData.StructureType.TURRET]
 			_format_slot(slot4_panel, "4", info.name, info.scrap, info.req, current_scrap, current_req, is_building and selected_type == 2)
 
-		# Slot 5: Research Shrine [5]
+		# Slot 5: Scrap Foundry [5]
 		if slot5_panel:
 			slot5_panel.show()
-			var info = GameData.STRUCTURE_INFO[GameData.StructureType.RESEARCH_SHRINE]
-			_format_slot(slot5_panel, "5", info.name, info.scrap, info.req, current_scrap, current_req, is_building and selected_type == 6)
+			var info = GameData.STRUCTURE_INFO[GameData.StructureType.MANUFACTORUM]
+			_format_slot(slot5_panel, "5", info.name, info.scrap, info.req, current_scrap, current_req, is_building and selected_type == 3)
 
-		# Slot 6: Servo-Skull [K]
+		# Slot 6: Tech Shrine [6]
 		if slot6_panel:
 			slot6_panel.show()
-			var max_skulls = GameData.MAX_SERVO_SKULLS
-			var current_skulls = 0
-			if "active_servo_skulls" in local_player:
-				local_player.active_servo_skulls = local_player.active_servo_skulls.filter(func(s): return is_instance_valid(s))
-				current_skulls = local_player.active_servo_skulls.size()
-
-			var is_maxed = (current_skulls >= max_skulls)
-			var skull_name = "Servo-Skull (" + str(current_skulls) + "/" + str(max_skulls) + ")"
-			_format_slot(slot6_panel, "K", skull_name, GameData.SERVO_SKULL_SCRAP_COST, GameData.SERVO_SKULL_REQ_COST, current_scrap, current_req, false, is_maxed)
+			var info = GameData.STRUCTURE_INFO[GameData.StructureType.RESEARCH_SHRINE]
+			_format_slot(slot6_panel, "6", info.name, info.scrap, info.req, current_scrap, current_req, is_building and selected_type == 6)
 
 	# --- SKITARII MARSHAL (RANGED COMMANDER) ---
 	else:

@@ -11,7 +11,9 @@ var raid_dispatch_timer: float = 16.0
 var glow_layer: Node2D = null
 
 func _ready() -> void:
+	add_to_group("enemies")
 	add_to_group("objectives")
+	add_to_group("waaagh_totems") # <-- Add this line
 	current_health = max_health
 	_setup_glow_layer()
 	queue_redraw()

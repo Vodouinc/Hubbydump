@@ -21,6 +21,8 @@ var base_node: Node2D = null
 var is_objective_guard: bool = false
 var guard_anchor: Vector2 = Vector2.ZERO
 var counts_toward_wave: bool = true
+var stuck_check_timer: float = 0.0
+var last_stuck_pos: Vector2 = Vector2.ZERO
 
 # AI Navigation & Flocking State
 var aggro_scan_timer: float = 0.0
@@ -260,15 +262,33 @@ func _physics_process(delta: float) -> void:
 
 	velocity = move_dir * current_speed
 
+	# Move and slide with friendly obstacle deflection
 	if move_and_slide():
 		for i in range(get_slide_collision_count()):
 			var collision = get_slide_collision(i)
 			var collider = collision.get_collider()
 			if is_instance_valid(collider):
+				# 1. Attack hostile structures or players
 				if collider.has_method("take_damage") and not collider.is_in_group("enemies"):
 					velocity = Vector2.ZERO
 					perform_attack(collider)
 					return
+				
+				# 2. If bumping into a friendly Ork structure, slide smoothly around it
+				elif collider.is_in_group("enemies") or collider.is_in_group("ork_citadel") or collider.is_in_group("ork_structures"):
+					var slide_dir = move_dir.slide(collision.get_normal()).normalized()
+					velocity = slide_dir * current_speed
+
+	# 3. Anti-Stuck Watchdog: If an enemy is trapped in place for 2.5s, nudge it forward
+	stuck_check_timer += delta
+	if stuck_check_timer >= 2.5:
+		stuck_check_timer = 0.0
+		if is_instance_valid(base_node) and not is_objective_guard:
+			if global_position.distance_to(last_stuck_pos) < 12.0 and not is_jumping_or_lunging and attack_cooldown_timer <= 0.0:
+				var push_dir = (base_node.global_position - global_position).normalized()
+				var side_nudge = push_dir.orthogonal() * (24.0 if (get_instance_id() % 2 == 0) else -24.0)
+				global_position += (push_dir * 18.0) + side_nudge
+		last_stuck_pos = global_position
 
 # ==============================================================================
 # MOB RULE, BERSERK & GRETCHIN THIEVERY

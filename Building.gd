@@ -99,7 +99,7 @@ func _process(delta: float):
 		noosphere_check_timer = 0.0
 		_update_noosphere_connection()
 
-# Host/Server Scrap Foundry Mining Loop
+	# Host/Server Scrap Foundry Mining Loop
 	if ((not multiplayer.has_multiplayer_peer()) or multiplayer.is_server()) and building_type == Type.MANUFACTORUM:
 		foundry_timer += delta
 		if foundry_timer >= FOUNDRY_INTERVAL:
@@ -128,7 +128,6 @@ func _produce_foundry_scrap():
 func trigger_foundry_smoke_fx():
 	AudioManager.play_sfx("building_place", global_position, -6.0, 1.6)
 	
-	# Floating resource popup above the foundry
 	var label = Label.new()
 	label.script = load("res://DamageNumber.gd")
 	label.global_position = global_position + Vector2(-15, -34)
@@ -443,7 +442,6 @@ func _apply_type_setup():
 
 	if is_instance_valid(visual_spriteNode):
 		if "type" in visual_spriteNode:
-			# Shift building_type index by +1 since VisualBuildingSprite includes MAIN_BASE at 0
 			visual_spriteNode.type = int(building_type) + 1
 		visual_spriteNode.queue_redraw()
 
@@ -454,16 +452,16 @@ func _apply_type_setup():
 				collision_shape.shape.radius = 7.0
 			Type.BARRICADE:
 				if not (collision_shape.shape is CircleShape2D): collision_shape.shape = CircleShape2D.new()
-				collision_shape.shape.radius = 12.0
+				collision_shape.shape.radius = 8.0
 			Type.TURRET:
 				if not (collision_shape.shape is CircleShape2D): collision_shape.shape = CircleShape2D.new()
-				collision_shape.shape.radius = 14.0 # Allows tight walkways around turrets
+				collision_shape.shape.radius = 12.0
 			Type.GENERATOR:
 				if not (collision_shape.shape is RectangleShape2D): collision_shape.shape = RectangleShape2D.new()
-				collision_shape.shape.size = Vector2(38, 38) # Slimmed down from 56x56
+				collision_shape.shape.size = Vector2(32, 32)
 			Type.MANUFACTORUM, Type.RESEARCH_SHRINE:
 				if not (collision_shape.shape is RectangleShape2D): collision_shape.shape = RectangleShape2D.new()
-				collision_shape.shape.size = Vector2(46, 46) # Slimmed down from 88x88
+				collision_shape.shape.size = Vector2(40, 40)
 
 	if not multiplayer.is_server(): return
 
@@ -499,7 +497,6 @@ func _process_turret_logic(delta: float):
 			cached_target_enemy = _find_closest_enemy()
 
 	if is_instance_valid(cached_target_enemy):
-		# 1. Predictive Ballistic Lead (aims where the enemy is heading)
 		var enemy_vel = cached_target_enemy.velocity if "velocity" in cached_target_enemy else Vector2.ZERO
 		var dist = global_position.distance_to(cached_target_enemy.global_position)
 		var bullet_speed = 550.0
@@ -507,10 +504,9 @@ func _process_turret_logic(delta: float):
 		var predicted_pos = cached_target_enemy.global_position + (enemy_vel * lead_time)
 
 		var target_angle = (predicted_pos - global_position).angle()
-		var track_speed = 6.5 if is_noosphere_connected else 5.0 # Noosphere tracking buff
+		var track_speed = 6.5 if is_noosphere_connected else 5.0
 		current_turret_rotation = lerp_angle(current_turret_rotation, target_angle, track_speed * delta)
 	else:
-		# Idle radar sweep
 		var base_center = Vector2.ZERO
 		var core_node = get_tree().get_first_node_in_group("base")
 		if core_node: base_center = core_node.global_position
@@ -519,7 +515,6 @@ func _process_turret_logic(delta: float):
 		var sweep = sin(Time.get_ticks_msec() * 0.0015) * 0.8
 		current_turret_rotation = lerp_angle(current_turret_rotation, outward_dir.angle() + sweep, 2.0 * delta)
 
-	# 2. Throttled Network Sync (saves bandwidth)
 	turret_rot_sync_timer += delta
 	if turret_rot_sync_timer >= 0.06:
 		turret_rot_sync_timer = 0.0
@@ -561,7 +556,6 @@ func _on_turret_timer_timeout():
 		var predicted_pos = cached_target_enemy.global_position + (enemy_vel * lead_time)
 		var target_angle = (predicted_pos - global_position).angle()
 
-		# Bore alignment check
 		var angle_diff = abs(angle_difference(current_turret_rotation, target_angle))
 		if angle_diff <= deg_to_rad(14.0):
 			var dir = Vector2.RIGHT.rotated(current_turret_rotation)
@@ -570,7 +564,6 @@ func _on_turret_timer_timeout():
 
 			match turret_spec:
 				GameData.TurretSpec.NONE:
-					# Standard Rapid Anti-Chaff Dual Stubber
 					main_node.spawner.spawn({
 						"type": "bullet",
 						"name": "TurretBullet_" + str(randi()),
@@ -581,7 +574,6 @@ func _on_turret_timer_timeout():
 					AudioManager.play_sfx("laser", global_position, -4.0)
 
 				GameData.TurretSpec.COGNIS_FLAK:
-					# Hyper-RPM Gatling Alternating Tracer
 					flak_barrel_toggle = not flak_barrel_toggle
 					var offset = dir.orthogonal() * (4.5 if flak_barrel_toggle else -4.5)
 					var spread_dir = dir.rotated(randf_range(-0.06, 0.06))
@@ -595,13 +587,11 @@ func _on_turret_timer_timeout():
 					AudioManager.play_sfx("radium_shot", global_position, -2.0, 1.4)
 
 				GameData.TurretSpec.VOLKITE_CULVERIN:
-					# Piercing Thermal Ray (penetrates lines of enemies)
 					var ray_end = global_position + (dir * 380.0)
 					rpc("trigger_volkite_ray_fx", ray_end)
 					_execute_volkite_piercing_ray(global_position, ray_end)
 
 				GameData.TurretSpec.ARC_BLASTER:
-					# Chain Lightning Arc
 					_execute_arc_chain_lightning(cached_target_enemy)
 
 func _execute_volkite_piercing_ray(start_pos: Vector2, end_pos: Vector2):
@@ -628,7 +618,6 @@ func _execute_arc_chain_lightning(primary_target: Node2D):
 	if primary_target.has_method("take_damage"):
 		primary_target.take_damage(GameData.TURRET_SPEC_INFO[GameData.TurretSpec.ARC_BLASTER].damage)
 
-	# Find up to 2 chained secondary enemies within 130px
 	var enemies = get_tree().get_nodes_in_group("enemies")
 	var chained_count = 0
 	for e in enemies:
@@ -659,7 +648,6 @@ func trigger_arc_lightning_fx(points: Array):
 		visual_spriteNode.queue_redraw()
 
 func refresh_barricade_connections():
-	# Call global solver to rebuild the entire barricade network cleanly
 	rebuild_all_barricade_connections(get_tree())
 
 static func rebuild_all_barricade_connections(tree: SceneTree) -> void:
@@ -670,11 +658,9 @@ static func rebuild_all_barricade_connections(tree: SceneTree) -> void:
 		if is_instance_valid(b) and not b.get("is_preview") and int(b.get("building_type")) == int(Type.BARRICADE):
 			all_barricades.append(b)
 
-	# 1. Reset all neighbor lists
 	for b in all_barricades:
 		b.connected_neighbor_ids.clear()
 
-	# 2. Collect all candidate pairs within WALL_LINK_RANGE (95px)
 	var candidates: Array[Dictionary] = []
 	for i in range(all_barricades.size()):
 		for j in range(i + 1, all_barricades.size()):
@@ -684,10 +670,8 @@ static func rebuild_all_barricade_connections(tree: SceneTree) -> void:
 			if dist <= WALL_LINK_RANGE and dist > 5.0:
 				candidates.append({"b1": b1, "b2": b2, "dist": dist})
 
-	# 3. Sort by shortest distance first
 	candidates.sort_custom(func(a, b): return a.dist < b.dist)
 
-	# 4. Degree-constrained matching: Max 2 connections per post (No side-spurs!)
 	var degree: Dictionary = {}
 	for b in all_barricades:
 		degree[b.get_instance_id()] = 0
@@ -698,13 +682,11 @@ static func rebuild_all_barricade_connections(tree: SceneTree) -> void:
 		var id1 = edge.b1.get_instance_id()
 		var id2 = edge.b2.get_instance_id()
 
-		# Only connect if BOTH posts have fewer than 2 connections!
 		if degree[id1] < 2 and degree[id2] < 2:
 			var p1 = edge.b1.global_position
 			var p2 = edge.b2.global_position
 			var crosses = false
 
-			# Reject edges that physically cross an already established wall
 			for existing in valid_edges:
 				var eid1 = existing.b1.get_instance_id()
 				var eid2 = existing.b2.get_instance_id()
@@ -721,7 +703,6 @@ static func rebuild_all_barricade_connections(tree: SceneTree) -> void:
 				edge.b1.connected_neighbor_ids.append(id2)
 				edge.b2.connected_neighbor_ids.append(id1)
 
-	# 5. Apply clean visuals and physics colliders
 	for b in all_barricades:
 		var offsets: Array[Vector2] = []
 		var neighbor_nodes: Array[Node2D] = []

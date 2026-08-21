@@ -35,7 +35,7 @@ var shield_ratio: float = 0.0
 
 var ghost_lag_timer: float = 0.0
 var visibility_timer: float = 0.0
-var current_alpha: float = 1.0
+var current_alpha: float = 0.0
 
 func _ready() -> void:
 	z_index = 10
@@ -65,14 +65,22 @@ func _process(delta: float) -> void:
 		else:
 			ghost_ratio = primary_ratio
 
+	# --- AUTO-HIDE SMOOTH FADE SYSTEM ---
 	if not Engine.is_editor_hint() and not always_visible:
 		if auto_hide_when_full:
-			var target_alpha = 1.0
-			if target_ratio >= 0.999 and shield_ratio >= 0.999 and visibility_timer <= 0.0:
-				target_alpha = 0.0
-			elif visibility_timer > 0.0:
+			var is_hp_full = (target_ratio >= 0.999)
+			# If max_shield is 0, consider shield full. If max_shield > 0, check shield_ratio >= 0.999
+			var is_shield_full = (max_shield <= 0.0 or shield_ratio >= 0.999)
+
+			var target_alpha = 0.0
+
+			if visibility_timer > 0.0:
 				visibility_timer -= delta
 				target_alpha = 1.0
+			elif not is_hp_full or not is_shield_full:
+				target_alpha = 1.0
+			else:
+				target_alpha = 0.0
 
 			if abs(current_alpha - target_alpha) > 0.01:
 				current_alpha = lerpf(current_alpha, target_alpha, clampf(delta * 8.0, 0.0, 1.0))
@@ -92,15 +100,24 @@ func setup(current_val: int, max_val: int) -> void:
 	target_ratio = current_hp / max_hp
 	primary_ratio = target_ratio
 	ghost_ratio = target_ratio
+	visibility_timer = 0.0
+	
+	if auto_hide_when_full and not always_visible and not Engine.is_editor_hint():
+		current_alpha = 0.0
+		modulate.a = 0.0
+		
 	queue_redraw()
 
 func update_health(current_val: int, max_val: int = -1) -> void:
 	if max_val > 0: max_hp = float(max_val)
 	current_hp = clampf(float(current_val), 0.0, max_hp)
 	var new_ratio = current_hp / max_hp
+	
+	# Only wake up visibility timer if damage was taken (health decreased)
 	if new_ratio < target_ratio:
 		ghost_lag_timer = 0.28
 		visibility_timer = 4.0
+		
 	target_ratio = new_ratio
 	queue_redraw()
 
@@ -108,7 +125,10 @@ func update_shield(current_val: int, max_val: int) -> void:
 	max_shield = float(max_val)
 	current_shield = float(current_val)
 	shield_ratio = (current_shield / max_shield) if max_shield > 0.0 else 0.0
-	if shield_ratio < 0.99: visibility_timer = 4.0
+	
+	if max_shield > 0.0 and shield_ratio < 0.999:
+		visibility_timer = 4.0
+		
 	queue_redraw()
 
 func _draw() -> void:
@@ -119,7 +139,7 @@ func _draw() -> void:
 	# 1. Background Plate
 	draw_rect(bar_rect, bg_color)
 
-	# 2. Ghost Bar
+	# 2. Ghost Bar (White damage trail)
 	if ghost_ratio > 0.001:
 		draw_rect(Rect2(-half_w, -half_h, bar_size.x * clampf(ghost_ratio, 0.0, 1.0), bar_size.y), color_ghost)
 
@@ -132,7 +152,7 @@ func _draw() -> void:
 	# 4. Metallic Border
 	draw_rect(Rect2(-half_w - 1, -half_h - 1, bar_size.x + 2, bar_size.y + 2), border_color, false, 1.0)
 
-	# 5. Aegis Refractor Blue Shield Bar (Stacked 3px above health bar)
+	# 5. Aegis Refractor Shield Bar (Stacked above health bar if shields exist)
 	if max_shield > 0.0 and shield_ratio > 0.001:
 		var shield_y = -half_h - 4.5
 		var shield_w = bar_size.x * clampf(shield_ratio, 0.0, 1.0)

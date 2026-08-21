@@ -158,6 +158,10 @@ func _process(delta: float) -> void:
 		if flash_timer <= 0.0 and visual_sprite:
 			visual_sprite.modulate = Color.WHITE
 
+	# Update 2.5D visual facing from velocity
+	if visual_sprite and visual_sprite.has_method("update_facing"):
+		visual_sprite.update_facing(velocity)
+
 func _physics_process(delta: float) -> void:
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
 		return

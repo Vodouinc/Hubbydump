@@ -160,6 +160,7 @@ const WAVE_PREP_DURATION: float = 8.0
 const WAVE_BREAK_DURATION: float = 14.0
 
 func _ready():
+	process_mode = Node.PROCESS_MODE_ALWAYS # <-- Add this line
 	add_to_group("main")
 	if hud_root:
 		hud_root.theme = AdmechTheme.make()

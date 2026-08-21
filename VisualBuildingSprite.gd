@@ -1,3 +1,4 @@
+@tool
 extends Node2D
 
 enum BuildingType { MAIN_BASE, BARRICADE, GENERATOR, TURRET, MANUFACTORUM, DISTRIBUTOR, NOOSPHERE_ANTENNA, RESEARCH_SHRINE }
@@ -26,6 +27,22 @@ var arc_beam_timer: float = 0.0
 var has_spikes: bool = false
 var has_electro_mesh: bool = false
 
+# --- GRIMDARK 40K PALETTE ---
+const C_OUTLINE     := Color(0.04, 0.05, 0.07)
+const C_STEEL_DARK  := Color(0.12, 0.14, 0.18) # Soot cast-iron
+const C_STEEL_MID   := Color(0.24, 0.28, 0.35) # Armor plating
+const C_STEEL_LIGHT := Color(0.42, 0.48, 0.56) # Bevel steel
+const C_MARS_DARK   := Color(0.28, 0.05, 0.05) # Shaded red
+const C_MARS_RED    := Color(0.68, 0.16, 0.14) # Martian crimson
+const C_MARS_LIGHT  := Color(0.85, 0.25, 0.20) # Highlight red
+const C_BRASS_DARK  := Color(0.40, 0.28, 0.10) # Antique bronze
+const C_BRASS       := Color(0.82, 0.62, 0.24) # Sanctified brass
+const C_BRASS_LIGHT := Color(0.96, 0.82, 0.45) # Polished trim
+const C_COPPER      := Color(0.82, 0.44, 0.18) # Thermal copper
+const C_CYAN        := Color(0.20, 0.88, 1.00) # Omnissian plasma
+const C_AMBER       := Color(1.00, 0.70, 0.15) # Molten crucible fire
+const C_RUNE_GREEN  := Color(0.25, 0.95, 0.40) # Cogitator machine code
+
 func _ready() -> void:
 	_setup_building_glow_layer()
 	queue_redraw()
@@ -39,16 +56,13 @@ func _process(delta: float) -> void:
 
 	if volkite_beam_timer > 0.0:
 		volkite_beam_timer -= delta
-		queue_redraw()
+		needs_redraw = true
 	if arc_beam_timer > 0.0:
 		arc_beam_timer -= delta
-		queue_redraw()
-
-	if type == BuildingType.GENERATOR or type == BuildingType.MAIN_BASE or is_instance_valid(laser_target_node):
-		idle_timer += delta
 		needs_redraw = true
-	elif is_gate and not is_gate_open:
-		idle_timer += delta
+
+	idle_timer += delta
+	if type in [BuildingType.GENERATOR, BuildingType.MAIN_BASE, BuildingType.MANUFACTORUM, BuildingType.TURRET] or is_instance_valid(laser_target_node) or (is_gate and not is_gate_open):
 		needs_redraw = true
 		
 	if is_instance_valid(glow_layer):
@@ -74,485 +88,369 @@ func pulse_generator():
 	queue_redraw()
 
 func _draw():
-	if is_noosphere_connected and type != BuildingType.BARRICADE and type != BuildingType.MAIN_BASE:
-		var aura_pulse = 0.25 + sin(idle_timer * 3.0) * 0.1
-		draw_arc(Vector2.ZERO, 32.0, 0, TAU, 20, Color(0.20, 0.88, 1.0, aura_pulse), 1.2)
-
 	match type:
-		BuildingType.MAIN_BASE: _draw_main_base()
-		BuildingType.BARRICADE: _draw_barricade()
-		BuildingType.GENERATOR: _draw_generator()
-		BuildingType.TURRET: _draw_turret()
-		BuildingType.MANUFACTORUM: _draw_manufactorum()
-		BuildingType.DISTRIBUTOR: _draw_distributor()
+		BuildingType.MAIN_BASE:         _draw_main_base()
+		BuildingType.BARRICADE:         _draw_barricade()
+		BuildingType.GENERATOR:         _draw_generator()
+		BuildingType.TURRET:            _draw_turret()
+		BuildingType.MANUFACTORUM:      _draw_manufactorum()
+		BuildingType.DISTRIBUTOR:       _draw_distributor()
 		BuildingType.NOOSPHERE_ANTENNA: _draw_antenna()
-		BuildingType.RESEARCH_SHRINE: _draw_research_shrine()
+		BuildingType.RESEARCH_SHRINE:   _draw_research_shrine()
 
-	# Cognis Laser Tracer
+	# Laser Tracer
 	if is_instance_valid(laser_target_node):
 		var local_target = to_local(laser_target_node.global_position)
-		draw_line(Vector2.ZERO, local_target, Color(0.15, 0.90, 1.0, 0.45), 4.0)
-		draw_line(Vector2.ZERO, local_target, Color(0.85, 0.98, 1.0, 0.95), 1.5)
+		draw_line(Vector2(0, -10), local_target, Color(0.15, 0.90, 1.0, 0.45), 4.0)
+		draw_line(Vector2(0, -10), local_target, Color(0.85, 0.98, 1.0, 0.95), 1.5)
 		draw_circle(local_target, 4.0, Color(0.20, 0.88, 1.0, 0.8))
 
+# ==============================================================================
+# 1. FORGE-TEMPLE SANCTUM (CENTRAL CATHEDRAL SMELTER BASTION)
+# ==============================================================================
 func _draw_main_base():
-	# --- GRIMDARK FORGEWORLD PALETTE ---
-	var adamantium_black = Color(0.05, 0.06, 0.08)
-	var weathered_iron = Color(0.14, 0.16, 0.20)
-	var gunmetal_edge = Color(0.30, 0.34, 0.40)
-	var martian_crimson_dark = Color(0.18, 0.03, 0.03)
-	var martian_crimson = Color(0.42, 0.07, 0.06)
-	var antique_brass = Color(0.62, 0.46, 0.18)
-	var tarnished_bronze = Color(0.38, 0.26, 0.10)
-	var reliquary_ivory = Color(0.66, 0.62, 0.52)
-	var deep_plasma = Color(0.12, 0.60, 0.74, 0.85)
-	var plasma_focal = Color(0.70, 0.92, 0.98)
-	var furnace_amber = Color(0.85, 0.50, 0.10, 0.85)
-
-	# --- 1. HEAVY SOOT-STAINED ADAMANTIUM FOUNDATION ---
-	var base_poly = PackedVector2Array([
-		Vector2(-48, -20), Vector2(-20, -48), Vector2(20, -48), Vector2(48, -20),
-		Vector2(48, 20), Vector2(20, 48), Vector2(-20, 48), Vector2(-48, 20)
-	])
-	draw_colored_polygon(base_poly, adamantium_black)
-	var closed_base = base_poly.duplicate(); closed_base.append(base_poly[0])
-	draw_polyline(closed_base, tarnished_bronze, 2.5)
-	draw_polyline(closed_base, gunmetal_edge, 1.0)
-
-	# --- 2. FOUR CORNER BASTION BUTTRESSES ---
-	var corner_offsets = [Vector2(-32, -32), Vector2(32, -32), Vector2(-32, 32), Vector2(32, 32)]
-	for c in corner_offsets:
-		draw_rect(Rect2(c - Vector2(8, 8), Vector2(16, 16)), adamantium_black)
-		draw_rect(Rect2(c - Vector2(6, 6), Vector2(12, 12)), weathered_iron)
-		draw_rect(Rect2(c - Vector2(6, 6), Vector2(12, 12)), tarnished_bronze, false, 1.2)
-		
-		# Grated pressure thurible vent (smoldering amber)
-		draw_circle(c, 3.2, adamantium_black)
-		draw_circle(c, 1.6, furnace_amber)
-		
-		# Iron rivets
-		draw_circle(c + Vector2(-4, -4), 0.9, gunmetal_edge)
-		draw_circle(c + Vector2(4, -4), 0.9, gunmetal_edge)
-		draw_circle(c + Vector2(-4, 4), 0.9, gunmetal_edge)
-		draw_circle(c + Vector2(4, 4), 0.9, gunmetal_edge)
-
-	# --- 3. OXIDIZED MARTIAN CRIMSON ENAMELED BASTION ---
-	draw_rect(Rect2(-35, -25, 70, 50), martian_crimson_dark)
-	draw_rect(Rect2(-25, -35, 50, 70), martian_crimson_dark)
-	draw_rect(Rect2(-33, -23, 66, 46), martian_crimson)
-	draw_rect(Rect2(-23, -33, 46, 66), martian_crimson)
-	draw_rect(Rect2(-33, -23, 66, 46), antique_brass, false, 1.5)
-	draw_rect(Rect2(-23, -33, 46, 66), antique_brass, false, 1.5)
-
-	# Recessed maintenance grilles
-	for wing in [Vector2(-27, 0), Vector2(27, 0), Vector2(0, -27), Vector2(0, 27)]:
-		draw_rect(Rect2(wing - Vector2(4, 3), Vector2(8, 6)), adamantium_black)
-		draw_rect(Rect2(wing - Vector2(4, 3), Vector2(8, 6)), tarnished_bronze, false, 1.0)
-		draw_line(wing - Vector2(3, 0), wing + Vector2(3, 0), gunmetal_edge, 1.0)
-
-	# --- 4. OPUS MACHINA (TARNISHED BRASS TOOTHED COG) ---
-	var cog_radius = 20.0
-	var tooth_count = 12
-	for i in range(tooth_count):
-		var angle = (float(i) / float(tooth_count)) * TAU
-		var tooth_dir = Vector2.RIGHT.rotated(angle)
-		var tooth_pos = tooth_dir * cog_radius
-		draw_set_transform(tooth_pos, angle, Vector2.ONE)
-		draw_rect(Rect2(-2.0, -2.0, 4.0, 4.0), antique_brass)
+	# Ground Contact Drop Shadow
+	draw_set_transform(Vector2.ZERO, 0, Vector2(1.0, 0.50))
+	draw_circle(Vector2(0, 4), 48.0, Color(0.02, 0.02, 0.04, 0.55))
 	draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
 
-	# Gear body
-	draw_circle(Vector2.ZERO, cog_radius, adamantium_black)
-	draw_circle(Vector2.ZERO, cog_radius, antique_brass, false, 1.8)
-	draw_circle(Vector2.ZERO, cog_radius - 2.5, weathered_iron)
+	# Tier 1: Octagonal Fortified Foundry Plinth
+	IsoDraw.box(self, Vector3(-28, -28, 0), Vector3(56, 56, 8), C_STEEL_DARK)
 
-	# Split-skull inner disc (Half Reliquary Bone / Half Black Iron)
-	var left_semi = PackedVector2Array()
-	var right_semi = PackedVector2Array()
-	for i in range(17):
-		var a = -PI/2 + (i * PI / 16.0)
-		left_semi.append(Vector2(cos(a + PI), sin(a + PI)) * (cog_radius - 4.5))
-		right_semi.append(Vector2(cos(a), sin(a)) * (cog_radius - 4.5))
-	draw_colored_polygon(left_semi, reliquary_ivory)
-	draw_colored_polygon(right_semi, adamantium_black)
-	draw_arc(Vector2.ZERO, cog_radius - 4.5, 0, TAU, 20, tarnished_bronze, 1.0)
+	# 4 Corner Incense Thurible Bastion Towers
+	for c in [Vector3(-24, -24, 8), Vector3(16, -24, 8), Vector3(-24, 16, 8), Vector3(16, 16, 8)]:
+		IsoDraw.box(self, c, Vector3(8, 8, 10), C_STEEL_MID)
+		var th_top = IsoDraw.project(c.x + 4, c.y + 4, c.z + 10)
+		draw_circle(th_top, 2.8, C_BRASS)
+		var ember = 0.6 + sin(idle_timer * 4.0 + c.x) * 0.4
+		draw_circle(th_top, 1.6, Color(C_AMBER.r, C_AMBER.g, C_AMBER.b, ember))
 
-	# --- 5. FOUR HEAVY MAGNETIC CONTAINMENT INJECTORS ---
-	for i in range(4):
-		var dir = Vector2.RIGHT.rotated(float(i) * PI / 2.0)
-		draw_line(dir * 8.0, dir * 16.0, adamantium_black, 3.5)
-		draw_line(dir * 8.0, dir * 16.0, antique_brass, 1.2)
-		draw_circle(dir * 9.0, 1.2, deep_plasma)
+	# Tier 2: Martian Crimson Citadel Forge Hull
+	IsoDraw.box(self, Vector3(-20, -20, 8), Vector3(40, 40, 16), C_MARS_RED)
 
-	# --- 6. SUBDUED ARCHEOTECH COIL & PLASMA FURNACE ---
-	# Fine Dial Astrolabe Ring
-	var ring_angle = idle_timer * 1.4
-	draw_arc(Vector2.ZERO, 11.5, ring_angle, ring_angle + PI * 0.9, 14, deep_plasma, 1.2)
-	draw_arc(Vector2.ZERO, 11.5, ring_angle + PI, ring_angle + PI * 1.9, 14, deep_plasma, 1.2)
+	# Central Molten Blast Crucible Gate (Glowing Orange Hearth)
+	var door_p = IsoDraw.project(0, 20, 0)
+	draw_rect(Rect2(door_p - Vector2(10, 12), Vector2(20, 12)), C_STEEL_DARK)
+	var fire = 0.75 + sin(idle_timer * 6.0) * 0.25
+	draw_rect(Rect2(door_p - Vector2(8, 10), Vector2(16, 10)), Color(C_AMBER.r, C_AMBER.g, C_AMBER.b, fire))
+	draw_rect(Rect2(door_p - Vector2(10, 12), Vector2(20, 12)), C_BRASS, false, 1.2)
 
-	# Resonant Plasma Core (Dense & Compact)
-	var pulse = 0.85 + sin(idle_timer * 3.5) * 0.15
-	draw_circle(Vector2.ZERO, 6.0 * pulse, Color(deep_plasma.r, deep_plasma.g, deep_plasma.b, 0.25))
-	draw_circle(Vector2.ZERO, 4.0, deep_plasma)
-	draw_circle(Vector2.ZERO, 1.8, plasma_focal)
+	# Opus Machina Sacred Cog Emblem
+	var cog_center = IsoDraw.project(0, 0, 24)
+	IsoDraw.opus_machina_cog(self, cog_center, 13.0, 8)
 
+	# Twin Smokestacks Puffing Furnace Embers
+	for sx in [-12.0, 12.0]:
+		var stack_top = IsoDraw.project(sx, -14, 28)
+		draw_circle(stack_top, 3.0, C_STEEL_DARK)
+		draw_circle(stack_top, 3.0, C_BRASS, false, 1.0)
+		draw_circle(stack_top, 1.5, Color(C_AMBER.r, C_AMBER.g, C_AMBER.b, 0.8))
+
+	# Central Plasma Core Flame
+	draw_circle(cog_center, 3.0, C_CYAN)
+	draw_circle(cog_center, 1.2, Color.WHITE)
+
+	# Purity Seals
+	IsoDraw.purity_seal(self, door_p + Vector2(-12, -4), 8.0)
+	IsoDraw.purity_seal(self, door_p + Vector2(12, -4), 8.0)
+
+# ==============================================================================
+# 2. BARRICADE (AEGIS BLAST DEFENSE LINE)
+# ==============================================================================
 func _draw_barricade():
-	var iron_dark = Color(0.08, 0.09, 0.12)
-	var iron_mid = Color(0.18, 0.20, 0.25)
-	var steel_edge = Color(0.45, 0.50, 0.58)
-	var brass_gold = Color(0.68, 0.50, 0.18)
-	var gate_cyan = Color(0.20, 0.88, 1.0)
-	var gate_green = Color(0.25, 0.95, 0.40)
-	var electro_cyan = Color(0.25, 0.85, 1.0, 0.45)
-
-	var wall_half_width = 6.0
-	var conn_count = wall_connections.size()
-
-	# Determine vector toward base core so spikes point OUTWARD toward the desert
-	var base_center = Vector2.ZERO
-	var base_node = get_tree().get_first_node_in_group("base")
-	if is_instance_valid(base_node):
-		base_center = base_node.global_position
-	var away_from_base = (global_position - base_center).normalized()
-
-	# --- 1. CLEAN SLOPED BLAST WALL SPANS ---
 	for conn in wall_connections:
 		var dir = conn.normalized()
-		var perp = dir.orthogonal() * wall_half_width
-		var length = conn.length()
-
-		var wall_poly = PackedVector2Array([-perp, conn - perp, conn + perp, perp])
-		draw_colored_polygon(wall_poly, iron_dark)
-		draw_line(-perp, conn - perp, steel_edge, 1.2)
-		draw_line(perp, conn + perp, steel_edge, 1.2)
+		var perp = dir.orthogonal() * 5.0
+		
+		var p1 = -perp; var p2 = conn - perp
+		var p3 = conn + perp; var p4 = perp
+		var poly = PackedVector2Array([p1, p2, p3, p4])
 
 		if is_gate:
-			var mid_point = conn * 0.5
 			if is_gate_open:
-				draw_line(-perp * 0.5, conn - perp * 0.5, Color(gate_green.r, gate_green.g, gate_green.b, 0.3), 1.5)
-				draw_line(perp * 0.5, conn + perp * 0.5, Color(gate_green.r, gate_green.g, gate_green.b, 0.3), 1.5)
+				draw_line(Vector2.ZERO, conn, Color(0.25, 0.95, 0.40, 0.4), 2.5)
 			else:
 				var pulse = 0.5 + sin(idle_timer * 5.0) * 0.3
-				draw_line(Vector2.ZERO, conn, Color(gate_cyan.r, gate_cyan.g, gate_cyan.b, pulse), 2.0)
-				draw_circle(mid_point, 2.5, gate_cyan)
+				draw_colored_polygon(poly, C_STEEL_DARK)
+				draw_line(Vector2.ZERO, conn, Color(C_CYAN.r, C_CYAN.g, C_CYAN.b, pulse), 2.5)
+				draw_circle(conn * 0.5, 2.5, C_CYAN)
 		else:
-			var inner_perp = dir.orthogonal() * (wall_half_width - 1.8)
-			var inner_poly = PackedVector2Array([-inner_perp, conn - inner_perp, conn + inner_perp, inner_perp])
-			draw_colored_polygon(inner_poly, iron_mid)
-			draw_line(Vector2.ZERO, conn, brass_gold, 0.8)
+			draw_colored_polygon(poly, C_MARS_RED)
+			var cl = poly.duplicate(); cl.append(poly[0])
+			draw_polyline(cl, C_OUTLINE, 1.4)
+			draw_line(Vector2.ZERO, conn, C_BRASS, 1.2)
 
-			# --- TECH 5: OUTWARD-ONLY DRAGON'S TEETH SPIKES ---
+			# Hazard Braces
+			var num_braces = int(conn.length() / 18.0)
+			for i in range(num_braces):
+				var t = (float(i) + 0.5) / float(num_braces)
+				var pt = conn * t
+				draw_line(pt - perp * 0.8, pt + perp * 0.8, C_AMBER, 1.8)
+
 			if has_spikes:
-				# Ensure spikes point outward toward desert, away from base
-				var spike_norm = perp if (perp.dot(away_from_base) > 0) else -perp
-				var num_spikes = int(length / 22.0)
-				for i in range(num_spikes):
-					var t = (float(i) + 0.5) / float(num_spikes)
-					var spike_base = conn * t + spike_norm
-					var spike_tip = spike_base + spike_norm.normalized() * 5.5
-					draw_line(spike_base, spike_tip, steel_edge, 1.5)
+				for i in range(num_braces):
+					var t = (float(i) + 0.5) / float(num_braces)
+					var sp = conn * t + perp
+					draw_line(sp, sp + perp.normalized() * 5.0, C_STEEL_LIGHT, 2.0)
 
-			# --- TECH 4: SUBTLE ELECTRIFIED MESH GLOW ---
-			if has_electro_mesh:
-				draw_line(Vector2.ZERO, conn, electro_cyan, 1.5)
+	# Standing Anchor Posts
+	IsoDraw.box(self, Vector3(-5, -5, 0), Vector3(10, 10, 12), C_STEEL_DARK)
+	draw_circle(IsoDraw.project(0, 0, 12), 2.5, C_BRASS)
+	IsoDraw.purity_seal(self, IsoDraw.project(0, 5, 6), 6.0)
 
-	# --- 2. CLEAN FLUSH WALL JOINTS (NO HUGE CIRCLES) ---
-	if conn_count == 0:
-		draw_circle(Vector2.ZERO, 6.5, iron_dark)
-		draw_circle(Vector2.ZERO, 6.5, brass_gold, false, 1.0)
-		draw_circle(Vector2.ZERO, 2.0, iron_mid)
-	elif conn_count == 1:
-		draw_circle(Vector2.ZERO, 7.0, iron_dark)
-		draw_circle(Vector2.ZERO, 7.0, steel_edge, false, 1.0)
-		draw_rect(Rect2(-1.5, -1.5, 3, 3), brass_gold)
-	else:
-		# In-line joint: flush and minimal
-		draw_circle(Vector2.ZERO, 5.0, iron_dark)
-		draw_circle(Vector2.ZERO, 2.0, brass_gold)
-
-func _draw_generator():
-	var iron_dark = Color(0.12, 0.12, 0.16)
-	var iron_mid = Color(0.28, 0.30, 0.35)
-	var brass_gold = Color(0.85, 0.65, 0.2)
-	var plasma_cyan = Color(0.15, 0.8, 1.0)
-	var plasma_white = Color(0.85, 0.98, 1.0)
-	var glow_intensity = 0.4 + (pulse_scale * 0.6) + (sin(idle_timer * 4.0) * 0.1)
-
-	var hex_poly = PackedVector2Array()
-	for i in range(6):
-		var angle = i * TAU / 6.0
-		hex_poly.append(Vector2(cos(angle), sin(angle)) * 24.0)
-	draw_colored_polygon(hex_poly, iron_dark)
-	var closed = hex_poly.duplicate(); closed.append(hex_poly[0])
-	draw_polyline(closed, brass_gold, 2.0)
-
-	for i in range(6):
-		var fin_dir = Vector2.RIGHT.rotated(i * TAU / 6.0)
-		draw_line(fin_dir * 14.0, fin_dir * 28.0, iron_mid, 4.0)
-		draw_line(fin_dir * 14.0, fin_dir * 28.0, brass_gold, 1.5)
-		draw_circle(fin_dir * 26.0, 2.0, Color(1.0, 0.5, 0.1, 0.8))
-
-	draw_circle(Vector2.ZERO, 16.0, iron_mid)
-	draw_circle(Vector2.ZERO, 16.0, brass_gold, false, 2.0)
-
-	var aura_radius = 13.0 + (pulse_scale * 9.0)
-	draw_circle(Vector2.ZERO, aura_radius, Color(plasma_cyan.r, plasma_cyan.g, plasma_cyan.b, glow_intensity * 0.4))
-	draw_circle(Vector2.ZERO, 11.0, Color(0.05, 0.2, 0.35))
-	draw_arc(Vector2.ZERO, 11.0, 0, TAU, 24, plasma_cyan, 2.0)
-
-	for i in range(3):
-		var arc_start = idle_timer * 3.0 + (i * TAU / 3.0)
-		draw_arc(Vector2.ZERO, 8.0, arc_start, arc_start + 1.8, 12, plasma_white, 2.0)
-
-	var core_r = 4.5 + (pulse_scale * 4.0)
-	draw_circle(Vector2.ZERO, core_r, plasma_white)
-
+# ==============================================================================
+# 3. INCREMENTAL COGNIS TURRET (LEVELS 1 TO 4 + 4 SPECIALIZATIONS)
+# ==============================================================================
 func _draw_turret():
-	var iron_dark = Color(0.10, 0.11, 0.14)
-	var iron_mid = Color(0.26, 0.28, 0.34)
-	var mars_red = Color(0.60, 0.08, 0.08)
-	var brass_gold = Color(0.85, 0.68, 0.22)
-
-	draw_circle(Vector2.ZERO, 19.0, iron_dark)
-	draw_circle(Vector2.ZERO, 19.0, brass_gold, false, 2.0)
-
-	for level in range(turret_upgrade_level):
-		var ring_radius = 22.0 + level * 3.0
-		var arc_start = (idle_timer * (1.5 + level * 0.25)) + level * 1.4
-		draw_arc(Vector2.ZERO, ring_radius, arc_start, arc_start + PI * 1.35, 16, Color(0.25, 0.88, 1.0, 0.75), 1.5)
-
-	# Rotate turret head
-	draw_set_transform(Vector2.ZERO, turret_rotation, Vector2.ONE)
-
-	match turret_spec:
-		0: # Standard Twin Anti-Chaff Stubber
-			draw_rect(Rect2(2, -8, 18, 4), iron_dark)
-			draw_rect(Rect2(2, 4, 18, 4), iron_dark)
-			draw_rect(Rect2(16, -9, 4, 6), brass_gold)
-			draw_rect(Rect2(16, 3, 4, 6), brass_gold)
-
-		1: # Cognis Flak (Quad Rotary Barrels)
-			for offset_y in [-9, -4, 2, 7]:
-				draw_rect(Rect2(2, offset_y, 20, 3.2), iron_dark)
-				draw_rect(Rect2(18, offset_y - 0.5, 3, 4.2), brass_gold)
-
-		2: # Volkite Culverin (Heavy Thermal Coils)
-			draw_rect(Rect2(2, -6, 22, 12), iron_dark)
-			draw_rect(Rect2(4, -7, 14, 14), Color(0.85, 0.45, 0.15)) # Copper cooling fins
-			draw_circle(Vector2(24, 0), 4.0, Color(1.0, 0.2, 0.1))   # Red thermal emitter
-
-		3: # Heavy Arc Blaster (Tesla Prongs)
-			draw_rect(Rect2(2, -7, 16, 14), iron_dark)
-			draw_line(Vector2(14, -8), Vector2(24, -4), brass_gold, 2.5) # Top Prong
-			draw_line(Vector2(14, 8), Vector2(24, 4), brass_gold, 2.5)   # Bottom Prong
-			draw_circle(Vector2(20, 0), 3.0, Color(0.20, 0.88, 1.0))     # Arc sphere
-
-	# Mars Red Armored Casing
-	var housing_poly = PackedVector2Array([
-		Vector2(-14, -14), Vector2(2, -14), Vector2(10, -7),
-		Vector2(10, 7), Vector2(2, 14), Vector2(-14, 14)
-	])
-	draw_colored_polygon(housing_poly, mars_red)
-	var closed_housing = housing_poly.duplicate(); closed_housing.append(housing_poly[0])
-	draw_polyline(closed_housing, brass_gold, 2.0)
-
-	draw_circle(Vector2(3, 0), 4.5, iron_dark)
-	draw_circle(Vector2(3, 0), 4.5, brass_gold, false, 1.0)
-	draw_circle(Vector2(4, 0), 2.2, Color(0.20, 0.88, 1.0) if turret_spec == 3 else Color(1.0, 0.2, 0.2))
-
+	# Ground Shadow
+	draw_set_transform(Vector2.ZERO, 0, Vector2(1.0, 0.50))
+	draw_circle(Vector2(0, 2), 18.0, Color(0.02, 0.02, 0.04, 0.45))
 	draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
 
-	# --- WEAPON FIRING FX BEAMS ---
+	# Bunker Pedestal Base
+	var base_w = 20.0 + (turret_upgrade_level * 2.0)
+	var base_h = 6.0 + (turret_upgrade_level * 2.0)
+	IsoDraw.box(self, Vector3(-base_w*0.5, -base_w*0.5, 0), Vector3(base_w, base_w, base_h), C_STEEL_DARK)
+
+	for c in [Vector3(-base_w*0.4, -base_w*0.4, base_h), Vector3(base_w*0.4, -base_w*0.4, base_h),
+			  Vector3(-base_w*0.4, base_w*0.4, base_h), Vector3(base_w*0.4, base_w*0.4, base_h)]:
+		draw_circle(IsoDraw.project(c.x, c.y, c.z), 1.2, C_BRASS)
+
+	# Rotating Turret Cupola
+	var head_z = base_h
+	var head_pos = IsoDraw.project(0, 0, head_z)
+	var aim_dir = Vector2.RIGHT.rotated(turret_rotation)
+	var perp = aim_dir.orthogonal()
+
+	draw_circle(head_pos, 7.5 + turret_upgrade_level * 0.8, C_MARS_RED)
+	draw_arc(head_pos, 7.5 + turret_upgrade_level * 0.8, 0, TAU, 16, C_OUTLINE, 1.4)
+	draw_circle(head_pos, 4.0, C_STEEL_DARK)
+
+	# Weapon Barrels
+	var b_root = head_pos + (aim_dir * 3.0)
+	var b_len = 14.0 + (turret_upgrade_level * 2.5)
+	var b_tip = head_pos + (aim_dir * b_len)
+
+	match turret_upgrade_level:
+		0: # LVL 1: Twin Light Stubbers
+			draw_line(b_root + perp * 3.0, b_tip + perp * 3.0, C_STEEL_DARK, 3.0)
+			draw_line(b_root - perp * 3.0, b_tip - perp * 3.0, C_STEEL_DARK, 3.0)
+			draw_circle(b_tip + perp * 3.0, 1.2, C_STEEL_LIGHT)
+			draw_circle(b_tip - perp * 3.0, 1.2, C_STEEL_LIGHT)
+
+		1: # LVL 2: Heavy Autocannons (Muzzle Brakes + Side Ammo Drum)
+			draw_line(b_root + perp * 3.5, b_tip + perp * 3.5, C_STEEL_DARK, 4.0)
+			draw_line(b_root - perp * 3.5, b_tip - perp * 3.5, C_STEEL_DARK, 4.0)
+			draw_line(b_root + perp * 3.5, b_tip + perp * 3.5, C_BRASS, 1.2)
+			draw_line(b_root - perp * 3.5, b_tip - perp * 3.5, C_BRASS, 1.2)
+			draw_rect(Rect2(b_tip + perp * 2.0 - Vector2(1, 1), Vector2(3, 3)), C_BRASS)
+			draw_rect(Rect2(b_tip - perp * 5.0 - Vector2(1, 1), Vector2(3, 3)), C_BRASS)
+			draw_circle(head_pos - perp * 6.5, 2.5, C_STEEL_DARK)
+
+		2: # LVL 3: Cognis Heavy Siege Guns (Recoil Pistons + Targeting Radar)
+			draw_line(b_root + perp * 4.0, b_tip + perp * 4.0, C_STEEL_DARK, 5.0)
+			draw_line(b_root - perp * 4.0, b_tip - perp * 4.0, C_STEEL_DARK, 5.0)
+			draw_line(b_root + perp * 4.0, b_tip + perp * 4.0, C_BRASS, 1.5)
+			draw_line(b_root - perp * 4.0, b_tip - perp * 4.0, C_BRASS, 1.5)
+			draw_rect(Rect2(b_root + perp * 2.5 - Vector2(1, 1), Vector2(4, 3)), C_COPPER)
+			draw_rect(Rect2(b_root - perp * 5.5 - Vector2(1, 1), Vector2(4, 3)), C_COPPER)
+			var dish_pos = head_pos + Vector2(0, -6)
+			var sweep = (idle_timer * 3.0)
+			draw_arc(dish_pos, 3.5, sweep, sweep + PI, 8, C_CYAN, 1.2)
+			IsoDraw.purity_seal(self, head_pos + perp * 6.0, 5.0)
+
+		3: # LVL 4 / SANCTIFIED SPECIALIZATIONS
+			match turret_spec:
+				0: # Standard Superheavy Siege Battery
+					draw_line(b_root + perp * 4.5, b_tip + perp * 4.5, C_STEEL_DARK, 6.0)
+					draw_line(b_root - perp * 4.5, b_tip - perp * 4.5, C_STEEL_DARK, 6.0)
+					draw_line(b_root + perp * 4.5, b_tip + perp * 4.5, C_BRASS_LIGHT, 2.0)
+					draw_line(b_root - perp * 4.5, b_tip - perp * 4.5, C_BRASS_LIGHT, 2.0)
+					draw_rect(Rect2(head_pos - Vector2(5, 5), Vector2(10, 10)), C_MARS_RED, false, 1.5)
+				1: # Cognis Flak (Quad Gatling Arrays)
+					for o in [-5.0, -1.8, 1.8, 5.0]:
+						draw_line(b_root + perp * o, b_tip + perp * o, C_STEEL_DARK, 2.5)
+						draw_line(b_root + perp * o, b_tip + perp * o, C_BRASS, 1.0)
+				2: # Volkite Thermal Culverin (Ribbed Copper Coils)
+					draw_line(b_root, b_tip, C_STEEL_DARK, 7.0)
+					draw_line(b_root, b_tip, C_COPPER, 4.0)
+					for i in range(4):
+						var cp = b_root.lerp(b_tip, i / 3.0)
+						draw_circle(cp, 2.5, C_BRASS)
+					draw_circle(b_tip, 3.2, Color(1.0, 0.2, 0.1))
+				3: # Heavy Arc Blaster (Tesla Prongs)
+					draw_line(b_root + perp * 4.5, b_tip + perp * 2.0, C_BRASS, 2.5)
+					draw_line(b_root - perp * 4.5, b_tip - perp * 2.0, C_BRASS, 2.5)
+					draw_circle(head_pos, 4.5, C_CYAN)
+
+	draw_circle(head_pos, 2.0, C_CYAN)
+
+	# Firing Beams
 	if volkite_beam_timer > 0.0:
-		var beam_alpha = volkite_beam_timer / 0.22
-		draw_line(Vector2.ZERO, volkite_target_pos, Color(1.0, 0.15, 0.10, 0.4 * beam_alpha), 7.0)
-		draw_line(Vector2.ZERO, volkite_target_pos, Color(1.0, 0.85, 0.70, 0.95 * beam_alpha), 2.5)
+		var beam_a = volkite_beam_timer / 0.22
+		draw_line(head_pos, volkite_target_pos, Color(1.0, 0.15, 0.10, 0.4 * beam_a), 7.0)
+		draw_line(head_pos, volkite_target_pos, Color(1.0, 0.85, 0.70, 0.95 * beam_a), 2.5)
 
 	if arc_beam_timer > 0.0 and not arc_chain_targets.is_empty():
-		var arc_alpha = arc_beam_timer / 0.20
-		var prev_pt = Vector2.ZERO
+		var arc_a = arc_beam_timer / 0.20
+		var prev_pt = head_pos
 		for pt in arc_chain_targets:
-			draw_line(prev_pt, pt, Color(0.20, 0.88, 1.0, 0.5 * arc_alpha), 4.0)
+			draw_line(prev_pt, pt, Color(C_CYAN.r, C_CYAN.g, C_CYAN.b, 0.5 * arc_a), 4.0)
 			draw_line(prev_pt, pt, Color.WHITE, 1.5)
-			draw_circle(pt, 4.0, Color(0.20, 0.88, 1.0, arc_alpha))
+			draw_circle(pt, 4.0, Color(C_CYAN.r, C_CYAN.g, C_CYAN.b, arc_a))
 			prev_pt = pt
 
-func _draw_distributor():
-	var iron_dark = Color(0.10, 0.11, 0.14)
-	var iron_mid = Color(0.26, 0.28, 0.34)
-	var brass_gold = Color(0.85, 0.65, 0.22)
-	var amber_glow = Color(1.0, 0.75, 0.15)
-
-	# 1. Compact 3-point anchor plinth
-	var tri = PackedVector2Array([Vector2(0, -10), Vector2(9, 7), Vector2(-9, 7)])
-	draw_colored_polygon(tri, iron_dark)
-	var closed = tri.duplicate(); closed.append(tri[0])
-	draw_polyline(closed, brass_gold, 1.5)
-
-	# 2. Mini corner mounting bolts
-	for p in tri:
-		draw_circle(p, 1.8, brass_gold)
-
-	# 3. Central Substation Diode Core
-	draw_circle(Vector2.ZERO, 5.5, iron_mid)
-	draw_circle(Vector2.ZERO, 5.5, brass_gold, false, 1.0)
-	draw_circle(Vector2.ZERO, 3.2, Color(amber_glow.r, amber_glow.g, amber_glow.b, 0.35))
-	draw_circle(Vector2.ZERO, 2.0, amber_glow)
-	draw_circle(Vector2.ZERO, 0.8, Color.WHITE)
-
-func _draw_antenna():
-	var iron_dark = Color(0.10, 0.11, 0.14)
-	var iron_mid = Color(0.26, 0.28, 0.34)
-	var brass_gold = Color(0.85, 0.68, 0.22)
-	var cyan_glow = Color(0.20, 0.88, 1.0)
-
-	# 1. Compact Hexagonal Relay Plinth
-	var hex = PackedVector2Array()
-	for i in range(6):
-		var a = i * TAU / 6.0
-		hex.append(Vector2(cos(a), sin(a)) * 9.0)
-	draw_colored_polygon(hex, iron_dark)
-	var closed = hex.duplicate(); closed.append(hex[0])
-	draw_polyline(closed, brass_gold, 1.5)
-
-	# 2. Slender Emitter Needles
-	for i in range(3):
-		var a = (i * TAU / 3.0) + (PI / 2.0)
-		var tip = Vector2(cos(a), sin(a)) * 13.0
-		draw_line(Vector2.ZERO, tip, iron_mid, 2.0)
-		draw_line(Vector2.ZERO, tip, brass_gold, 1.0)
-		draw_circle(tip, 1.5, cyan_glow)
-
-	# 3. Central Noosphere Broadcast Core
-	draw_circle(Vector2.ZERO, 5.0, iron_dark)
-	draw_circle(Vector2.ZERO, 5.0, brass_gold, false, 1.0)
-	draw_circle(Vector2.ZERO, 2.5, cyan_glow)
-	draw_circle(Vector2.ZERO, 1.0, Color.WHITE)
-
-func _draw_research_shrine():
-	var iron_dark = Color(0.10, 0.11, 0.14)
-	var iron_mid = Color(0.22, 0.24, 0.28)
-	var mars_red = Color(0.68, 0.12, 0.08)
-	var mars_red_dark = Color(0.42, 0.06, 0.05)
-	var brass_gold = Color(0.85, 0.68, 0.22)
-	var cyan_holo = Color(0.20, 0.88, 1.0, 0.8)
-
-	var oct_poly = PackedVector2Array([
-		Vector2(-32, -18), Vector2(-18, -32), Vector2(18, -32), Vector2(32, -18),
-		Vector2(32, 18), Vector2(18, 32), Vector2(-18, 32), Vector2(-32, 18)
-	])
-	draw_colored_polygon(oct_poly, iron_dark)
-	var closed = oct_poly.duplicate(); closed.append(oct_poly[0])
-	draw_polyline(closed, brass_gold, 2.0)
-
-	draw_rect(Rect2(-26, -22, 52, 44), mars_red_dark)
-	draw_rect(Rect2(-22, -26, 44, 52), mars_red_dark)
-	draw_rect(Rect2(-24, -20, 48, 40), mars_red)
-	draw_rect(Rect2(-20, -24, 40, 48), mars_red)
-	draw_rect(Rect2(-24, -20, 48, 40), brass_gold, false, 1.5)
-	draw_rect(Rect2(-20, -24, 40, 48), brass_gold, false, 1.5)
-
-	for corner in [Vector2(-20, -20), Vector2(20, -20), Vector2(-20, 20), Vector2(20, 20)]:
-		draw_circle(corner, 5.0, iron_mid)
-		draw_circle(corner, 5.0, brass_gold, false, 1.0)
-		draw_circle(corner, 2.5, cyan_holo)
-
-	draw_circle(Vector2.ZERO, 13.0, iron_dark)
-	draw_circle(Vector2.ZERO, 13.0, brass_gold, false, 2.0)
-	draw_arc(Vector2.ZERO, 10.0, 0, TAU, 16, cyan_holo, 2.0)
-	draw_circle(Vector2.ZERO, 5.0, cyan_holo)
-	draw_circle(Vector2.ZERO, 2.0, Color.WHITE)
-
-func _draw_manufactorum():
-	var iron_dark = Color(0.12, 0.12, 0.15)
-	var iron_mid = Color(0.25, 0.26, 0.30)
-	var mars_red = Color(0.65, 0.1, 0.1)
-	var mars_red_dark = Color(0.4, 0.05, 0.05)
-	var brass_gold = Color(0.85, 0.68, 0.22)
-	var brass_dark = Color(0.5, 0.38, 0.1)
-	var cyan_plasma = Color(0.2, 0.85, 1.0, 0.8)
-
-	var base_poly = PackedVector2Array([
-		Vector2(-36, -20), Vector2(-20, -36), Vector2(20, -36), Vector2(36, -20),
-		Vector2(36, 20), Vector2(20, 36), Vector2(-20, 36), Vector2(-36, 20)
-	])
-	draw_colored_polygon(base_poly, iron_dark)
-	var closed_base = base_poly.duplicate(); closed_base.append(base_poly[0])
-	draw_polyline(closed_base, brass_dark, 2.5)
-
-	for corner in [Vector2(-30, -30), Vector2(30, -30), Vector2(-30, 30), Vector2(30, 30)]:
-		draw_rect(Rect2(corner - Vector2(4, 4), Vector2(8, 8)), iron_mid)
-		draw_rect(Rect2(corner - Vector2(4, 4), Vector2(8, 8)), brass_gold, false, 1.0)
-
-	draw_rect(Rect2(-28, -24, 56, 48), mars_red_dark)
-	draw_rect(Rect2(-24, -28, 48, 56), mars_red_dark)
-	draw_rect(Rect2(-26, -22, 52, 44), mars_red)
-	draw_rect(Rect2(-22, -26, 44, 52), mars_red)
-	draw_rect(Rect2(-26, -22, 52, 44), brass_gold, false, 1.5)
-	draw_rect(Rect2(-22, -26, 44, 52), brass_gold, false, 1.5)
-
-	var chimney_positions = [Vector2(-20, -20), Vector2(20, -20), Vector2(-20, 20), Vector2(20, 20)]
-	for pos in chimney_positions:
-		draw_circle(pos, 6.0, iron_dark)
-		draw_circle(pos, 6.0, brass_gold, false, 1.5)
-		draw_circle(pos, 3.0, Color(1.0, 0.4, 0.1, 0.7))
-
-	var cog_center = Vector2.ZERO
-	var cog_radius = 14.0
-	for i in range(8):
-		var angle = (i * TAU / 8.0)
-		var tooth_dir = Vector2.RIGHT.rotated(angle)
-		draw_set_transform(cog_center + tooth_dir * cog_radius, angle, Vector2.ONE)
-		draw_rect(Rect2(-2.5, -2.5, 5.0, 5.0), brass_gold)
+# ==============================================================================
+# 4. PLASMA INDUCTION GENERATOR (TESLA / INDUCTION COIL TOWER - REFERENCE MATCH)
+# ==============================================================================
+func _draw_generator():
+	# Ground Shadow
+	draw_set_transform(Vector2.ZERO, 0, Vector2(1.0, 0.50))
+	draw_circle(Vector2(0, 3), 26.0, Color(0.02, 0.02, 0.04, 0.45))
 	draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
 
-	draw_circle(cog_center, cog_radius, iron_dark)
-	draw_circle(cog_center, cog_radius, brass_gold, false, 2.0)
+	# Reactor Foundation Chassis
+	IsoDraw.box(self, Vector3(-16, -14, 0), Vector3(32, 28, 6), C_STEEL_DARK)
 
-	var left_semi = PackedVector2Array()
-	var right_semi = PackedVector2Array()
-	for i in range(17):
-		var a = -PI/2 + (i * PI / 16.0)
-		left_semi.append(cog_center + Vector2(cos(a + PI), sin(a + PI)) * (cog_radius - 2))
-		right_semi.append(cog_center + Vector2(cos(a), sin(a)) * (cog_radius - 2))
+	# 3 Vertical Plasma Induction Coil Towers (Reference Style)
+	for i in range(3):
+		var cx = -10.0 + (i * 10.0)
+		# Tower Base
+		IsoDraw.cylinder(self, Vector3(cx, 0, 6), 4.5, 14.0, C_COPPER)
+		
+		# Glowing Cyan Induction Rings
+		for r_z in [8.0, 12.0, 16.0]:
+			var ring_p = IsoDraw.project(cx, 0, r_z)
+			draw_arc(ring_p, 4.2, 0, TAU, 12, C_CYAN, 1.2)
 
-	draw_colored_polygon(left_semi, Color(0.9, 0.9, 0.9))
-	draw_colored_polygon(right_semi, iron_mid)
-	draw_circle(Vector2(0, -6), 4.0, cyan_plasma)
-	draw_circle(Vector2(0, -6), 5.0, brass_gold, false, 1.0)
+		# Top Glowing Plasma Sphere
+		var top_p = IsoDraw.project(cx, 0, 20)
+		var pulse = 0.7 + sin(idle_timer * 5.0 + i) * 0.3
+		draw_circle(top_p, 2.8 * pulse, Color(C_CYAN.r, C_CYAN.g, C_CYAN.b, 0.4))
+		draw_circle(top_p, 1.8, C_CYAN)
+		draw_circle(top_p, 0.8, Color.WHITE)
 
+	# Electric Spark Arcs Between Towers
+	if randf() < 0.35:
+		var p_a = IsoDraw.project(-10, 0, 18)
+		var p_b = IsoDraw.project(0, 0, 18)
+		draw_line(p_a, p_b + Vector2(randf_range(-2, 2), randf_range(-2, 2)), C_CYAN, 1.2)
+
+	IsoDraw.purity_seal(self, IsoDraw.project(16, -8, 6), 6.0)
+
+# ==============================================================================
+# 5. SCRAP FOUNDRY / PROMETHIUM SMELTER
+# ==============================================================================
+func _draw_manufactorum():
+	draw_set_transform(Vector2.ZERO, 0, Vector2(1.0, 0.50))
+	draw_circle(Vector2(0, 4), 32.0, Color(0.02, 0.02, 0.04, 0.45))
+	draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
+
+	# Smelter Foundation Hull
+	IsoDraw.box(self, Vector3(-18, -18, 0), Vector3(36, 36, 14), C_STEEL_DARK)
+	IsoDraw.box(self, Vector3(-14, -14, 14), Vector3(28, 28, 8), C_MARS_RED)
+
+	# Twin Brass-Banded Smokestacks
+	for sc in [Vector3(-10, -10, 22), Vector3(6, -10, 22)]:
+		IsoDraw.cylinder(self, Vector3(sc.x + 3, sc.y + 3, 22), 3.5, 12.0, C_STEEL_MID)
+		var top_p = IsoDraw.project(sc.x + 3, sc.y + 3, 34)
+		draw_circle(top_p, 2.5, C_BRASS)
+		draw_circle(top_p, 1.2, Color(C_AMBER.r, C_AMBER.g, C_AMBER.b, 0.85))
+
+	# Molten Crucible Hearth
+	var grate_p = IsoDraw.project(0, 18, 4)
+	draw_rect(Rect2(grate_p - Vector2(8, 4), Vector2(16, 8)), C_STEEL_DARK)
+	var ember = 0.65 + sin(idle_timer * 6.0) * 0.35
+	draw_rect(Rect2(grate_p - Vector2(7, 3), Vector2(14, 6)), Color(C_AMBER.r, C_AMBER.g, C_AMBER.b, ember))
+	
+	for i in range(3):
+		draw_line(Vector2(grate_p.x - 4 + i * 4, grate_p.y - 3), Vector2(grate_p.x - 4 + i * 4, grate_p.y + 3), C_STEEL_DARK, 1.5)
+
+	IsoDraw.purity_seal(self, IsoDraw.project(18, 0, 8), 7.0)
+
+# ==============================================================================
+# 6. DISTRIBUTOR RELAY SUBSTATION
+# ==============================================================================
+func _draw_distributor():
+	draw_set_transform(Vector2.ZERO, 0, Vector2(1.0, 0.50))
+	draw_circle(Vector2(0, 2), 14.0, Color(0.02, 0.02, 0.04, 0.35))
+	draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
+
+	# Heavy Steel Base & Ceramic Insulator Column
+	IsoDraw.box(self, Vector3(-8, -8, 0), Vector3(16, 16, 6), C_STEEL_DARK)
+	IsoDraw.cylinder(self, Vector3(0, 0, 6), 5.5, 12.0, C_COPPER)
+
+	# Ceramic Insulator Ribs
+	for oy in [8.0, 12.0, 16.0]:
+		var bp = IsoDraw.project(0, 0, oy)
+		draw_arc(bp, 6.0, 0, TAU, 12, C_BRASS, 1.4)
+
+	# Top Amber Capacitor Globe
+	var tip = IsoDraw.project(0, 0, 18)
+	draw_circle(tip, 3.5, C_BRASS)
+	draw_circle(tip, 2.0, C_AMBER)
+	draw_circle(tip, 1.0, Color.WHITE)
+
+# ==============================================================================
+# 7. NOOSPHERE ANTENNA MAST
+# ==============================================================================
+func _draw_antenna():
+	IsoDraw.box(self, Vector3(-6, -6, 0), Vector3(12, 12, 10), C_STEEL_DARK)
+	IsoDraw.box(self, Vector3(-4, -4, 10), Vector3(8, 8, 12), C_STEEL_MID)
+
+	# Communication Spire
+	var mast = IsoDraw.project(0, 0, 22)
+	draw_line(mast, mast + Vector2(0, -14), C_BRASS, 2.0)
+	draw_arc(mast + Vector2(0, -14), 4.5, 0, TAU, 12, C_CYAN, 1.2)
+	draw_circle(mast + Vector2(0, -14), 2.0, Color.WHITE)
+
+	IsoDraw.purity_seal(self, IsoDraw.project(6, 0, 6), 6.0)
+
+# ==============================================================================
+# 8. TECH SHRINE (COGITATOR ARCHIVES & RELIQUARY)
+# ==============================================================================
+func _draw_research_shrine():
+	IsoDraw.box(self, Vector3(-16, -16, 0), Vector3(32, 32, 12), C_STEEL_DARK)
+	IsoDraw.box(self, Vector3(-12, -12, 12), Vector3(24, 24, 12), C_MARS_RED)
+
+	# Illuminated Machine Rune Screens
+	var screen_p = IsoDraw.project(0, 16, 6)
+	draw_rect(Rect2(screen_p - Vector2(8, 4), Vector2(16, 8)), C_STEEL_DARK)
+	draw_rect(Rect2(screen_p - Vector2(7, 3), Vector2(14, 6)), Color(0.04, 0.12, 0.16))
+	var code_flicker = 0.7 + sin(idle_timer * 4.0) * 0.3
+	draw_rect(Rect2(screen_p - Vector2(6, 2), Vector2(12, 4)), Color(C_RUNE_GREEN.r, C_RUNE_GREEN.g, C_RUNE_GREEN.b, code_flicker * 0.8))
+
+	# Holo Astrolabe on Roof
+	var holo = IsoDraw.project(0, 0, 24)
+	draw_arc(holo, 7.0, 0, TAU, 16, C_CYAN, 1.2)
+	draw_circle(holo, 2.0, C_CYAN)
+	draw_circle(holo, 1.0, Color.WHITE)
+
+	IsoDraw.purity_seal(self, screen_p + Vector2(-10, -2), 8.0)
+	IsoDraw.purity_seal(self, screen_p + Vector2(10, -2), 8.0)
+
+# ==============================================================================
+# 9. UNSHADED GLOW LAYER
+# ==============================================================================
 class BuildingGlowRenderer extends Node2D:
 	func _draw() -> void:
 		var p = get_parent()
 		if not p: return
 
-		if is_instance_valid(p.laser_target_node):
-			var local_target = to_local(p.laser_target_node.global_position)
-			draw_line(Vector2.ZERO, local_target, Color(0.15, 0.85, 1.0, 0.35), 6.0)
-			draw_line(Vector2.ZERO, local_target, Color(0.85, 0.98, 1.0, 0.95), 2.2)
-			draw_circle(local_target, 5.0, Color(0.20, 0.88, 1.0, 0.85))
-
 		match p.type:
-			0: # Main Sanctum (Atmospheric Grimdark Night Lighting)
-				var pulse = 0.85 + sin(p.idle_timer * 3.5) * 0.15
-				
-				# 1. Subdued Plasma Core Glow
-				draw_circle(Vector2.ZERO, 9.0 * pulse, Color(0.12, 0.60, 0.74, 0.18))
-				draw_circle(Vector2.ZERO, 4.0, Color(0.12, 0.60, 0.74, 0.75))
-				draw_circle(Vector2.ZERO, 1.8, Color(0.85, 0.95, 1.0, 0.9))
-
-				# 2. Delicate Astrolabe Focus Traces
-				var ring_angle = p.idle_timer * 1.4
-				draw_arc(Vector2.ZERO, 11.5, ring_angle, ring_angle + PI * 0.9, 14, Color(0.12, 0.60, 0.74, 0.6), 1.2)
-				draw_arc(Vector2.ZERO, 11.5, ring_angle + PI, ring_angle + PI * 1.9, 14, Color(0.12, 0.60, 0.74, 0.6), 1.2)
-
-				# 3. Four Injector Pilot Lights
-				for i in range(4):
-					var dir = Vector2.RIGHT.rotated(float(i) * PI / 2.0)
-					draw_circle(dir * 9.0, 1.2, Color(0.12, 0.60, 0.74, 0.8))
-
-				# 4. Corner Bastion Votive Embers
-				var corner_offsets = [Vector2(-32, -32), Vector2(32, -32), Vector2(-32, 32), Vector2(32, 32)]
-				for c in corner_offsets:
-					var ember_pulse = 0.7 + sin(p.idle_timer * 2.5 + c.x) * 0.3
-					draw_circle(c, 1.8, Color(0.85, 0.50, 0.10, 0.7 * ember_pulse))
+			0: # Main Base
+				var cog = IsoDraw.project(0, 0, 24)
+				draw_circle(cog, 3.5, Color(0.20, 0.88, 1.0, 0.85))
+				var door_p = IsoDraw.project(0, 20, 0)
+				draw_circle(door_p - Vector2(0, 6), 6.0, Color(1.0, 0.7, 0.15, 0.4))
+			1: # Generator Coils
+				for i in range(3):
+					var cx = -10.0 + (i * 10.0)
+					var top_p = IsoDraw.project(cx, 0, 20)
+					draw_circle(top_p, 2.5, Color(0.20, 0.88, 1.0, 0.9))
+			5: # Antenna
+				var mast = IsoDraw.project(0, 0, 22) + Vector2(0, -14)
+				draw_circle(mast, 3.0, Color(0.20, 0.88, 1.0, 0.9))
+			6: # Tech Shrine
+				var sp = IsoDraw.project(0, 16, 6)
+				draw_rect(Rect2(sp - Vector2(6, 2), Vector2(12, 4)), Color(0.25, 0.95, 0.40, 0.7))

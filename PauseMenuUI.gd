@@ -38,9 +38,16 @@ func _ready():
 	_build_ui_layout()
 
 # ==============================================================================
-# 1. UI LAYOUT & VIEWS
+# 1. INPUT HANDLING (SINGLE SOURCE OF TRUTH FOR PAUSE TOGGLE)
 # ==============================================================================
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+		toggle_my_pause_menu()
+		get_viewport().set_input_as_handled()
 
+# ==============================================================================
+# 2. UI LAYOUT & VIEWS
+# ==============================================================================
 func _build_ui_layout():
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -53,7 +60,7 @@ func _build_ui_layout():
 	backdrop.mouse_filter = Control.MOUSE_FILTER_PASS
 	add_child(backdrop)
 
-	# 2. Ally Pause Banner (Shown when an ally pauses, but your menu is closed)
+	# 2. Ally Pause Banner
 	_build_ally_pause_banner()
 
 	# 3. Main Center Menu Container
@@ -190,22 +197,21 @@ func _switch_view(view: View):
 	video_view_box.visible = (view == View.VIDEO)
 	audio_view_box.visible = (view == View.AUDIO)
 	
-	if view == View.AUDIO:
+	if view == View.VIDEO:
+		_refresh_video_buttons()
+	elif view == View.AUDIO:
 		_refresh_audio_sliders()
 
 # ==============================================================================
-# 2. PAUSE TOGGLE & ALLY NOTIFICATION
+# 3. PAUSE & UNPAUSE LOGIC (OFFLINE & NETWORK RESILIENT)
 # ==============================================================================
-
 func toggle_my_pause_menu():
 	if visible and panel_container.visible:
 		if current_view != View.MAIN:
 			_switch_view(View.MAIN)
 			return
-		# Close my pause menu
 		hide_my_pause_menu()
 	else:
-		# Open my pause menu
 		show_my_pause_menu()
 
 func show_my_pause_menu():
@@ -213,31 +219,34 @@ func show_my_pause_menu():
 	panel_container.show()
 	ally_pause_banner.hide()
 	show()
-
-	# Notify server that I have paused
-	var main_node = get_tree().get_first_node_in_group("main")
-	if main_node:
-		main_node.rpc_id(1, "request_set_player_paused", true)
+	_sync_pause_state_with_main(true)
 
 func hide_my_pause_menu():
 	panel_container.hide()
-	
-	# If other players are still pausing, keep the ally banner visible
+	hide()
+	_sync_pause_state_with_main(false)
+
+func _sync_pause_state_with_main(is_paused: bool):
 	var main_node = get_tree().get_first_node_in_group("main")
-	if main_node:
-		main_node.rpc_id(1, "request_set_player_paused", false)
+	if not multiplayer.has_multiplayer_peer():
+		# Offline / Singleplayer mode: directly pause/unpause scene tree
+		get_tree().paused = is_paused
+		update_global_pause_state(is_paused)
+	elif multiplayer.is_server():
+		if main_node and main_node.has_method("request_set_player_paused"):
+			main_node.request_set_player_paused(is_paused)
+	else:
+		if main_node:
+			main_node.rpc_id(1, "request_set_player_paused", is_paused)
 
 func update_global_pause_state(is_paused_globally: bool):
 	get_tree().paused = is_paused_globally
 
 	if not is_paused_globally:
-		# Game is completely unpaused
 		ally_pause_banner.hide()
 		hide()
 	else:
-		# Game is paused globally
 		if not (visible and panel_container.visible):
-			# If I don't have my menu open, show the ally banner!
 			panel_container.hide()
 			ally_pause_banner.show()
 			show()
@@ -245,16 +254,14 @@ func update_global_pause_state(is_paused_globally: bool):
 			ally_pause_banner.hide()
 
 func _on_exit_to_lobby():
-	# Disengage and return to lobby
 	hide_my_pause_menu()
 	var main_node = get_tree().get_first_node_in_group("main")
 	if main_node and main_node.has_method("request_rematch"):
 		main_node.request_rematch()
 
 # ==============================================================================
-# 3. VIDEO SETTINGS LOGIC
+# 4. VIDEO SETTINGS LOGIC
 # ==============================================================================
-
 func _cycle_window_mode():
 	match current_window_mode:
 		DisplayServer.WINDOW_MODE_WINDOWED:
@@ -267,20 +274,13 @@ func _cycle_window_mode():
 			current_window_mode = DisplayServer.WINDOW_MODE_WINDOWED
 
 	DisplayServer.window_set_mode(current_window_mode)
-	if window_mode_btn: window_mode_btn.text = "WINDOW MODE: " + _get_window_mode_name()
+	_refresh_video_buttons()
 	_save_video_settings()
-
-func _get_window_mode_name() -> String:
-	match current_window_mode:
-		DisplayServer.WINDOW_MODE_WINDOWED: return "WINDOWED"
-		DisplayServer.WINDOW_MODE_FULLSCREEN: return "BORDERLESS"
-		DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN: return "FULLSCREEN"
-	return "WINDOWED"
 
 func _toggle_vsync():
 	is_vsync_enabled = not is_vsync_enabled
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED if is_vsync_enabled else DisplayServer.VSYNC_DISABLED)
-	if vsync_btn: vsync_btn.text = "V-SYNC: " + ("ENABLED" if is_vsync_enabled else "DISABLED")
+	_refresh_video_buttons()
 	_save_video_settings()
 
 func _cycle_max_fps():
@@ -292,8 +292,23 @@ func _cycle_max_fps():
 		_: current_max_fps = 0
 
 	Engine.max_fps = current_max_fps
-	if fps_btn: fps_btn.text = "MAX FPS: " + _get_fps_name()
+	_refresh_video_buttons()
 	_save_video_settings()
+
+func _refresh_video_buttons():
+	if window_mode_btn:
+		window_mode_btn.text = "WINDOW MODE: " + _get_window_mode_name()
+	if vsync_btn:
+		vsync_btn.text = "V-SYNC: " + ("ENABLED" if is_vsync_enabled else "DISABLED")
+	if fps_btn:
+		fps_btn.text = "MAX FPS: " + _get_fps_name()
+
+func _get_window_mode_name() -> String:
+	match current_window_mode:
+		DisplayServer.WINDOW_MODE_WINDOWED: return "WINDOWED"
+		DisplayServer.WINDOW_MODE_FULLSCREEN: return "BORDERLESS"
+		DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN: return "FULLSCREEN"
+	return "WINDOWED"
 
 func _get_fps_name() -> String:
 	return "UNCAPPED" if current_max_fps == 0 else str(current_max_fps) + " FPS"
@@ -317,13 +332,13 @@ func _load_video_settings():
 	Engine.max_fps = current_max_fps
 
 # ==============================================================================
-# 4. HELPERS & BUILDERS
+# 5. HELPERS
 # ==============================================================================
-
 func _create_btn(text: String, callable: Callable) -> Button:
 	var btn = Button.new()
 	btn.text = text
 	btn.custom_minimum_size = Vector2(0, 34)
+	btn.process_mode = Node.PROCESS_MODE_ALWAYS
 	btn.pressed.connect(callable)
 	return btn
 

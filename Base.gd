@@ -4,7 +4,7 @@ extends StaticBody2D
 var current_health: int = 500
 
 @onready var health_bar: Node2D = get_node_or_null("HealthBar")
-@onready var visual_sprite = $VisualSprite
+@onready var visual_sprite = get_node_or_null("VisualBuildingSprite") if has_node("VisualBuildingSprite") else get_node_or_null("VisualSprite")
 
 func _ready():
 	add_to_group("base")
@@ -15,23 +15,25 @@ func _ready():
 		health_bar.setup(current_health, max_health)
 	update_ui()
 	
-	# Trigger SandyFloor to immediately generate the ferrocrete slab under the base!
+	setup_building_type(true)
 	get_tree().call_group("sandy_floor", "refresh_foundations")
 
 func setup_building_type(is_main_base: bool):
-	if visual_sprite:
-			visual_sprite.type = visual_sprite.BuildingType.GENERATOR
+	if not visual_sprite:
+		visual_sprite = get_node_or_null("VisualBuildingSprite") if has_node("VisualBuildingSprite") else get_node_or_null("VisualSprite")
+	if visual_sprite and "type" in visual_sprite:
+		visual_sprite.type = 0 # 0 is MAIN_BASE in VisualBuildingSprite
+		if visual_sprite.has_method("queue_redraw"):
+			visual_sprite.queue_redraw()
 
 func set_preview_mode(enabled: bool):
 	if visual_sprite:
 		visual_sprite.is_preview = enabled
 		
-	# Disable physics shape cleanly
 	var col = get_node_or_null("CollisionShape2D")
 	if col:
 		col.set_deferred("disabled", enabled)
 		
-	# Keep navmesh clean during placement preview
 	if enabled:
 		remove_from_group("navmesh_source")
 	else:
@@ -49,12 +51,7 @@ func sync_base_health(new_hp: int):
 	update_ui()
 	
 	if current_health <= 0 and multiplayer.is_server():
-		print("Base destroyed! Triggering game over...")
-		
-		# Clean up navmesh source group
 		remove_from_group("navmesh_source")
-		
-		# Notify Main to trigger game over (and optionally request a navmesh rebake)
 		var main_node = get_parent()
 		if not (main_node and main_node.has_method("game_over")):
 			main_node = get_tree().get_first_node_in_group("main")

@@ -10,11 +10,16 @@ func _ready():
 	add_to_group("base")
 	add_to_group("navmesh_source")
 	
+	# Add Sanctum Forge-Hearth PointLight
+	if not has_node("SanctumLight"):
+		var light = LightUtils.create_point_light(Color(1.0, 0.60, 0.18), 1.6, 4.0)
+		light.name = "SanctumLight"
+		add_child(light)
+
 	current_health = max_health
 	if health_bar and health_bar.has_method("setup"):
 		health_bar.setup(current_health, max_health)
 	update_ui()
-	
 	setup_building_type(true)
 	get_tree().call_group("sandy_floor", "refresh_foundations")
 

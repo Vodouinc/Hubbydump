@@ -476,6 +476,27 @@ func _apply_type_setup():
 		if turret_timer: turret_timer.stop()
 		if gen_timer: gen_timer.stop()
 
+func _setup_building_light() -> void:
+	var existing = get_node_or_null("BuildingPointLight")
+	if existing: existing.queue_free()
+
+	var light: PointLight2D = null
+
+	match building_type:
+		Type.GENERATOR:
+			light = LightUtils.create_point_light(Color(0.20, 0.88, 1.0), 1.2, 2.5) # Glowing Cyan Reactor
+		Type.MANUFACTORUM:
+			light = LightUtils.create_point_light(Color(1.0, 0.55, 0.15), 1.4, 2.8) # Molten Smelter Fire
+		Type.DISTRIBUTOR, Type.NOOSPHERE_ANTENNA:
+			light = LightUtils.create_point_light(Color(1.0, 0.72, 0.15), 0.8, 1.8) # Beacon Glow
+		Type.RESEARCH_SHRINE:
+			light = LightUtils.create_point_light(Color(0.25, 0.95, 0.40), 0.9, 2.2) # Cogitator Emerald
+
+	if light:
+		light.name = "BuildingPointLight"
+		light.position = Vector2.ZERO
+		add_child(light)
+
 func _on_gen_timer_timeout():
 	if multiplayer.is_server():
 		var main_node = get_tree().get_first_node_in_group("main")

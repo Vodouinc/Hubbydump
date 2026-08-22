@@ -38,6 +38,12 @@ const COLOR_PURITY_WAX = Color(0.7, 0.1, 0.1)
 func _ready():
 	add_to_group("ServoSkull")
 	set_process(true)
+	
+	if not has_node("SkullSearchLight"):
+		var light = LightUtils.create_point_light(Color(0.20, 0.88, 1.0), 1.0, 1.8)
+		light.name = "SkullSearchLight"
+		add_child(light)
+	
 	if not Engine.is_editor_hint():
 		set_physics_process(multiplayer.is_server())
 	else:

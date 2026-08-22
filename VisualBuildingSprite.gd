@@ -1,7 +1,17 @@
 @tool
 extends Node2D
 
-enum BuildingType { MAIN_BASE, BARRICADE, GENERATOR, TURRET, MANUFACTORUM, DISTRIBUTOR, NOOSPHERE_ANTENNA, RESEARCH_SHRINE }
+enum BuildingType { 
+	MAIN_BASE = 0, 
+	BARRICADE = 1, 
+	GENERATOR = 2, 
+	TURRET = 3, 
+	MANUFACTORUM = 4, 
+	DISTRIBUTOR = 5, 
+	NOOSPHERE_ANTENNA = 6, 
+	RESEARCH_SHRINE = 7,
+	CYBERNETICA_FORGE = 8
+}
 
 @export var type: BuildingType = BuildingType.BARRICADE:
 	set(val):
@@ -62,7 +72,7 @@ func _process(delta: float) -> void:
 		needs_redraw = true
 
 	idle_timer += delta
-	if type in [BuildingType.GENERATOR, BuildingType.MAIN_BASE, BuildingType.MANUFACTORUM, BuildingType.TURRET] or is_instance_valid(laser_target_node) or (is_gate and not is_gate_open):
+	if type in [BuildingType.GENERATOR, BuildingType.MAIN_BASE, BuildingType.MANUFACTORUM, BuildingType.TURRET, BuildingType.CYBERNETICA_FORGE] or is_instance_valid(laser_target_node) or (is_gate and not is_gate_open):
 		needs_redraw = true
 		
 	if is_instance_valid(glow_layer):
@@ -97,6 +107,7 @@ func _draw():
 		BuildingType.DISTRIBUTOR:       _draw_distributor()
 		BuildingType.NOOSPHERE_ANTENNA: _draw_antenna()
 		BuildingType.RESEARCH_SHRINE:   _draw_research_shrine()
+		BuildingType.CYBERNETICA_FORGE: _draw_cybernetica_forge()
 
 	# Laser Tracer
 	if is_instance_valid(laser_target_node):
@@ -206,6 +217,28 @@ func _draw_turret():
 	draw_set_transform(Vector2.ZERO, 0, Vector2(1.0, 0.50))
 	draw_circle(Vector2(0, 2), 18.0, Color(0.02, 0.02, 0.04, 0.45))
 	draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
+
+	# --- NOOSPHERIC TARGETING UPLINK AUSPEX RETICLE ---
+	var main_node = get_tree().get_first_node_in_group("main")
+	var has_smart_uplink = is_noosphere_connected and not is_preview and (main_node.get("tech_targeting_uplink_unlocked") if main_node else false)
+
+	if has_smart_uplink:
+		var pulse = 0.65 + sin(idle_timer * 4.5) * 0.35
+		var reticle_r = 16.0 + (turret_upgrade_level * 1.5)
+		
+		# Flat ground projection
+		draw_set_transform(Vector2.ZERO, 0, Vector2(1.0, 0.50))
+		draw_arc(Vector2(0, 4), reticle_r, 0.0, TAU, 24, Color(C_CYAN.r, C_CYAN.g, C_CYAN.b, 0.45 * pulse), 1.2)
+		draw_arc(Vector2(0, 4), reticle_r * 0.6, 0.0, TAU, 16, Color(C_CYAN.r, C_CYAN.g, C_CYAN.b, 0.20 * pulse), 1.0)
+		
+		# Auspex rotating cardinal telemetry ticks
+		for i in range(4):
+			var a = (float(i) * (TAU / 4.0)) + (idle_timer * 0.8)
+			var p_outer = Vector2(cos(a), sin(a)) * reticle_r + Vector2(0, 4)
+			var p_inner = Vector2(cos(a), sin(a)) * (reticle_r - 3.5) + Vector2(0, 4)
+			draw_line(p_inner, p_outer, Color(C_CYAN.r, C_CYAN.g, C_CYAN.b, 0.75 * pulse), 1.4)
+		draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
+	# --------------------------------------------------
 
 	# Bunker Pedestal Base
 	var base_w = 20.0 + (turret_upgrade_level * 2.0)
@@ -429,6 +462,35 @@ func _draw_research_shrine():
 	IsoDraw.purity_seal(self, screen_p + Vector2(-10, -2), 8.0)
 	IsoDraw.purity_seal(self, screen_p + Vector2(10, -2), 8.0)
 
+# =============================================================================
+# CYBERNETICA FORGE
+# =============================================================================
+
+func _draw_cybernetica_forge():
+	# Ground Shadow
+	draw_set_transform(Vector2.ZERO, 0, Vector2(1.0, 0.50))
+	draw_circle(Vector2(0, 4), 36.0, Color(0.02, 0.02, 0.04, 0.45))
+	draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
+
+	# Heavy Steel Factory Chassis (48x48 base)
+	IsoDraw.box(self, Vector3(-24, -24, 0), Vector3(48, 48, 12), C_STEEL_DARK)
+	IsoDraw.box(self, Vector3(-18, -18, 12), Vector3(36, 36, 8), C_MARS_RED)
+
+	# Central Automata Assembly Chamber (Pulsing Cyan Core)
+	var pulse = 0.65 + sin(idle_timer * 4.5) * 0.35
+	IsoDraw.cylinder(self, Vector3(0, 0, 12), 14.0, 8.0, Color(C_CYAN.r, C_CYAN.g, C_CYAN.b, pulse))
+
+	# Heavy Cyber-Crane Servo Gantry
+	draw_line(Vector2(-14, -20), Vector2(-4, -36), C_STEEL_LIGHT, 3.5)
+	draw_line(Vector2(-4, -36), Vector2(8, -28), C_BRASS, 2.5)
+
+	# Opus Machina Sacred Cog Emblem
+	IsoDraw.opus_machina_cog(self, Vector2(0, -6), 8.0, 8)
+
+	# Purity Seals
+	IsoDraw.purity_seal(self, IsoDraw.project(20, 0, 8), 7.0)
+	IsoDraw.purity_seal(self, IsoDraw.project(-20, 0, 8), 7.0)
+
 # ==============================================================================
 # 9. UNSHADED GLOW LAYER
 # ==============================================================================
@@ -448,9 +510,22 @@ class BuildingGlowRenderer extends Node2D:
 					var cx = -10.0 + (i * 10.0)
 					var top_p = IsoDraw.project(cx, 0, 20)
 					draw_circle(top_p, 2.5, Color(0.20, 0.88, 1.0, 0.9))
+			3: # Turret (Targeting Telemetry Node Glow)
+				var main_node = get_tree().get_first_node_in_group("main")
+				var has_smart_uplink = p.is_noosphere_connected and not p.is_preview and (main_node.get("tech_targeting_uplink_unlocked") if main_node else false)
+				if has_smart_uplink:
+					# Glowing central cupola optic
+					var base_h = 6.0 + (p.turret_upgrade_level * 2.0)
+					var head_pos = IsoDraw.project(0, 0, base_h)
+					draw_circle(head_pos, 2.5, Color(0.20, 0.88, 1.0, 0.95))
+					draw_circle(head_pos, 1.0, Color.WHITE)
 			5: # Antenna
 				var mast = IsoDraw.project(0, 0, 22) + Vector2(0, -14)
 				draw_circle(mast, 3.0, Color(0.20, 0.88, 1.0, 0.9))
 			6: # Tech Shrine
 				var sp = IsoDraw.project(0, 16, 6)
 				draw_rect(Rect2(sp - Vector2(6, 2), Vector2(12, 4)), Color(0.25, 0.95, 0.40, 0.7))
+			8: # Cybernetica Forge
+				var core_top = IsoDraw.project(0, 0, 20)
+				draw_circle(core_top, 4.0, Color(0.20, 0.88, 1.0, 0.90))
+				draw_circle(core_top, 1.8, Color.WHITE)

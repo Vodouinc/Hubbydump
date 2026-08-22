@@ -77,6 +77,11 @@ var cached_target_enemy: Node2D = null
 @onready var health_bar: Node2D = get_node_or_null("HealthBar")
 
 func _ready():
+	if is_preview:
+		setup_as_preview()
+		_apply_type_setup()
+		return
+
 	add_to_group("buildings")
 	add_to_group("navmesh_source")
 	health_float = float(current_health)
@@ -88,7 +93,6 @@ func _ready():
 		health_bar.setup(current_health, max_health)
 	update_ui()
 
-	# Auto-set Cybernetica Forge rally point to Main Base Sanctum
 	if building_type == Type.CYBERNETICA_FORGE and rally_point_world == Vector2.ZERO:
 		var base_node = get_tree().get_first_node_in_group("base")
 		if is_instance_valid(base_node):
@@ -99,11 +103,11 @@ func _ready():
 	if gen_timer and not gen_timer.timeout.is_connected(_on_gen_timer_timeout):
 		gen_timer.timeout.connect(_on_gen_timer_timeout)
 
-	if not is_preview:
-		_setup_building_light()
-		if building_type == Type.BARRICADE:
-			call_deferred("refresh_barricade_connections")
-		get_tree().call_group("sandy_floor", "refresh_foundations")
+	_setup_building_light()
+	if building_type == Type.BARRICADE:
+		call_deferred("refresh_barricade_connections")
+	get_tree().call_group("sandy_floor", "refresh_foundations")
+
 
 func _process(delta: float):
 	if is_preview:
@@ -134,6 +138,8 @@ func _process(delta: float):
 		if gate_check_timer >= 0.08:
 			gate_check_timer = 0.0
 			_process_gate_sensor()
+
+
 
 func _setup_building_light() -> void:
 	if is_preview: return
@@ -424,6 +430,25 @@ func _process_turret_laser(delta: float):
 			if laser_target.has_method("take_damage"):
 				laser_target.take_damage(4)
 
+func _calculate_target_weight(enemy: Node2D) -> float:
+	var dist = global_position.distance_to(enemy.global_position)
+	var weight = 1000.0 - dist
+	
+	if enemy.get("has_telemetry_mark"):
+		weight += 500.0 # Prioritize Auspex painted targets
+		
+	match turret_spec:
+		GameData.TurretSpec.COGNIS_FLAK:
+			if enemy.type in [Enemy.EnemyType.STORMBOY, Enemy.EnemyType.GRETCHIN]:
+				weight += 400.0
+		GameData.TurretSpec.VOLKITE_CULVERIN:
+			if enemy.type == Enemy.EnemyType.NOB or enemy.is_in_group("objectives"):
+				weight += 600.0
+		GameData.TurretSpec.ARC_BLASTER:
+			if enemy.type in [Enemy.EnemyType.SQUIG, Enemy.EnemyType.ORK_BOY]:
+				weight += 300.0
+	return weight
+
 @rpc("call_local", "unreliable")
 func sync_laser_target(target_name: String):
 	if target_name.is_empty():
@@ -578,10 +603,20 @@ func _apply_type_setup():
 	max_health = info["max_hp"] if info else 100
 	health_float = float(max_health)
 
+	# ALWAYS update the visual sprite type, even in preview mode!
+	if not visual_spriteNode:
+		visual_spriteNode = get_node_or_null("VisualBuildingSprite")
+	
 	if is_instance_valid(visual_spriteNode):
 		if "type" in visual_spriteNode:
 			visual_spriteNode.type = int(building_type) + 1
+		if "is_preview" in visual_spriteNode:
+			visual_spriteNode.is_preview = is_preview
 		visual_spriteNode.queue_redraw()
+
+	# If this is a preview, stop here (do not set up real collisions or timers)
+	if is_preview:
+		return
 
 	if is_instance_valid(collision_shape) and collision_shape.shape:
 		match building_type:
@@ -633,11 +668,11 @@ func trigger_generator_pulse():
 
 func _process_turret_logic(delta: float):
 	turret_target_scan_timer += delta
-	if turret_target_scan_timer >= 0.1:
+	if turret_target_scan_timer >= 0.12:
 		turret_target_scan_timer = 0.0
-		var max_range = GameData.TURRET_RANGE_BY_LEVEL[turret_upgrade_level]
+		var max_range = GameData.TURRET_SPEC_INFO[turret_spec].range if turret_spec != GameData.TurretSpec.NONE else GameData.TURRET_RANGE_BY_LEVEL[turret_upgrade_level]
 		if not is_instance_valid(cached_target_enemy) or global_position.distance_to(cached_target_enemy.global_position) > max_range:
-			cached_target_enemy = _find_closest_enemy()
+			cached_target_enemy = _acquire_turret_target(max_range)
 
 	if is_instance_valid(cached_target_enemy):
 		var enemy_vel = cached_target_enemy.velocity if "velocity" in cached_target_enemy else Vector2.ZERO
@@ -664,6 +699,95 @@ func _process_turret_logic(delta: float):
 			last_synced_turret_rot = current_turret_rotation
 			if multiplayer.has_multiplayer_peer():
 				rpc("sync_turret_rotation", current_turret_rotation)
+
+func _acquire_turret_target(max_range: float) -> Node2D:
+	var main_node = get_tree().get_first_node_in_group("main")
+	var has_smart_uplink = is_noosphere_connected and (main_node.get("tech_targeting_uplink_unlocked") if main_node else false)
+
+	# Fallback: Primitive optical proximity tracking (Offline Servitor)
+	if not has_smart_uplink:
+		return _find_closest_enemy_fallback(max_range)
+
+	# Smart Noospheric Telemetry Target Selection
+	var enemies = get_tree().get_nodes_in_group("enemies")
+	var best_target: Node2D = null
+	var highest_score: float = -999999.0
+
+	for enemy in enemies:
+		if is_instance_valid(enemy):
+			var dist = global_position.distance_to(enemy.global_position)
+			if dist <= max_range:
+				var score = _calculate_noospheric_threat_score(enemy, dist, max_range)
+				if score > highest_score:
+					highest_score = score
+					best_target = enemy
+
+	return best_target
+
+func _calculate_noospheric_threat_score(enemy: Node2D, dist: float, max_range: float) -> float:
+	# Base score: closer targets have higher base priority
+	var score = (max_range - dist) * 1.5
+
+	# 1. AUSPEX LOCK-ON PRIORITY (Tech-Priest / Marshal painted target)
+	if enemy.get("has_telemetry_mark"):
+		score += 700.0
+
+	var enemy_type = enemy.get("type") if "type" in enemy else -1
+
+	# 2. WEAPON SPECIALIZATION PRIORITIES
+	match turret_spec:
+		GameData.TurretSpec.NONE:
+			# Base Battery: Moderate boost to swift raiders
+			if enemy_type == 3: # Stormboy
+				score += 250.0
+			elif enemy_type == 0: # Gretchin
+				score += 150.0
+
+		GameData.TurretSpec.COGNIS_FLAK:
+			# Anti-Air & Rapid Horde Shredder
+			if enemy_type == 3: # Stormboy (Airborne jump raiders)
+				score += 500.0
+			elif enemy_type == 0: # Gretchin (Scrap scavengers)
+				score += 350.0
+			elif enemy_type == 1: # Squig
+				score += 200.0
+
+		GameData.TurretSpec.VOLKITE_CULVERIN:
+			# Heavy Thermal Piercing Beam: Melts armored & high-HP units
+			if enemy_type == 4: # Nob (Mega-armored Warboss)
+				score += 650.0
+			elif enemy.is_in_group("objectives") or enemy.is_in_group("ork_citadel"):
+				score += 600.0
+			# Prioritize healthier enemies to maximize penetration damage
+			if "current_health" in enemy and "max_health" in enemy:
+				score += (float(enemy.current_health) / float(enemy.max_health)) * 200.0
+
+		GameData.TurretSpec.ARC_BLASTER:
+			# Chain Lightning: Prioritizes dense clusters of Squigs/Boyz for 3-target arcs
+			if enemy_type in [1, 2]: # Squig, Ork Boy
+				score += 300.0
+			# Cluster bonus: count nearby greenskins within arc chain radius (130px)
+			var cluster_count = 0
+			for other in get_tree().get_nodes_in_group("enemies"):
+				if is_instance_valid(other) and other != enemy:
+					if enemy.global_position.distance_to(other.global_position) <= 130.0:
+						cluster_count += 1
+						if cluster_count >= 2: break
+			score += cluster_count * 200.0
+
+	return score
+
+func _find_closest_enemy_fallback(max_range: float) -> Node2D:
+	var enemies = get_tree().get_nodes_in_group("enemies")
+	var closest_target: Node2D = null
+	var closest_dist = max_range
+	for enemy in enemies:
+		if is_instance_valid(enemy):
+			var dist = global_position.distance_to(enemy.global_position)
+			if dist < closest_dist:
+				closest_dist = dist
+				closest_target = enemy
+	return closest_target
 
 @rpc("call_local", "unreliable")
 func sync_turret_rotation(rot: float):
@@ -914,17 +1038,48 @@ func client_destroy():
 
 func setup_as_preview():
 	is_preview = true
-	remove_from_group("buildings")
-	remove_from_group("navmesh_source")
-	if has_node("Shadow"): $Shadow.visible = false
-	if has_node("HealthBar"): $HealthBar.visible = false
-	if is_instance_valid(collision_shape): collision_shape.set_deferred("disabled", true)
 
-func _draw() -> void:
-	if building_type == Type.CYBERNETICA_FORGE and not is_preview:
-		_draw_cybernetica_forge()
-		if rally_point_world != Vector2.ZERO:
-			_draw_rally_point_beacon()
+	# 1. Neutralize all physics layers & masks
+	collision_layer = 0
+	collision_mask = 0
+	set_process(false)
+	set_physics_process(false)
+
+	# 2. Disable collision shapes
+	if is_instance_valid(collision_shape):
+		collision_shape.disabled = true
+
+	for child in find_children("*", "CollisionShape2D", true, false):
+		(child as CollisionShape2D).disabled = true
+	for child in find_children("*", "CollisionPolygon2D", true, false):
+		(child as CollisionPolygon2D).disabled = true
+
+	# 3. Disable any Area2Ds (magnets, sensors)
+	for child in find_children("*", "Area2D", true, false):
+		var area = child as Area2D
+		area.monitoring = false
+		area.monitorable = false
+		area.collision_layer = 0
+		area.collision_mask = 0
+
+	# 4. Remove from all groups
+	var groups_to_remove = ["buildings", "navmesh_source", "friendlies", "controllable_units", "base", "dynamic_lights"]
+	for g in groups_to_remove:
+		if is_in_group(g):
+			remove_from_group(g)
+
+	# 5. Halt timers
+	if is_instance_valid(turret_timer): turret_timer.stop()
+	if is_instance_valid(gen_timer): gen_timer.stop()
+
+	# 6. DESTROY the shadow so DayNightCycle cannot re-enable it
+	if has_node("Shadow"):
+		$Shadow.queue_free()
+	if has_node("HealthBar"):
+		$HealthBar.queue_free()
+	var light = get_node_or_null("BuildingPointLight")
+	if is_instance_valid(light):
+		light.queue_free()
 
 func _draw_cybernetica_forge():
 	IsoDraw.box(self, Vector3(-24, -24, 0), Vector3(48, 48, 12), Color(0.12, 0.14, 0.18))

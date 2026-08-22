@@ -21,6 +21,7 @@ var can_plasma_attack: bool = true
 var plasma_cooldown: float = 0.65
 var plasma_damage: int = 30
 
+var preview_validation_info: Dictionary = {"valid": false, "reason": "INITIALIZING"}
 var tooltip_overlay: Node2D = null
 
 var is_attacking_anim: bool = false
@@ -37,12 +38,10 @@ var building_scene = preload("res://Building.tscn")
 var is_building_mode: bool = false
 var preview_instance: Node2D = null
 var preview_is_valid: bool = false
-var preview_connection_target: Node2D = null
 var hovered_interact_building: Node2D = null
 
 const GRID_SIZE: float = 32.0
 const WALL_LINK_RANGE: float = 95.0
-var preview_barricade_links: Array[Node2D] = []
 
 # RTS Controller Engine
 var rts_selected_units: Array[Node2D] = []
@@ -173,7 +172,6 @@ func _process_techpriest_movement(delta: float) -> void:
 	else:
 		velocity = velocity.move_toward(Vector2.ZERO, speed * 12.0 * delta)
 
-	# Add gentle separation from friendly units so they don't block
 	velocity += _calculate_friendly_separation() * 60.0
 	move_and_slide()
 
@@ -266,145 +264,19 @@ func toggle_build_mode(building_type_idx: int = 0):
 	selected_building_type = building_type_idx
 	
 	preview_instance = building_scene.instantiate()
-	preview_instance.modulate = Color(1, 1, 1, 0.5)
-	
-	if "building_type" in preview_instance:
-		preview_instance.building_type = selected_building_type
-	
-	if preview_instance.has_method("setup_as_preview"):
-		preview_instance.setup_as_preview()
-	elif preview_instance.has_node("CollisionShape2D"):
-		preview_instance.get_node("CollisionShape2D").disabled = true
-		
+	preview_instance.is_preview = true
 	get_parent().add_child(preview_instance)
+	preview_instance.setup_as_preview()
+	preview_instance.building_type = selected_building_type
+	_update_building_preview_position()
 
 func _cancel_build_mode():
 	is_building_mode = false
 	preview_is_valid = false
-	preview_connection_target = null
-	preview_barricade_links.clear()
 	if is_instance_valid(preview_instance):
 		preview_instance.queue_free()
 		preview_instance = null
 	queue_redraw()
-
-func _get_building_size(b_type: int) -> Vector2:
-	if b_type == -1: return Vector2(144, 144)
-	var info = GameData.STRUCTURE_INFO.get(b_type, null)
-	return info["size"] if info else Vector2(32, 32)
-
-func _requires_industrial_ground(b_type: int) -> bool:
-	var info = GameData.STRUCTURE_INFO.get(b_type, null)
-	return info["requires_industrial"] if info else false
-
-func _is_position_on_industrial_ground(pos: Vector2) -> bool:
-	var floor_node = get_tree().get_first_node_in_group("sandy_floor")
-	if floor_node and floor_node.has_method("is_world_pos_on_grid"):
-		return floor_node.is_world_pos_on_grid(pos)
-	return false
-
-func _get_snapped_build_position(mouse_pos: Vector2) -> Vector2:
-	if selected_building_type == 0:
-		var buildings = get_tree().get_nodes_in_group("buildings")
-		var closest_barricade: Node2D = null
-		var closest_score = 120.0
-
-		for b in buildings:
-			if not is_instance_valid(b) or b == preview_instance: continue
-			if "building_type" in b and int(b.building_type) == 0:
-				if "is_preview" in b and b.is_preview: continue
-				var d = mouse_pos.distance_to(b.global_position)
-				if d < closest_score and d > 10.0:
-					var conns = b.connected_neighbor_ids.size() if "connected_neighbor_ids" in b else 0
-					var score = d if conns < 2 else d + 40.0
-					if score < closest_score:
-						closest_score = score
-						closest_barricade = b
-
-		if is_instance_valid(closest_barricade):
-			var diff = mouse_pos - closest_barricade.global_position
-			var snapped_angle = snapped(diff.angle(), PI / 4.0)
-			var dir_vector = Vector2.RIGHT.rotated(snapped_angle).round()
-			var snapped_target = closest_barricade.global_position + (dir_vector * 64.0)
-			return Vector2(
-				floor(snapped_target.x / GRID_SIZE) * GRID_SIZE + (GRID_SIZE * 0.5),
-				floor(snapped_target.y / GRID_SIZE) * GRID_SIZE + (GRID_SIZE * 0.5)
-			)
-
-	var size = _get_building_size(selected_building_type)
-	var cells_x = int(round(size.x / GRID_SIZE))
-	var cells_y = int(round(size.y / GRID_SIZE))
-	var snapped_x = floor(mouse_pos.x / GRID_SIZE) * GRID_SIZE + (GRID_SIZE * 0.5) if cells_x % 2 == 1 else round(mouse_pos.x / GRID_SIZE) * GRID_SIZE
-	var snapped_y = floor(mouse_pos.y / GRID_SIZE) * GRID_SIZE + (GRID_SIZE * 0.5) if cells_y % 2 == 1 else round(mouse_pos.y / GRID_SIZE) * GRID_SIZE
-	return Vector2(snapped_x, snapped_y)
-
-func _is_build_location_valid(build_pos: Vector2) -> bool:
-	if selected_building_type == 3:
-		var nearest_deposit = _find_nearest_unoccupied_deposit(build_pos, 32.0)
-		if not is_instance_valid(nearest_deposit): return false
-
-	if _requires_industrial_ground(selected_building_type) and not _is_position_on_industrial_ground(build_pos):
-		return false
-
-	var is_placing_barricade = (selected_building_type == 0)
-	var placement_margin = -1.0 if is_placing_barricade else 4.0
-	var my_rect = Rect2(build_pos - (_get_building_size(selected_building_type) * 0.5), _get_building_size(selected_building_type)).grow(placement_margin)
-
-	var structures = get_tree().get_nodes_in_group("buildings")
-	structures.append_array(get_tree().get_nodes_in_group("base"))
-
-	for s in structures:
-		if not is_instance_valid(s) or s == preview_instance: continue
-		if "is_preview" in s and s.is_preview: continue
-		var s_type = -1 if s.is_in_group("base") else int(s.get("building_type"))
-		var other_is_barricade = (s_type == 0)
-		var other_margin = -1.0 if (is_placing_barricade and other_is_barricade) else 4.0
-		var other_rect = Rect2(s.global_position - (_get_building_size(s_type) * 0.5), _get_building_size(s_type)).grow(other_margin)
-
-		if my_rect.intersects(other_rect): return false
-
-	return true
-
-func _find_nearest_unoccupied_deposit(pos: Vector2, max_dist: float) -> Node2D:
-	for dep in get_tree().get_nodes_in_group("scrap_deposits"):
-		if is_instance_valid(dep) and not dep.get("is_occupied"):
-			if pos.distance_to(dep.global_position) <= max_dist:
-				return dep
-	return null
-
-func _find_preview_connection(build_pos: Vector2) -> Node2D:
-	var closest: Node2D = null
-	var closest_distance := CONDUIT_RANGE
-	var candidates: Array = get_tree().get_nodes_in_group("buildings")
-	candidates.append_array(get_tree().get_nodes_in_group("base"))
-	for candidate in candidates:
-		if not is_instance_valid(candidate) or candidate == preview_instance: continue
-		var distance = candidate.global_position.distance_to(build_pos)
-		if distance < closest_distance:
-			closest_distance = distance
-			closest = candidate
-	return closest
-	
-func _find_preview_barricade_links(build_pos: Vector2) -> Array[Node2D]:
-	var linked_neighbors: Array[Node2D] = []
-	if selected_building_type != 0: return linked_neighbors
-
-	var buildings = get_tree().get_nodes_in_group("buildings")
-	var candidates: Array[Dictionary] = []
-	for b in buildings:
-		if not is_instance_valid(b) or b == preview_instance: continue
-		if "building_type" in b and int(b.building_type) == 0:
-			if "is_preview" in b and b.is_preview: continue
-			var dist = b.global_position.distance_to(build_pos)
-			if dist <= WALL_LINK_RANGE and dist > 5.0:
-				var conns = b.connected_neighbor_ids.size() if "connected_neighbor_ids" in b else 0
-				if conns < 2: candidates.append({"node": b, "dist": dist})
-
-	candidates.sort_custom(func(a, b): return a.dist < b.dist)
-	for i in range(min(candidates.size(), 2)):
-		linked_neighbors.append(candidates[i].node)
-
-	return linked_neighbors
 
 func request_interact_nearby_structure() -> void:
 	var b_ui = get_tree().get_first_node_in_group("base_upgrade_ui")
@@ -426,13 +298,13 @@ func request_interact_nearby_structure() -> void:
 		var b_type = int(closest.building_type) if "building_type" in closest else -1
 
 		match b_type:
-			0: # Barricade -> Gate Upgrade (10 Scrap, 5 Req)
+			0: # Barricade -> Gate
 				if multiplayer.has_multiplayer_peer():
 					if main_node: main_node.rpc_id(1, "request_upgrade_gate", closest.name)
 				elif closest.has_method("try_upgrade_to_gate"):
 					closest.try_upgrade_to_gate()
 
-			2: # Turret Upgrade (Tiers 1, 2, 3 -> Specialization Modal on Tier 4)
+			2: # Turret
 				var lvl = closest.turret_upgrade_level if "turret_upgrade_level" in closest else 0
 				var spec = closest.turret_spec if "turret_spec" in closest else 0
 				if lvl < 3:
@@ -443,21 +315,21 @@ func request_interact_nearby_structure() -> void:
 				elif spec == GameData.TurretSpec.NONE and t_ui:
 					t_ui.open_modal(closest)
 
-			4: # Distributor -> Noosphere Antenna Upgrade (15 Req)
+			4: # Distributor -> Antenna
 				if multiplayer.has_multiplayer_peer():
 					if main_node: main_node.rpc_id(1, "request_upgrade_distributor", closest.name)
 				elif closest.has_method("try_upgrade_distributor"):
 					closest.try_upgrade_distributor()
 
-			6: # Tech Shrine -> Research Terminal
+			6: # Tech Shrine
 				if r_ui: r_ui.open_terminal(closest)
 
-			7: # Cybernetica Forge -> Recruitment Terminal
+			7: # Cybernetica Forge
 				if c_ui: c_ui.open_terminal(closest)
 
 func _get_closest_interactable_structure() -> Node2D:
 	var closest: Node2D = null
-	var closest_dist := 110.0 # Generous proximity detection
+	var closest_dist := 110.0
 
 	var base_node = get_tree().get_first_node_in_group("base")
 	if is_instance_valid(base_node):
@@ -474,6 +346,10 @@ func _get_closest_interactable_structure() -> Node2D:
 			closest = building
 			
 	return closest
+
+# ------------------------------------------------------------------------------
+# 1. PROCESS & REAL-TIME PREVIEW
+# ------------------------------------------------------------------------------
 
 func _process(delta: float):
 	if _is_local_authority():
@@ -503,6 +379,10 @@ func _process(delta: float):
 		if current_class == PlayerClass.RANGED and is_instance_valid(camera):
 			_process_rts_camera_panning(delta)
 
+		if is_building_mode:
+			_update_building_preview_position()
+			queue_redraw()
+
 		var mouse_pos = get_global_mouse_position()
 		if visual_sprite and visual_sprite.has_method("update_facing"):
 			visual_sprite.update_facing(mouse_pos)
@@ -510,19 +390,269 @@ func _process(delta: float):
 	if is_box_selecting:
 		queue_redraw()
 
-	if _is_local_authority() and is_building_mode and is_instance_valid(preview_instance):
-		var build_pos = _get_snapped_build_position(get_global_mouse_position())
-		preview_instance.global_position = build_pos
-		preview_is_valid = global_position.distance_to(build_pos) <= BUILD_RANGE and _is_build_location_valid(build_pos)
-		preview_connection_target = _find_preview_connection(build_pos)
-		preview_barricade_links = _find_preview_barricade_links(build_pos)
-		preview_instance.modulate = Color(0.45, 1.0, 0.78, 0.66) if preview_is_valid else Color(1.0, 0.28, 0.24, 0.66)
-		queue_redraw()
+func _update_building_preview_position():
+	if not is_instance_valid(preview_instance):
+		preview_instance = building_scene.instantiate()
+		preview_instance.is_preview = true
+		get_parent().add_child(preview_instance)
+		preview_instance.setup_as_preview()
+		preview_instance.building_type = selected_building_type
+
+	var mouse_world = get_global_mouse_position()
+	var snapped_pos = mouse_world.snapped(Vector2(GRID_SIZE, GRID_SIZE))
+
+	# Snap to nearest deposit if building an extractor
+	var info = GameData.STRUCTURE_INFO.get(selected_building_type, {})
+	var requires_deposit = info.get("requires_deposit", false)
+	if requires_deposit:
+		var nearest_dep = _find_nearest_deposit(mouse_world, 80.0)
+		if is_instance_valid(nearest_dep):
+			snapped_pos = nearest_dep.global_position
+
+	preview_instance.global_position = snapped_pos
+
+	preview_validation_info = _validate_structure_placement(snapped_pos, selected_building_type)
+	preview_is_valid = preview_validation_info.valid
+
+	if preview_is_valid:
+		preview_instance.modulate = Color(0.20, 0.88, 1.00, 0.80) # Holographic Cyan
+	else:
+		preview_instance.modulate = Color(0.92, 0.22, 0.18, 0.55) # Warning Red
+
+func _validate_structure_placement(target_pos: Vector2, b_type: int) -> Dictionary:
+	var info = GameData.STRUCTURE_INFO.get(b_type, {})
+	if info.is_empty():
+		return {"valid": false, "reason": "UNKNOWN BLUEPRINT"}
+
+	# 1. Auspex Range Check
+	if global_position.distance_to(target_pos) > BUILD_RANGE:
+		return {"valid": false, "reason": "OUT OF AUSPEX RANGE"}
+
+	# 2. Resource Reserves Check
+	var main_node = get_tree().get_first_node_in_group("main")
+	if main_node:
+		var cur_scrap = main_node.scrap_amount if "scrap_amount" in main_node else 0
+		var cur_req = main_node.requisition_amount if "requisition_amount" in main_node else 0
+		if cur_scrap < info.get("scrap", 0) or cur_req < info.get("req", 0):
+			return {"valid": false, "reason": "INSUFFICIENT RESERVES"}
+
+	var my_size: Vector2 = info.get("size", Vector2(32, 32))
+	var my_radius = maxf(my_size.x, my_size.y) * 0.45
+
+	# 3. Scrap Deposit Rules & Extractor Clearance
+	var requires_deposit = info.get("requires_deposit", false)
+	var deposits = get_tree().get_nodes_in_group("scrap_deposits")
+
+	if requires_deposit:
+		var target_deposit = _find_nearest_deposit(target_pos, 32.0)
+		if not is_instance_valid(target_deposit):
+			return {"valid": false, "reason": "MUST BE PLACED ON DEPOSIT"}
+
+		for b in get_tree().get_nodes_in_group("buildings"):
+			if is_instance_valid(b) and not b.get("is_preview") and b != preview_instance:
+				if b.global_position.distance_to(target_deposit.global_position) < 28.0:
+					return {"valid": false, "reason": "DEPOSIT ALREADY OCCUPIED"}
+	else:
+		for dep in deposits:
+			if is_instance_valid(dep):
+				var min_clearance = 28.0 + (my_radius * 0.85)
+				if dep.global_position.distance_to(target_pos) < min_clearance:
+					return {"valid": false, "reason": "RESERVED FOR EXTRACTOR"}
+
+	# 4. Sanctum Zone Clearance
+	var base_node = get_tree().get_first_node_in_group("base")
+	if is_instance_valid(base_node):
+		if base_node.global_position.distance_to(target_pos) < 54.0:
+			return {"valid": false, "reason": "SANCTUM ZONE OBSTRUCTED"}
+
+	# 5. Clearance from Existing Buildings
+	for b in get_tree().get_nodes_in_group("buildings"):
+		if is_instance_valid(b) and not b.get("is_preview") and b != preview_instance:
+			var other_type = int(b.get("building_type")) if "building_type" in b else 0
+			var other_info = GameData.STRUCTURE_INFO.get(other_type, {})
+			var other_size: Vector2 = other_info.get("size", Vector2(32, 32))
+			var other_radius = maxf(other_size.x, other_size.y) * 0.45
+
+			var min_dist = (my_radius + other_radius) * 0.85
+			if b_type == 0 and other_type == 0:
+				min_dist = 20.0
+
+			if b.global_position.distance_to(target_pos) < min_dist:
+				return {"valid": false, "reason": "TERRAIN OBSTRUCTED"}
+
+	return {"valid": true, "reason": "READY FOR SANCTIFICATION"}
+
+func _find_nearest_deposit(world_pos: Vector2, max_dist: float) -> Node2D:
+	var closest: Node2D = null
+	var min_d = max_dist
+	for dep in get_tree().get_nodes_in_group("scrap_deposits"):
+		if is_instance_valid(dep):
+			var d = world_pos.distance_to(dep.global_position)
+			if d < min_d:
+				min_d = d
+				closest = dep
+	return closest
+
+# ------------------------------------------------------------------------------
+# 2. HOLOGRAPHIC GRID & EXCLUSION ZONE DRAWING
+# ------------------------------------------------------------------------------
+
+func _draw():
+	if _is_local_authority() and is_building_mode and current_class == PlayerClass.MELEE:
+		_draw_holographic_build_grid()
+
+func _draw_holographic_build_grid() -> void:
+	var pulse = 0.70 + sin(Time.get_ticks_msec() * 0.007) * 0.30
+	var c_cyan_grid   := Color(0.20, 0.88, 1.00, 0.16 * pulse)
+	var c_cyan_bright := Color(0.20, 0.88, 1.00, 0.80 * pulse)
+	var c_amber       := Color(1.00, 0.72, 0.15, 0.85 * pulse)
+	var c_red_alert   := Color(0.92, 0.22, 0.18, 0.85 * pulse)
+	var c_red_dim     := Color(0.92, 0.22, 0.18, 0.15 * pulse)
+
+	var mouse_world = get_global_mouse_position()
+	var in_range = global_position.distance_to(mouse_world) <= BUILD_RANGE
+	var info = GameData.STRUCTURE_INFO.get(selected_building_type, {})
+	var requires_deposit = info.get("requires_deposit", false)
+
+	# 1. Auspex Range Perimeter & Radial Ticks
+	draw_circle(Vector2.ZERO, BUILD_RANGE, Color(0.20, 0.88, 1.00, 0.04 * pulse))
+	draw_arc(Vector2.ZERO, BUILD_RANGE, 0.0, TAU, 64, c_cyan_bright, 1.5)
+
+	for i in range(12):
+		var a = i * (TAU / 12.0)
+		var p_outer = Vector2(cos(a), sin(a)) * BUILD_RANGE
+		var p_inner = Vector2(cos(a), sin(a)) * (BUILD_RANGE - (8.0 if i % 3 == 0 else 4.0))
+		draw_line(p_inner, p_outer, c_cyan_bright, 1.2 if i % 3 != 0 else 2.0)
+
+	# 2. Snapped Tactical Grid Points
+	var half_grid_steps = int(ceil(BUILD_RANGE / GRID_SIZE))
+	var player_snapped = global_position.snapped(Vector2(GRID_SIZE, GRID_SIZE))
+
+	for gx in range(-half_grid_steps, half_grid_steps + 1):
+		for gy in range(-half_grid_steps, half_grid_steps + 1):
+			var world_cell = player_snapped + Vector2(gx * GRID_SIZE, gy * GRID_SIZE)
+			var local_cell = to_local(world_cell)
+			if local_cell.length() <= BUILD_RANGE:
+				draw_circle(local_cell, 1.2, c_cyan_grid)
+
+	# 3. Obstacle Clearance & Scrap Exclusion Zones
+	_draw_obstacle_exclusion_zones(c_red_alert, c_red_dim, pulse, requires_deposit)
+
+	# 4. Cursor Hover Bracket & Invalid Cross [ ✕ ]
+	var snap_target_world = preview_instance.global_position if is_instance_valid(preview_instance) else mouse_world.snapped(Vector2(GRID_SIZE, GRID_SIZE))
+	var snap_local = to_local(snap_target_world)
+	var tile_color = c_cyan_bright if preview_is_valid else (c_amber if not in_range else c_red_alert)
+
+	var half_s = GRID_SIZE * 0.5
+	var tile_rect = Rect2(snap_local - Vector2(half_s, half_s), Vector2(GRID_SIZE, GRID_SIZE))
+
+	var c_len = 6.0
+	draw_line(tile_rect.position, tile_rect.position + Vector2(c_len, 0), tile_color, 2.0)
+	draw_line(tile_rect.position, tile_rect.position + Vector2(0, c_len), tile_color, 2.0)
+	var tr = tile_rect.position + Vector2(tile_rect.size.x, 0)
+	draw_line(tr, tr - Vector2(c_len, 0), tile_color, 2.0)
+	draw_line(tr, tr + Vector2(0, c_len), tile_color, 2.0)
+	var bl = tile_rect.position + Vector2(0, tile_rect.size.y)
+	draw_line(bl, bl + Vector2(c_len, 0), tile_color, 2.0)
+	draw_line(bl, bl - Vector2(0, c_len), tile_color, 2.0)
+	var br = tile_rect.position + tile_rect.size
+	draw_line(br, br - Vector2(c_len, 0), tile_color, 2.0)
+	draw_line(br, br - Vector2(0, c_len), tile_color, 2.0)
+
+	if not preview_is_valid:
+		draw_rect(tile_rect, Color(0.92, 0.22, 0.18, 0.15), true)
+		draw_line(tile_rect.position + Vector2(4, 4), br - Vector2(4, 4), c_red_alert, 1.4)
+		draw_line(tr + Vector2(-4, 4), bl + Vector2(4, -4), c_red_alert, 1.4)
+	else:
+		draw_rect(tile_rect, Color(0.20, 0.88, 1.00, 0.10), true)
+
+	# 5. Tether Line to Tech-Priest
+	draw_line(Vector2.ZERO, snap_local, Color(tile_color.r, tile_color.g, tile_color.b, 0.35), 1.2)
+
+	# 6. Floating Status Badge Below Cursor
+	_draw_cursor_status_badge(snap_local, tile_color)
+
+func _draw_obstacle_exclusion_zones(c_red_alert: Color, c_red_dim: Color, pulse: float, placing_smelter: bool):
+	var info = GameData.STRUCTURE_INFO.get(selected_building_type, {})
+	var my_size: Vector2 = info.get("size", Vector2(32, 32))
+	var my_radius = maxf(my_size.x, my_size.y) * 0.45
+
+	# Base Sanctum Zone
+	var base_node = get_tree().get_first_node_in_group("base")
+	if is_instance_valid(base_node):
+		var base_local = to_local(base_node.global_position)
+		if base_local.length() <= BUILD_RANGE + 64.0:
+			draw_arc(base_local, 46.0, 0, TAU, 32, Color(c_red_alert.r, c_red_alert.g, c_red_alert.b, 0.45 * pulse), 1.2)
+			draw_circle(base_local, 46.0, c_red_dim)
+
+	# Existing Buildings Zones
+	for b in get_tree().get_nodes_in_group("buildings"):
+		if is_instance_valid(b) and not b.get("is_preview") and b != preview_instance:
+			var b_local = to_local(b.global_position)
+			if b_local.length() <= BUILD_RANGE + 48.0:
+				var b_type = int(b.get("building_type")) if "building_type" in b else 0
+				var b_info = GameData.STRUCTURE_INFO.get(b_type, {})
+				var sz: Vector2 = b_info.get("size", Vector2(32, 32))
+				var b_rect = Rect2(b_local - (sz * 0.5), sz)
+
+				draw_rect(b_rect, Color(0.92, 0.22, 0.18, 0.12), true)
+				draw_rect(b_rect, Color(c_red_alert.r, c_red_alert.g, c_red_alert.b, 0.40 * pulse), false, 1.0)
+				draw_line(b_rect.position, b_rect.position + b_rect.size, Color(0.92, 0.22, 0.18, 0.25), 1.0)
+				draw_line(b_rect.position + Vector2(b_rect.size.x, 0), b_rect.position + Vector2(0, b_rect.size.y), Color(0.92, 0.22, 0.18, 0.25), 1.0)
+
+	# Scrap Deposits
+	for dep in get_tree().get_nodes_in_group("scrap_deposits"):
+		if is_instance_valid(dep):
+			var dep_local = to_local(dep.global_position)
+			if dep_local.length() <= BUILD_RANGE + 64.0:
+				if placing_smelter:
+					var occupied = false
+					for b in get_tree().get_nodes_in_group("buildings"):
+						if is_instance_valid(b) and not b.get("is_preview") and b != preview_instance:
+							if b.global_position.distance_to(dep.global_position) < 28.0:
+								occupied = true
+								break
+
+					if occupied:
+						draw_arc(dep_local, 28.0, 0, TAU, 24, Color(c_red_alert.r, c_red_alert.g, c_red_alert.b, 0.5 * pulse), 1.4)
+						draw_circle(dep_local, 28.0, c_red_dim)
+					else:
+						var col = Color(1.0, 0.85, 0.20, 0.90 * pulse)
+						draw_arc(dep_local, 28.0, 0, TAU, 24, col, 1.8)
+						draw_circle(dep_local, 5.0, col)
+						for i in range(4):
+							var a = (float(i) * TAU / 4.0) + (Time.get_ticks_msec() * 0.002)
+							var p = dep_local + Vector2(cos(a), sin(a)) * 28.0
+							draw_circle(p, 2.0, col)
+				else:
+					var reserved_radius = 28.0 + (my_radius * 0.85)
+					draw_arc(dep_local, reserved_radius, 0, TAU, 24, Color(c_red_alert.r, c_red_alert.g, c_red_alert.b, 0.50 * pulse), 1.2)
+					draw_circle(dep_local, reserved_radius, Color(0.92, 0.22, 0.18, 0.10 * pulse))
+					draw_line(dep_local - Vector2(8, 8), dep_local + Vector2(8, 8), Color(0.92, 0.22, 0.18, 0.4), 1.2)
+					draw_line(dep_local + Vector2(-8, 8), dep_local + Vector2(8, -8), Color(0.92, 0.22, 0.18, 0.4), 1.2)
+
+func _draw_cursor_status_badge(snap_local: Vector2, badge_color: Color):
+	var text_str = "◆ %s ◆" % preview_validation_info.reason.to_upper()
+	if not preview_is_valid:
+		text_str = "⚠️ %s" % preview_validation_info.reason.to_upper()
+
+	var font = ThemeDB.fallback_font
+	var font_size = 9
+	var text_w = font.get_string_size(text_str, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size).x
+	var badge_pos = snap_local + Vector2(- (text_w + 16) * 0.5, (GRID_SIZE * 0.5) + 6.0)
+	var badge_rect = Rect2(badge_pos, Vector2(text_w + 16, 18))
+
+	draw_rect(badge_rect, Color(0.04, 0.05, 0.08, 0.94), true)
+	draw_rect(badge_rect, badge_color, false, 1.2)
+	draw_string(font, badge_pos + Vector2(8, 12), text_str, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, badge_color)
+
+# ------------------------------------------------------------------------------
+# 3. INPUT HANDLING
+# ------------------------------------------------------------------------------
 
 func _process_rts_camera_panning(delta: float):
 	if not is_instance_valid(camera): return
 
-	# 1. Do not pan if the game window is tabbed out or unfocused
 	var is_window_focused = get_window().has_focus() if get_window() else true
 	if not is_window_focused:
 		is_mmb_dragging = false
@@ -532,20 +662,17 @@ func _process_rts_camera_panning(delta: float):
 	var vp_size = get_viewport_rect().size
 	var m_pos = get_viewport().get_mouse_position()
 
-	# 2. Only edge-scroll if the mouse is inside the game window bounds
 	if Rect2(Vector2.ZERO, vp_size).has_point(m_pos):
 		if m_pos.x <= EDGE_SCROLL_MARGIN: cam_move.x -= 1
 		if m_pos.x >= vp_size.x - EDGE_SCROLL_MARGIN: cam_move.x += 1
 		if m_pos.y <= EDGE_SCROLL_MARGIN: cam_move.y -= 1
 		if m_pos.y >= vp_size.y - EDGE_SCROLL_MARGIN: cam_move.y += 1
 
-	# Keyboard Arrow Key panning
 	if Input.is_key_pressed(KEY_UP): cam_move.y -= 1
 	if Input.is_key_pressed(KEY_DOWN): cam_move.y += 1
 	if Input.is_key_pressed(KEY_LEFT): cam_move.x -= 1
 	if Input.is_key_pressed(KEY_RIGHT): cam_move.x += 1
 
-	# Middle-Mouse Drag or Edge/Arrow Pan
 	if is_mmb_dragging:
 		var mouse_delta = get_viewport().get_mouse_position() - mmb_drag_start_mouse
 		camera.global_position = mmb_drag_start_cam - mouse_delta
@@ -564,6 +691,11 @@ func _unhandled_input(event: InputEvent):
 		_handle_rts_commander_input(event)
 	else:
 		_handle_techpriest_arpg_input(event)
+
+func set_building_type(type_id: int):
+	selected_building_type = type_id
+	if is_instance_valid(preview_instance):
+		preview_instance.building_type = type_id
 
 func _handle_rts_commander_input(event: InputEvent):
 	var mouse_world = get_global_mouse_position()
@@ -584,7 +716,6 @@ func _handle_rts_commander_input(event: InputEvent):
 		get_viewport().set_input_as_handled()
 		return
 
-	# Left Click Box Selection
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			is_box_selecting = true
@@ -610,7 +741,6 @@ func _handle_rts_commander_input(event: InputEvent):
 		queue_redraw()
 		return
 
-	# Right Click RTS Order Dispatch
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 		is_attack_move_queued = false
 		var target_enemy = _find_enemy_under_cursor(mouse_world)
@@ -663,13 +793,17 @@ func _handle_techpriest_arpg_input(event: InputEvent):
 
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		if is_building_mode:
-			var build_pos = preview_instance.global_position if is_instance_valid(preview_instance) else get_global_mouse_position()
-			if global_position.distance_to(build_pos) <= BUILD_RANGE and _is_build_location_valid(build_pos):
+			if preview_is_valid and is_instance_valid(preview_instance):
+				var build_pos = preview_instance.global_position
 				var main_node = get_parent()
+				if not (main_node and main_node.has_method("request_build_structure")):
+					main_node = get_tree().get_first_node_in_group("main")
 				if main_node:
 					main_node.rpc_id(1, "request_build_structure", build_pos, selected_building_type)
 				AudioManager.play_sfx("building_place", build_pos, 0.0)
 				_cancel_build_mode()
+			else:
+				AudioManager.play_sfx("hit", global_position, -3.0, 1.8)
 		elif can_attack:
 			rpc("perform_attack", get_global_mouse_position())
 		get_viewport().set_input_as_handled()
@@ -753,7 +887,6 @@ func _issue_order_to_selection(target_pos: Vector2, is_attack_move: bool):
 			offset = Vector2(cos(angle), sin(angle)) * 32.0
 		var slot_pos = target_pos + offset
 
-		# Apply immediately to local player hero if selected
 		if unit == self:
 			rts_target_move_pos = slot_pos
 			rts_is_moving = true
@@ -763,7 +896,6 @@ func _issue_order_to_selection(target_pos: Vector2, is_attack_move: bool):
 			if unit.has_method("rts_move_to"):
 				unit.rts_move_to(slot_pos, is_attack_move)
 
-	# Send RPC to server for network peers
 	if multiplayer.has_multiplayer_peer():
 		rpc_id(1, "request_rts_move_order", unit_names, target_pos, is_attack_move)
 
@@ -920,62 +1052,6 @@ func _handle_modal_esc_close() -> bool:
 	if m_ui and m_ui.get("is_fullscreen_map"): m_ui.toggle_fullscreen_map(); return true
 	if is_building_mode: _cancel_build_mode(); return true
 	return false
-
-func _draw():
-	if current_class == PlayerClass.RANGED and _is_local_authority():
-		_draw_rts_selection_box()
-		_draw_marshal_command_aura()
-
-	if is_building_mode and is_instance_valid(preview_instance):
-		var local_build_pos = preview_instance.global_position - global_position
-		var placement_color = Color(0.35, 1.0, 0.72, 0.9) if preview_is_valid else Color(1.0, 0.25, 0.20, 0.95)
-		draw_arc(Vector2.ZERO, BUILD_RANGE, 0.0, TAU, 48, Color(0.20, 0.75, 0.95, 0.24), 1.5)
-
-		if selected_building_type == 0 and not preview_barricade_links.is_empty():
-			var wall_half_width = 5.0
-			var pulse = 0.55 + sin(Time.get_ticks_msec() * 0.008) * 0.25
-			var holo_fill = Color(0.20, 0.88, 1.0, 0.22 * pulse) if preview_is_valid else Color(1.0, 0.25, 0.20, 0.22 * pulse)
-			var holo_edge = Color(0.25, 0.92, 1.0, 0.75 * pulse) if preview_is_valid else Color(1.0, 0.28, 0.22, 0.75 * pulse)
-
-			for neighbor in preview_barricade_links:
-				if not is_instance_valid(neighbor): continue
-				var local_neighbor_pos = neighbor.global_position - global_position
-				var dir = (local_neighbor_pos - local_build_pos).normalized()
-				var perp = dir.orthogonal() * wall_half_width
-
-				var holo_poly = PackedVector2Array([
-					local_build_pos - perp, local_neighbor_pos - perp,
-					local_neighbor_pos + perp, local_build_pos + perp
-				])
-				draw_colored_polygon(holo_poly, holo_fill)
-				draw_line(local_build_pos - perp, local_neighbor_pos - perp, holo_edge, 1.5)
-				draw_line(local_build_pos + perp, local_neighbor_pos + perp, holo_edge, 1.5)
-
-		var b_size = _get_building_size(selected_building_type)
-		var b_rect = Rect2(local_build_pos - (b_size * 0.5), b_size)
-		draw_rect(b_rect, Color(placement_color.r, placement_color.g, placement_color.b, 0.15), true)
-		draw_rect(b_rect, placement_color, false, 1.5)
-
-func _draw_rts_selection_box():
-	if not is_box_selecting: return
-	var p1 = to_local(box_select_start_world)
-	var p2 = to_local(box_select_current_world)
-	var rect_min = Vector2(minf(p1.x, p2.x), minf(p1.y, p2.y))
-	var rect_max = Vector2(maxf(p1.x, p2.x), maxf(p1.y, p2.y))
-	var select_rect = Rect2(rect_min, rect_max - rect_min)
-	var col_fill = Color(0.20, 0.88, 1.0, 0.15) if not is_attack_move_queued else Color(1.0, 0.25, 0.20, 0.15)
-	var col_edge = Color(0.20, 0.88, 1.0, 0.85) if not is_attack_move_queued else Color(1.0, 0.25, 0.20, 0.85)
-	draw_rect(select_rect, col_fill, true)
-	draw_rect(select_rect, col_edge, false, 1.2)
-
-func _draw_marshal_command_aura():
-	var aura_radius = 230.0
-	var is_conq = (active_doctrina == Doctrina.CONQUEROR)
-	var pulse = 0.55 + sin(Time.get_ticks_msec() * 0.005) * 0.2
-	var aura_color = Color(1.0, 0.75, 0.15, 0.35 * pulse) if is_conq else Color(0.20, 0.88, 1.0, 0.35 * pulse)
-	var edge_color = Color(1.0, 0.80, 0.20, 0.75 * pulse) if is_conq else Color(0.30, 0.92, 1.0, 0.75 * pulse)
-	draw_arc(Vector2.ZERO, aura_radius, 0.0, TAU, 36, aura_color, 1.5)
-	draw_arc(Vector2.ZERO, aura_radius + 4.0, 0.0, TAU, 36, Color(edge_color.r, edge_color.g, edge_color.b, 0.2 * pulse), 1.0)
 
 func _find_enemy_under_cursor(world_pos: Vector2) -> Node2D:
 	var space = get_world_2d().direct_space_state
@@ -1206,14 +1282,13 @@ class TooltipOverlayRenderer extends Node2D:
 
 	func _draw() -> void:
 		var p = get_parent()
-		if not is_instance_valid(p) or p.current_class != 0: return # Tech-Priest only
+		if not is_instance_valid(p) or p.current_class != 0: return
 		if p.is_building_mode: return
 		if not is_instance_valid(p.hovered_interact_building): return
 
 		var b = p.hovered_interact_building
 		var local_b_pos = b.global_position - p.global_position
 
-		# 1. Subtle In-World Ground Projection Ring beneath the building
 		var pulse = 0.7 + sin(Time.get_ticks_msec() * 0.007) * 0.3
 		var ring_col = Color(0.20, 0.88, 1.0, 0.65 * pulse)
 		var ring_r = 28.0
@@ -1223,13 +1298,11 @@ class TooltipOverlayRenderer extends Node2D:
 		draw_arc(local_b_pos, ring_r, 0.0, TAU, 32, ring_col, 1.2)
 		draw_circle(local_b_pos, ring_r, Color(0.20, 0.88, 1.0, 0.06 * pulse))
 
-		# Corner Tactical Brackets
 		for i in range(4):
 			var a = (float(i) * TAU / 4.0) + (Time.get_ticks_msec() * 0.001)
 			var pt = local_b_pos + Vector2(cos(a), sin(a)) * ring_r
 			draw_circle(pt, 2.0, ring_col)
 
-		# 2. Compact Floating [E] Keycap Icon above building (Zero text clutter)
 		var icon_pos = local_b_pos + Vector2(0, -ring_r - 12.0)
 		var key_rect = Rect2(icon_pos - Vector2(10, 10), Vector2(20, 20))
 		draw_rect(key_rect, Color(0.04, 0.05, 0.08, 0.92), true)

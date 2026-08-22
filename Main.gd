@@ -44,6 +44,8 @@ var building_count: int = 0
 var scrap_amount: int = 40
 var requisition_amount: int = 10
 
+var tech_targeting_uplink_unlocked: bool = false
+
 var base_radar_level: int = 0
 var tech_waaagh_reader_unlocked: bool = false
 var wave_hud_node: Control = null
@@ -650,21 +652,6 @@ func _custom_spawner(data) -> Node:
 			player.position = base_pos + Vector2(offset_x, 80.0)
 			return player
 
-		"kastelan_robot":
-			var robot_script = load("res://KastelanRobot.gd")
-			var robot = CharacterBody2D.new()
-			robot.set_script(robot_script)
-			robot.name = str(data["name"])
-			robot.position = data["position"]
-			robot.set_multiplayer_authority(1)
-			var owner_id = data.get("owner_id", 1)
-			var p_node = get_node_or_null(str(owner_id))
-			if p_node:
-				robot.player_owner = p_node
-				if "active_kastelan_robot" in p_node:
-					p_node.active_kastelan_robot = robot
-			return robot
-
 		"cohort_infantry":
 			var inf_script = load("res://SkitariiInfantry.gd")
 			var inf = CharacterBody2D.new()
@@ -1179,19 +1166,22 @@ func unlock_tech(tech_index: int):
 		3: tech_magnet_unlocked = true
 		4: tech_electro_barricades_unlocked = true
 		5: tech_spikes_cover_unlocked = true
+		6: tech_targeting_uplink_unlocked = true
+		
 	if multiplayer.has_multiplayer_peer():
-		rpc("sync_tech_tree", tech_shields_unlocked, tech_lasers_unlocked, tech_nanobots_unlocked, tech_magnet_unlocked, tech_electro_barricades_unlocked, tech_spikes_cover_unlocked)
+		rpc("sync_tech_tree", tech_shields_unlocked, tech_lasers_unlocked, tech_nanobots_unlocked, tech_magnet_unlocked, tech_electro_barricades_unlocked, tech_spikes_cover_unlocked, tech_targeting_uplink_unlocked)
 	else:
-		sync_tech_tree(tech_shields_unlocked, tech_lasers_unlocked, tech_nanobots_unlocked, tech_magnet_unlocked, tech_electro_barricades_unlocked, tech_spikes_cover_unlocked)
+		sync_tech_tree(tech_shields_unlocked, tech_lasers_unlocked, tech_nanobots_unlocked, tech_magnet_unlocked, tech_electro_barricades_unlocked, tech_spikes_cover_unlocked, tech_targeting_uplink_unlocked)
 
 @rpc("call_local", "reliable")
-func sync_tech_tree(shields: bool, lasers: bool, nanobots: bool, magnet: bool, electro_walls: bool, spikes_cover: bool):
+func sync_tech_tree(shields: bool, lasers: bool, nanobots: bool, magnet: bool, electro_walls: bool, spikes_cover: bool, targeting: bool = false):
 	tech_shields_unlocked = shields
 	tech_lasers_unlocked = lasers
 	tech_nanobots_unlocked = nanobots
 	tech_magnet_unlocked = magnet
 	tech_electro_barricades_unlocked = electro_walls
 	tech_spikes_cover_unlocked = spikes_cover
+	tech_targeting_uplink_unlocked = targeting
 	get_tree().call_group("buildings", "_apply_tech_stats")
 	get_tree().call_group("research_ui", "refresh_tech_cards")
 
@@ -1203,6 +1193,22 @@ func request_build_structure(build_pos: Vector2, building_type: int = 0):
 
 	var scrap_c = info["scrap"]
 	var req_c = info["req"]
+
+	# Server deposit clearance enforcement
+	var requires_dep = info.get("requires_deposit", false)
+	var deposits = get_tree().get_nodes_in_group("scrap_deposits")
+	
+	if requires_dep:
+		var has_valid_dep = false
+		for dep in deposits:
+			if is_instance_valid(dep) and dep.global_position.distance_to(build_pos) < 32.0:
+				has_valid_dep = true
+				break
+		if not has_valid_dep: return
+	else:
+		for dep in deposits:
+			if is_instance_valid(dep) and dep.global_position.distance_to(build_pos) < 42.0:
+				return # Blocked by deposit extractor clearance
 
 	if scrap_amount >= scrap_c and requisition_amount >= req_c:
 		scrap_amount -= scrap_c
@@ -1356,6 +1362,7 @@ func execute_rematch():
 	tech_magnet_unlocked = false
 	tech_electro_barricades_unlocked = false
 	tech_spikes_cover_unlocked = false
+	tech_targeting_uplink_unlocked = false
 
 	if (not multiplayer.has_multiplayer_peer()) or multiplayer.is_server():
 		if wave_timer: wave_timer.stop()

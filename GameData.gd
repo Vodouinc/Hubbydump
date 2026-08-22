@@ -333,5 +333,12 @@ const TECH_DATA: Array[Dictionary] = [
 		"cost": 20,
 		"rune": "⚔️",
 		"desc": "Barricades sprout recoil spikes (18 DMG to melee attackers) and grant -35% ranged damage reduction (Trench Cover) to nearby allies."
+	},
+	{
+		"id": 6,
+		"name": "Servitor Noosphere Targeting Uplink",
+		"cost": 30,
+		"rune": "👁️",
+		"desc": "Hardwires turret servitor implants into the live Noosphere grid. Batteries prioritize tactical targets per weapon role and immediately lock onto painted targets."
 	}
 ]

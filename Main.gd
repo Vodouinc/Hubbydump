@@ -326,7 +326,12 @@ func _setup_core_sub_uis():
 		w_hud.name = "WaveHUD"
 		$UI.add_child(w_hud)
 		wave_hud_node = w_hud
-		
+
+	if not has_node("UI/AbilityHUD"):
+		var a_hud = load("res://AbilityHUD.gd").new()
+		a_hud.name = "AbilityHUD"
+		$UI.add_child(a_hud)
+
 	if not has_node("UI/CyberneticaUI"):
 		var c_ui = load("res://CyberneticaUI.gd").new()
 		c_ui.name = "CyberneticaUI"
@@ -645,12 +650,27 @@ func _custom_spawner(data) -> Node:
 			player.position = base_pos + Vector2(offset_x, 80.0)
 			return player
 
+		"kastelan_robot":
+			var robot_script = load("res://KastelanRobot.gd")
+			var robot = CharacterBody2D.new()
+			robot.set_script(robot_script)
+			robot.name = str(data["name"])
+			robot.position = data["position"]
+			robot.set_multiplayer_authority(1)
+			var owner_id = data.get("owner_id", 1)
+			var p_node = get_node_or_null(str(owner_id))
+			if p_node:
+				robot.player_owner = p_node
+				if "active_kastelan_robot" in p_node:
+					p_node.active_kastelan_robot = robot
+			return robot
+
 		"cohort_infantry":
 			var inf_script = load("res://SkitariiInfantry.gd")
 			var inf = CharacterBody2D.new()
 			inf.set_script(inf_script)
 			inf.name = str(data["name"])
-			inf.global_position = data["position"]
+			inf.position = data["position"] # Fixed: uses position, not global_position
 			inf.unit_type = data.get("unit_type", GameData.CohortUnitType.VANGUARD)
 			inf.set_multiplayer_authority(1)
 			return inf
@@ -660,7 +680,7 @@ func _custom_spawner(data) -> Node:
 			var kata = CharacterBody2D.new()
 			kata.set_script(kata_script)
 			kata.name = str(data["name"])
-			kata.global_position = data["position"]
+			kata.position = data["position"] # Fixed: uses position, not global_position
 			kata.set_multiplayer_authority(1)
 			return kata
 
@@ -698,7 +718,7 @@ func _custom_spawner(data) -> Node:
 			var robot = CharacterBody2D.new()
 			robot.set_script(robot_script)
 			robot.name = str(data["name"])
-			robot.global_position = data["position"]
+			robot.position = data["position"] # Fixed: uses position
 			robot.set_multiplayer_authority(1)
 			var owner_id = data["owner_id"]
 			var p_node = get_node_or_null(str(owner_id))
@@ -744,7 +764,7 @@ func _custom_spawner(data) -> Node:
 			var bodyguard_scene = preload("res://SkitariiBodyguard.tscn")
 			var bg = bodyguard_scene.instantiate()
 			bg.name = str(data["name"])
-			bg.global_position = data["position"]
+			bg.position = data["position"]
 			bg.set_multiplayer_authority(1)
 			var owner_id = data["owner_id"]
 			var p_node = get_node_or_null(str(owner_id))
@@ -757,7 +777,7 @@ func _custom_spawner(data) -> Node:
 			var servoskull_scene = preload("res://ServoSkull.tscn")
 			var skull = servoskull_scene.instantiate()
 			skull.name = str(data["name"])
-			skull.global_position = data["position"]
+			skull.position = data["position"]
 			skull.set_multiplayer_authority(1)
 			var owner_id = data["owner_id"]
 			var p_node = get_node_or_null(str(owner_id))

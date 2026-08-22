@@ -192,7 +192,7 @@ func _process_cybernetica_manufacturing(delta: float):
 		production_queue.pop_front()
 		_spawn_manufactured_unit(current_unit_id)
 		if multiplayer.has_multiplayer_peer():
-			rpc("sync_production_state", production_queue, production_timer)
+			rpc("sync_production_state", production_queue.duplicate(), production_timer)
 
 func _spawn_manufactured_unit(unit_type_id: int):
 	var main_node = get_tree().get_first_node_in_group("main")
@@ -224,8 +224,10 @@ func _spawn_manufactured_unit(unit_type_id: int):
 
 	if is_instance_valid(unit_node):
 		var target_loc = rally_point_world if rally_point_world != Vector2.ZERO else (global_position + Vector2(0, 60))
-		if unit_node.has_method("rts_move_to"):
-			unit_node.rts_move_to(target_loc, false)
+		if unit_node.has_method("set_initial_rally"):
+			unit_node.set_initial_rally(target_loc)
+		elif unit_node.has_method("rts_move_to"):
+			unit_node.rts_move_to(target_loc, true) # true = attack-move
 
 func try_queue_unit(unit_id: int) -> bool:
 	if building_type != Type.CYBERNETICA_FORGE: return false
@@ -243,19 +245,20 @@ func try_queue_unit(unit_id: int) -> bool:
 	main_node.scrap_amount -= unit_data.get("scrap", 0)
 	main_node.requisition_amount -= unit_data.get("req", 0)
 	
+	production_queue.append(unit_id)
+	
 	if multiplayer.has_multiplayer_peer():
 		main_node.rpc("sync_resources", main_node.scrap_amount, main_node.requisition_amount)
-		production_queue.append(unit_id)
-		rpc("sync_production_state", production_queue, production_timer)
-	else:
-		production_queue.append(unit_id)
-
+		rpc("sync_production_state", production_queue.duplicate(), production_timer)
+	
 	return true
 
 @rpc("call_local", "reliable")
-func sync_production_state(queue: Array, timer_val: float):
+func sync_production_state(queue_data: Array, timer_val: float):
+	var incoming = queue_data.duplicate()
 	production_queue.clear()
-	for q in queue: production_queue.append(int(q))
+	for item in incoming:
+		production_queue.append(int(item))
 	production_timer = timer_val
 
 @rpc("call_local", "reliable")

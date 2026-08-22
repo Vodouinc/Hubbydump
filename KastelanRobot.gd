@@ -9,6 +9,13 @@ var player_owner: Node2D = null
 var current_target_enemy: Node2D = null
 var anchor_position: Vector2 = Vector2.ZERO
 
+var rally_anchor: Vector2 = Vector2.ZERO
+var has_received_player_order: bool = false
+
+var rts_target_pos: Vector2 = Vector2.ZERO
+var is_rts_moving: bool = false
+var is_rts_selected: bool = false
+
 # Combat Stats
 @export var max_health: int = 750
 var current_health: int = 750
@@ -44,6 +51,7 @@ func _ready() -> void:
 	add_to_group("bodyguards")
 	add_to_group("kastelan_robots")
 	add_to_group("friendlies")
+	add_to_group("controllable_units")
 	
 	current_health = max_health
 	current_shield = max_shield
@@ -99,6 +107,19 @@ func _physics_process(delta: float) -> void:
 	rpc("sync_transform", global_position, is_facing_left, int(active_protocol))
 
 func _process_escort_behavior(delta: float, is_conqueror: bool) -> void:
+	if is_rts_moving:
+		var dist_to_rts = global_position.distance_to(rts_target_pos)
+		if dist_to_rts > 15.0:
+			velocity = global_position.direction_to(rts_target_pos) * movement_speed
+			is_facing_left = (velocity.x < -0.1)
+		else:
+			is_rts_moving = false
+			velocity = Vector2.ZERO
+		
+		var nearby = _find_nearest_enemy(240.0)
+		if is_instance_valid(nearby):
+			_engage_enemy(nearby, is_conqueror)
+		return
 	# Lead the Marshal by 40px in front to act as mobile ballistic cover
 	var player_facing = Vector2.RIGHT
 	if player_owner.get("visual_sprite"):
@@ -116,6 +137,42 @@ func _process_escort_behavior(delta: float, is_conqueror: bool) -> void:
 	var nearby_enemy = _find_nearest_enemy(240.0)
 	if is_instance_valid(nearby_enemy):
 		_engage_enemy(nearby_enemy, is_conqueror)
+
+func set_initial_rally(target_pos: Vector2) -> void:
+	rally_anchor = target_pos
+	has_received_player_order = false
+	rts_target_pos = target_pos
+	is_rts_moving = true
+	active_protocol = Protocol.ESCORT
+	current_target_enemy = null
+
+func rts_move_to(pos: Vector2, _is_attack_move: bool = false) -> void:
+	has_received_player_order = true
+	rts_target_pos = pos
+	is_rts_moving = true
+	active_protocol = Protocol.ESCORT
+	current_target_enemy = null
+
+func rts_attack_target(target: Node2D) -> void:
+	has_received_player_order = true
+	current_target_enemy = target
+	active_protocol = Protocol.ELIMINATION
+	is_rts_moving = false
+
+func rts_stop() -> void:
+	has_received_player_order = true
+	is_rts_moving = false
+	current_target_enemy = null
+
+func rts_hold() -> void:
+	has_received_player_order = true
+	is_rts_moving = false
+	active_protocol = Protocol.ANCHOR_SIEGE
+	anchor_position = global_position
+
+func set_rts_selected(selected: bool) -> void:
+	is_rts_selected = selected
+	queue_redraw()
 
 func _process_elimination_behavior(delta: float, is_conqueror: bool) -> void:
 	if not is_instance_valid(current_target_enemy):
@@ -254,10 +311,15 @@ func _find_nearest_enemy(max_d: float) -> Node2D:
 	return closest
 
 func _find_owner_player() -> void:
+	var fallback_player = null
 	for p in get_tree().get_nodes_in_group("players"):
-		if p.get("current_class") == 1: # Skitarii Marshal
-			player_owner = p
-			break
+		if is_instance_valid(p):
+			if p.get("current_class") == 1: # Prioritize Skitarii Marshal
+				player_owner = p
+				return
+			elif fallback_player == null:
+				fallback_player = p
+	player_owner = fallback_player
 
 # ==============================================================================
 # 2.5D KASTELAN BATTLE-AUTOMATA PROCEDURAL DRAWING
@@ -269,6 +331,10 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func _draw() -> void:
+		# Draw RTS Selection Circle
+	if is_rts_selected:
+		draw_arc(Vector2.ZERO, 22.0, 0.0, TAU, 32, Color(0.20, 0.88, 1.0, 0.85), 1.6)
+
 	# 1. Projected 360° Refractor Shield Dome (Anchor/Siege Mode)
 	if active_protocol == Protocol.ANCHOR_SIEGE and current_shield > 0.0:
 		var pulse = 0.55 + sin(shield_pulse) * 0.15

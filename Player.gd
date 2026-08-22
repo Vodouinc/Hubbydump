@@ -67,6 +67,7 @@ var active_doctrina: Doctrina = Doctrina.CONQUEROR
 var orbital_strike_cooldown: float = 0.0
 var active_bodyguards: Array = []
 var active_servo_skulls: Array = []
+var active_kastelan_robot: Node2D = null
 var bodyguard_level: int = 0
 var damage_upgrade_level: int = 0
 var speed_upgrade_level: int = 0

@@ -4,6 +4,7 @@ class_name CyberneticaUI
 var panel_container: PanelContainer = null
 var unit_cards_container: HBoxContainer = null
 var queue_container: HBoxContainer = null
+var res_summary_label: Label = null
 var pop_label: Label = null
 var rally_label: Label = null
 var active_forge_node: Node2D = null
@@ -51,15 +52,21 @@ func _build_ui_layout():
 	sub_bar.add_theme_constant_override("separation", 24)
 	root_vbox.add_child(sub_bar)
 
+	res_summary_label = Label.new()
+	res_summary_label.text = "⚙ SCRAP: 40   ⚡ REQ: 10"
+	res_summary_label.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
+	res_summary_label.add_theme_font_size_override("font_size", 11)
+	sub_bar.add_child(res_summary_label)
+
 	pop_label = Label.new()
-	pop_label.text = "🤖 COHORT POPULATION: 0 / 12"
+	pop_label.text = "🤖 COHORT: 0 / 12"
 	pop_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.20))
 	pop_label.add_theme_font_size_override("font_size", 11)
 	sub_bar.add_child(pop_label)
 
 	rally_label = Label.new()
-	rally_label.text = "🚩 RALLY POINT: ACTIVE"
-	rally_label.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
+	rally_label.text = "🚩 RALLY: ACTIVE"
+	rally_label.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
 	rally_label.add_theme_font_size_override("font_size", 11)
 	sub_bar.add_child(rally_label)
 
@@ -119,6 +126,16 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _process(_delta: float):
 	if visible and is_instance_valid(active_forge_node):
+		var main_node = get_tree().get_first_node_in_group("main")
+		var cur_scrap = main_node.scrap_amount if main_node and "scrap_amount" in main_node else 0
+		var cur_req = main_node.requisition_amount if main_node and "requisition_amount" in main_node else 0
+		var current_pop = main_node.get_cohort_population() if main_node and main_node.has_method("get_cohort_population") else 0
+
+		if res_summary_label:
+			res_summary_label.text = "⚙ SCRAP: %d   ⚡ REQUISITION: %d" % [cur_scrap, cur_req]
+		if pop_label:
+			pop_label.text = "🤖 COHORT: %d / %d" % [current_pop, GameData.BASE_COHORT_CAP]
+
 		_refresh_queue_display()
 
 func _refresh_display():
@@ -128,8 +145,6 @@ func _refresh_display():
 	var cur_scrap = main_node.scrap_amount if main_node and "scrap_amount" in main_node else 0
 	var cur_req = main_node.requisition_amount if main_node and "requisition_amount" in main_node else 0
 	var current_pop = main_node.get_cohort_population() if main_node and main_node.has_method("get_cohort_population") else 0
-
-	pop_label.text = "🤖 COHORT POPULATION: %d / %d" % [current_pop, GameData.BASE_COHORT_CAP]
 
 	for c in unit_cards_container.get_children():
 		c.queue_free()
@@ -210,14 +225,16 @@ func _on_fabricate_pressed(unit_type_id: int):
 			else:
 				if active_forge_node.has_method("try_queue_unit"):
 					active_forge_node.try_queue_unit(unit_type_id)
+		_refresh_display()
 
 func _refresh_queue_display():
 	if not visible or not is_instance_valid(active_forge_node): return
+	
+	var q: Array = active_forge_node.production_queue if "production_queue" in active_forge_node else []
+	var cur_timer: float = active_forge_node.production_timer if "production_timer" in active_forge_node else 0.0
+
 	for c in queue_container.get_children():
 		c.queue_free()
-
-	var q: Array = active_forge_node.get("production_queue") if "production_queue" in active_forge_node else []
-	var cur_timer: float = active_forge_node.get("production_timer") if "production_timer" in active_forge_node else 0.0
 
 	for i in range(5):
 		var slot = PanelContainer.new()
@@ -233,16 +250,18 @@ func _refresh_queue_display():
 			var u_id = q[i]
 			var data = GameData.COHORT_UNITS.get(u_id, {})
 			var slot_vbox = VBoxContainer.new()
+			slot_vbox.add_theme_constant_override("separation", 2)
 			slot.add_child(slot_vbox)
 
 			var lbl = Label.new()
 			lbl.text = "%s %s" % [data.get("icon", ""), data.get("name", "")]
 			lbl.add_theme_font_size_override("font_size", 9)
+			lbl.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
 			slot_vbox.add_child(lbl)
 
 			if i == 0:
 				var pbar = ProgressBar.new()
-				pbar.custom_minimum_size = Vector2(0, 10)
+				pbar.custom_minimum_size = Vector2(0, 8)
 				pbar.max_value = data.get("build_time", 5.0)
 				pbar.value = cur_timer
 				pbar.show_percentage = false
@@ -251,7 +270,7 @@ func _refresh_queue_display():
 				var queued_lbl = Label.new()
 				queued_lbl.text = "QUEUED #%d" % (i + 1)
 				queued_lbl.add_theme_font_size_override("font_size", 8)
-				queued_lbl.add_theme_color_override("font_color", Color(0.5, 0.55, 0.6))
+				queued_lbl.add_theme_color_override("font_color", Color(0.7, 0.75, 0.8))
 				slot_vbox.add_child(queued_lbl)
 		else:
 			var empty_lbl = Label.new()
@@ -259,7 +278,7 @@ func _refresh_queue_display():
 			empty_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			empty_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 			empty_lbl.add_theme_font_size_override("font_size", 9)
-			empty_lbl.add_theme_color_override("font_color", Color(0.3, 0.35, 0.4))
+			empty_lbl.add_theme_color_override("font_color", Color(0.35, 0.40, 0.45))
 			slot.add_child(empty_lbl)
 
 		queue_container.add_child(slot)

@@ -62,7 +62,7 @@ func _build_hud_layout():
 	for c in get_children():
 		c.queue_free()
 
-	_build_top_resource_header()
+	_build_top_left_resource_monitor()
 
 	tooltip_card = TooltipCard.new()
 	tooltip_card.name = "TooltipCard"
@@ -161,38 +161,48 @@ func _build_hud_layout():
 		augment_hbox.add_child(slot)
 		augment_buttons.append(slot)
 
-func _build_top_resource_header():
+# Dedicated Top-Left Resource Auspex Monitor
+func _build_top_left_resource_monitor():
 	var top_panel = PanelContainer.new()
-	top_panel.name = "TopResourceHeader"
-	top_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	top_panel.offset_left = -280
-	top_panel.offset_right = 280
-	top_panel.offset_top = 8
-	top_panel.offset_bottom = 40
-	top_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	top_panel.name = "TopLeftResourceMonitor"
+	top_panel.z_index = 100
+	top_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	top_panel.offset_left = 16
+	top_panel.offset_top = 12
+	top_panel.offset_right = 320
+	top_panel.offset_bottom = 56
 	top_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	
 	var sb = StyleBoxFlat.new()
-	sb.bg_color = Color(0.04, 0.05, 0.08, 0.95)
+	sb.bg_color = Color(0.04, 0.05, 0.08, 0.96)
 	sb.border_color = Color(0.82, 0.62, 0.24)
 	sb.set_border_width_all(1)
 	sb.set_corner_radius_all(4)
-	sb.content_margin_left = 12
-	sb.content_margin_right = 12
+	sb.content_margin_left = 10
+	sb.content_margin_right = 10
+	sb.content_margin_top = 6
+	sb.content_margin_bottom = 6
+	sb.shadow_color = Color(0, 0, 0, 0.6)
+	sb.shadow_size = 4
 	top_panel.add_theme_stylebox_override("panel", sb)
 	add_child(top_panel)
 
-	var hbox = HBoxContainer.new()
-	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	hbox.add_theme_constant_override("separation", 24)
-	top_panel.add_child(hbox)
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 2)
+	top_panel.add_child(vbox)
+
+	var title_lbl = Label.new()
+	title_lbl.text = "◆ FORGE RESERVES & TELEMETRY ◆"
+	title_lbl.add_theme_font_size_override("font_size", 8)
+	title_lbl.add_theme_color_override("font_color", Color(0.82, 0.62, 0.24))
+	vbox.add_child(title_lbl)
 
 	global_res_label = Label.new()
 	global_res_label.name = "GlobalResLabel"
-	global_res_label.text = "⚙ 40 SCRAP   ⚡ 10 REQ   🤖 COHORT: 0/12   📡 NOOSPHERE: CONNECTED"
+	global_res_label.text = "⚙ 40 SCRAP   ⚡ 10 REQ   🤖 0/12"
 	global_res_label.add_theme_font_size_override("font_size", 11)
-	global_res_label.add_theme_color_override("font_color", Color(0.90, 0.92, 0.96))
-	hbox.add_child(global_res_label)
+	global_res_label.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
+	vbox.add_child(global_res_label)
 
 func _create_pod_panel(pod_name: String, parent_container: Container) -> PanelContainer:
 	var pc = PanelContainer.new()
@@ -371,7 +381,7 @@ func refresh_hud_display():
 	var cur_pop = main_node.get_cohort_population() if main_node and main_node.has_method("get_cohort_population") else 0
 
 	if global_res_label:
-		global_res_label.text = "⚙ %d SCRAP   ⚡ %d REQ   🤖 COHORT: %d/%d   📡 NOOSPHERE: ACTIVE" % [
+		global_res_label.text = "⚙ %d SCRAP   ⚡ %d REQ   🤖 %d/%d" % [
 			cur_scrap, cur_req, cur_pop, GameData.BASE_COHORT_CAP
 		]
 

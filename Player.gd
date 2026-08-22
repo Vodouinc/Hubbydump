@@ -17,21 +17,18 @@ var attack_cooldown: float = 0.4
 var bullet_damage: int = 20
 var can_attack: bool = true
 
-# Tech-Priest Secondary Plasma
 var can_plasma_attack: bool = true
 var plasma_cooldown: float = 0.65
 var plasma_damage: int = 30
 
 var tooltip_overlay: Node2D = null
 
-# --- MELEE ATTACK ANIMATION STATE ---
 var is_attacking_anim: bool = false
 var attack_progress: float = 0.0
 var attack_angle: float = 0.0
 var attack_anim_duration: float = 0.22
 var already_hit_enemies: Array = []
 
-# --- BUILDING SYSTEM (TECH-PRIEST) ---
 var selected_building_type: int = 0
 const BUILD_RANGE: float = 260.0
 const CONDUIT_RANGE: float = 360.0
@@ -47,7 +44,6 @@ const GRID_SIZE: float = 32.0
 const WALL_LINK_RANGE: float = 95.0
 var preview_barricade_links: Array[Node2D] = []
 
-# --- RTS CONTROLLER ENGINE (SKITARII MARSHAL) ---
 var rts_selected_units: Array[Node2D] = []
 var is_box_selecting: bool = false
 var box_select_start_screen: Vector2 = Vector2.ZERO
@@ -55,21 +51,18 @@ var box_select_current_screen: Vector2 = Vector2.ZERO
 var is_attack_move_queued: bool = false
 var control_groups: Dictionary = {}
 
-# RTS Camera State
 var is_mmb_dragging: bool = false
 var mmb_drag_start_mouse: Vector2 = Vector2.ZERO
 var mmb_drag_start_cam: Vector2 = Vector2.ZERO
 const EDGE_SCROLL_MARGIN: float = 20.0
 const RTS_CAM_PAN_SPEED: float = 950.0
 
-# RTS Unit Navigation State for Marshal Hero
 var rts_target_move_pos: Vector2 = Vector2.ZERO
 var rts_is_moving: bool = false
 var rts_attack_target_node: Node2D = null
 var rts_is_attack_moving: bool = false
 var is_rts_selected: bool = false
 
-# Marshal Stance & Cooldowns
 var active_doctrina: Doctrina = Doctrina.CONQUEROR
 var orbital_strike_cooldown: float = 0.0
 var active_bodyguards: Array = []
@@ -156,9 +149,6 @@ func apply_class_stats():
 	if health_bar and health_bar.has_method("setup"):
 		health_bar.setup(current_health, max_health)
 
-# ==============================================================================
-# PHYSICS & MOVEMENT: ARPG (Tech-Priest) VS RTS (Marshal)
-# ==============================================================================
 func _physics_process(delta: float) -> void:
 	if current_class == PlayerClass.MELEE:
 		_process_techpriest_movement(delta)
@@ -241,9 +231,6 @@ func _calculate_corner_nudge(move_dir: Vector2) -> Vector2:
 
 	return Vector2.ZERO
 
-# ==============================================================================
-# BUILDING SYSTEM (TECH-PRIEST)
-# ==============================================================================
 func toggle_build_mode(building_type_idx: int = 0):
 	if is_building_mode and selected_building_type == building_type_idx:
 		_cancel_build_mode()
@@ -402,6 +389,8 @@ func request_interact_nearby_structure() -> void:
 	if r_ui and r_ui.visible: r_ui.close_terminal(); return
 	var t_ui = get_tree().get_first_node_in_group("turret_upgrade_ui")
 	if t_ui and t_ui.visible: t_ui.close_modal(); return
+	var c_ui = get_tree().get_first_node_in_group("cybernetica_ui")
+	if c_ui and c_ui.visible: c_ui.close_terminal(); return
 
 	var closest = _get_closest_interactable_structure()
 	if is_instance_valid(closest):
@@ -421,6 +410,7 @@ func request_interact_nearby_structure() -> void:
 				elif spec == GameData.TurretSpec.NONE and t_ui: t_ui.open_modal(closest)
 			elif b_type == 4: main_node.rpc_id(1, "request_upgrade_distributor", closest.name)
 			elif b_type == 6 and r_ui: r_ui.open_terminal(closest)
+			elif b_type == 7 and c_ui: c_ui.open_terminal(closest)
 
 func _get_closest_interactable_structure() -> Node2D:
 	var closest: Node2D = null
@@ -437,7 +427,7 @@ func _get_closest_interactable_structure() -> Node2D:
 		if not is_instance_valid(building) or not ("building_type" in building): continue
 		var b_type = int(building.building_type)
 		if b_type == 0 and building.get("is_gate"): continue
-		if not (b_type in [0, 2, 4, 6]): continue
+		if not (b_type in [0, 2, 4, 6, 7]): continue
 		var dist = global_position.distance_to(building.global_position)
 		if dist < closest_dist:
 			closest_dist = dist
@@ -445,9 +435,6 @@ func _get_closest_interactable_structure() -> Node2D:
 			
 	return closest
 
-# ==============================================================================
-# RTS CAMERA & PROCESS LOOP
-# ==============================================================================
 func _process(delta: float):
 	if orbital_strike_cooldown > 0.0:
 		orbital_strike_cooldown = maxf(0.0, orbital_strike_cooldown - delta)
@@ -485,7 +472,7 @@ func _process(delta: float):
 		preview_instance.global_position = build_pos
 		preview_is_valid = global_position.distance_to(build_pos) <= BUILD_RANGE and _is_build_location_valid(build_pos)
 		preview_connection_target = _find_preview_connection(build_pos)
-		preview_barricade_links = _find_preview_barricade_links(build_pos) if selected_building_type == 0 else []
+		preview_barricade_links = _find_preview_barricade_links(build_pos)
 		preview_instance.modulate = Color(0.45, 1.0, 0.78, 0.66) if preview_is_valid else Color(1.0, 0.28, 0.24, 0.66)
 		queue_redraw()
 
@@ -512,9 +499,6 @@ func _process_rts_camera_panning(delta: float):
 	elif cam_move != Vector2.ZERO:
 		camera.global_position += cam_move.normalized() * RTS_CAM_PAN_SPEED * delta
 
-# ==============================================================================
-# INPUT HANDLING & RTS SELECTION
-# ==============================================================================
 func _unhandled_input(event: InputEvent):
 	if not _is_local_authority(): return
 
@@ -652,10 +636,8 @@ func _handle_techpriest_arpg_input(event: InputEvent):
 		elif event.keycode in [KEY_4, KEY_KP_4]: toggle_build_mode(2); get_viewport().set_input_as_handled()
 		elif event.keycode in [KEY_5, KEY_KP_5]: toggle_build_mode(3); get_viewport().set_input_as_handled()
 		elif event.keycode in [KEY_6, KEY_KP_6]: toggle_build_mode(6); get_viewport().set_input_as_handled()
+		elif event.keycode in [KEY_7, KEY_KP_7]: toggle_build_mode(7); get_viewport().set_input_as_handled()
 
-# ==============================================================================
-# RTS SELECTION & FORMATION ORDERS
-# ==============================================================================
 func _execute_box_selection(add_to_selection: bool):
 	if not add_to_selection: _clear_rts_selection()
 
@@ -763,6 +745,9 @@ func _check_remote_building_click(world_pos: Vector2) -> bool:
 			elif b_type == 2:
 				var t_ui = get_tree().get_first_node_in_group("turret_upgrade_ui")
 				if t_ui: t_ui.open_modal(b); return true
+			elif b_type == 7:
+				var c_ui = get_tree().get_first_node_in_group("cybernetica_ui")
+				if c_ui: c_ui.open_terminal(b); return true
 
 	var base_node = get_tree().get_first_node_in_group("base")
 	if is_instance_valid(base_node) and base_node.global_position.distance_to(world_pos) <= 48.0:
@@ -778,6 +763,8 @@ func _handle_modal_esc_close() -> bool:
 	if r_ui and r_ui.visible: r_ui.close_terminal(); return true
 	var t_ui = get_tree().get_first_node_in_group("turret_upgrade_ui")
 	if t_ui and t_ui.visible: t_ui.close_modal(); return true
+	var c_ui = get_tree().get_first_node_in_group("cybernetica_ui")
+	if c_ui and c_ui.visible: c_ui.close_terminal(); return true
 	var s_ui = get_tree().get_first_node_in_group("settings_ui")
 	if s_ui and s_ui.visible: s_ui.toggle_settings(); return true
 	var m_ui = get_tree().get_first_node_in_group("minimap_ui")
@@ -785,9 +772,6 @@ func _handle_modal_esc_close() -> bool:
 	if is_building_mode: _cancel_build_mode(); return true
 	return false
 
-# ==============================================================================
-# DRAWING
-# ==============================================================================
 func _draw():
 	if current_class == PlayerClass.RANGED and _is_local_authority():
 		_draw_rts_selection_box()
@@ -844,9 +828,6 @@ func _draw_marshal_command_aura():
 	draw_arc(Vector2.ZERO, aura_radius, 0.0, TAU, 36, aura_color, 1.5)
 	draw_arc(Vector2.ZERO, aura_radius + 4.0, 0.0, TAU, 36, Color(edge_color.r, edge_color.g, edge_color.b, 0.2 * pulse), 1.0)
 
-# ==============================================================================
-# COMBAT RPCS & MELEE
-# ==============================================================================
 func _find_enemy_under_cursor(world_pos: Vector2) -> Node2D:
 	var space = get_world_2d().direct_space_state
 	if not space: return null
@@ -926,7 +907,8 @@ func perform_plasma_attack(target_pos: Vector2):
 			var dir = (target_pos - spawn_origin).normalized()
 			main_node.spawner.spawn({
 				"type": "bullet", "name": "PlasmaShot_" + str(randi()),
-				"position": spawn_origin + (dir * 16.0), "direction": dir, "damage": plasma_damage
+				"position": spawn_origin + (dir * 16.0), "direction": dir, "damage": plasma_damage,
+				"is_plasma_caliver": true
 			})
 
 	var timer = get_tree().create_timer(plasma_cooldown)
@@ -955,9 +937,6 @@ func check_lingering_melee_hits():
 					b.take_damage(40, to_target.normalized() * 260.0)
 					AudioManager.play_sfx("hit", b.global_position, 1.0, 0.95)
 
-# ==============================================================================
-# UPGRADES, STATS & NETWORK RPCS
-# ==============================================================================
 @rpc("any_peer", "call_local", "reliable")
 func request_orbital_strike(target_pos: Vector2):
 	if not multiplayer.is_server(): return

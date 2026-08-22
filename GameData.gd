@@ -8,7 +8,8 @@ enum StructureType {
 	MANUFACTORUM = 3,
 	DISTRIBUTOR = 4,
 	NOOSPHERE_ANTENNA = 5,
-	RESEARCH_SHRINE = 6
+	RESEARCH_SHRINE = 6,
+	CYBERNETICA_FORGE = 7
 }
 
 enum TurretSpec {
@@ -18,7 +19,6 @@ enum TurretSpec {
 	ARC_BLASTER = 3
 }
 
-# --- BASE SANCTUM RADAR UPGRADE TIERS ---
 enum BaseRadarTier {
 	NONE = 0,
 	TIER_1_CARTOGRAPH = 1,
@@ -26,72 +26,95 @@ enum BaseRadarTier {
 	TIER_3_NOOSPHERE = 3
 }
 
-# --- MAIN SANCTUM AUSPEX & PSYCHIC RESEARCH ---
-const SANCTUM_TECH: Array[Dictionary] = [
-	{
-		"id": 0,
-		"name": "Omnissian Cartograph",
-		"icon": "🗺️",
-		"scrap": 25,
-		"req": 10,
-		"desc": "Unlocks the Tactical Minimap scope and Fullscreen Battlefield Map [M] tracking friendly outposts and ore deposits.",
-		"flavor": "\"Chart the wasteland, that the tread of our cohorts may find sure footing in the dust.\""
-	},
-	{
-		"id": 1,
-		"name": "WAAAGH! Psychic Interceptor",
-		"icon": "🔥",
-		"scrap": 30,
-		"req": 15,
-		"desc": "Calibrates auspex receivers to the xeno psychic wavelength, displaying active WAAAGH! field buffs and totem telemetry by the minimap.",
-		"flavor": "\"The psychic gestalt of the greenskins burns across the ether. Intercept their profane frequency.\""
-	},
-	{
-		"id": 2,
-		"name": "Long-Range Auspex Array",
-		"icon": "📡",
-		"scrap": 45,
-		"req": 25,
-		"desc": "Enables the 8-second assault warning vector system and adds periodic radar sweeps revealing hostile positions.",
-		"flavor": "\"No foe moves in the shadow where the piercing gaze of the Omnissiah falls.\""
-	},
-	{
-		"id": 3,
-		"name": "Noospheric Global Uplink",
-		"icon": "👁️",
-		"scrap": 70,
-		"req": 50,
-		"desc": "Continuous real-time tracking of all hostiles, WAAAGH! Totems, and the Ork Warboss Citadel across the entire planet.",
-		"flavor": "\"All data is sacred. When the Noosphere encompasses the world, victory is pre-ordained.\""
-	}
-]
+enum CohortUnitType {
+	VANGUARD = 0,
+	RANGER = 1,
+	RUSTSTALKER = 2,
+	KASTELAN = 3,
+	KATAPHRON = 4
+}
 
-# Legacy dictionary alias to prevent breaking existing checks
-const BASE_RADAR_UPGRADE_INFO = {
-	BaseRadarTier.TIER_1_CARTOGRAPH: {
-		"name": "Omnissian Cartograph",
-		"icon": "🗺️",
-		"scrap": 25,
+const BASE_COHORT_CAP: int = 12
+
+const COHORT_UNITS: Dictionary = {
+	CohortUnitType.VANGUARD: {
+		"id": CohortUnitType.VANGUARD,
+		"name": "Skitarii Vanguard",
+		"icon": "☣️",
+		"scrap": 0,
 		"req": 10,
-		"desc": "Unlocks the Tactical Minimap and Fullscreen Map [M] tracking all friendly outposts, foundries, and scrap deposits."
+		"pop": 1,
+		"build_time": 4.0,
+		"hp": 90,
+		"speed": 210.0,
+		"damage": 18,
+		"range": 280.0,
+		"desc": "Rad-carbine shock trooper. Emits an aura that weakens enemy armor and slows swarms.",
+		"flavor": "\"Their bodies burn with sacred rad-fallout, decaying all who oppose the Machine Cult.\""
 	},
-	BaseRadarTier.TIER_2_AUSPEX: {
-		"name": "Long-Range Auspex Array",
-		"icon": "📡",
-		"scrap": 45,
+	CohortUnitType.RANGER: {
+		"id": CohortUnitType.RANGER,
+		"name": "Skitarii Ranger",
+		"icon": "🎯",
+		"scrap": 0,
+		"req": 15,
+		"pop": 1,
+		"build_time": 5.0,
+		"hp": 75,
+		"speed": 190.0,
+		"damage": 45,
+		"range": 440.0,
+		"desc": "Long-range Galvanic marksman. Prioritizes Gretchin thieves and high-threat Stormboyz.",
+		"flavor": "\"Patient hunters of Mars. Their galvanic rounds never fail their telemetry.\""
+	},
+	CohortUnitType.RUSTSTALKER: {
+		"id": CohortUnitType.RUSTSTALKER,
+		"name": "Sicarian Ruststalker",
+		"icon": "⚔️",
+		"scrap": 10,
 		"req": 25,
-		"desc": "Enables the 8s Early Warning Vector System for assaults and adds periodic radar sweeps revealing hostile positions."
+		"pop": 2,
+		"build_time": 7.0,
+		"hp": 160,
+		"speed": 270.0,
+		"damage": 55,
+		"range": 45.0,
+		"desc": "High-speed cybernetic assassin wielding vibrating transonic blades. Cleaves tough targets.",
+		"flavor": "\"A blur of bladed limbs and screaming soundwaves that slice flesh at a molecular level.\""
 	},
-	BaseRadarTier.TIER_3_NOOSPHERE: {
-		"name": "Noospheric Global Uplink",
-		"icon": "👁️",
-		"scrap": 70,
-		"req": 50,
-		"desc": "Continuous real-time tracking of all hostiles, WAAAGH! Totems, and the Ork Warboss Citadel across the entire map."
+	CohortUnitType.KASTELAN: {
+		"id": CohortUnitType.KASTELAN,
+		"name": "Kastelan Battle-Automata",
+		"icon": "🤖",
+		"scrap": 30,
+		"req": 45,
+		"pop": 3,
+		"build_time": 12.0,
+		"hp": 750,
+		"speed": 165.0,
+		"damage": 80,
+		"range": 300.0,
+		"desc": "Heavy siege automata. Projects 360° refractor bubble shield in Anchor Mode.",
+		"flavor": "\"Ten millennia of continuous slaughter encoded upon sacred phosphor wafer-discs.\""
+	},
+	CohortUnitType.KATAPHRON: {
+		"id": CohortUnitType.KATAPHRON,
+		"name": "Kataphron Breacher",
+		"icon": "🚜",
+		"scrap": 25,
+		"req": 40,
+		"pop": 3,
+		"build_time": 10.0,
+		"hp": 520,
+		"speed": 140.0,
+		"damage": 65,
+		"range": 260.0,
+		"desc": "Treaded combat platform with Heavy Arc Rifle. Deals +100% bonus damage to enemy structures.",
+		"flavor": "\"Living cybernetic battering rams engineered to breach fortified fortress gates.\""
 	}
 }
 
-const STRUCTURE_INFO = {
+const STRUCTURE_INFO: Dictionary = {
 	StructureType.BARRICADE: {
 		"name": "Barricade",
 		"key": "1",
@@ -147,6 +170,15 @@ const STRUCTURE_INFO = {
 		"size": Vector2(56, 56),
 		"requires_industrial": true
 	},
+	StructureType.CYBERNETICA_FORGE: {
+		"name": "Cybernetica Manufactorum",
+		"key": "7",
+		"scrap": 50,
+		"req": 20,
+		"max_hp": 350,
+		"size": Vector2(64, 64),
+		"requires_industrial": true
+	},
 	StructureType.NOOSPHERE_ANTENNA: {
 		"name": "Antenna",
 		"key": "",
@@ -158,14 +190,13 @@ const STRUCTURE_INFO = {
 	}
 }
 
-# --- TURRET PROGRESSION & SPECIALIZATIONS ---
 const TURRET_UPGRADE_COSTS: Array[int] = [10, 20, 35]
 const TURRET_DAMAGE_BY_LEVEL: Array[int] = [12, 16, 22, 30]
 const TURRET_FIRE_INTERVALS: Array[float] = [0.45, 0.36, 0.28, 0.22]
 const TURRET_RANGE_BY_LEVEL: Array[float] = [260.0, 285.0, 315.0, 350.0]
 
 const TURRET_SPEC_REQ_COST: int = 35
-const TURRET_SPEC_INFO = {
+const TURRET_SPEC_INFO: Dictionary = {
 	TurretSpec.COGNIS_FLAK: {
 		"name": "Cognis Gatling Flak",
 		"icon": "⚙️",
@@ -218,11 +249,48 @@ const MAX_DAMAGE_UPGRADES: int = 3
 const SPEED_UPGRADE_REQ_COST: int = 10
 const MAX_SPEED_UPGRADES: int = 3
 
-# --- ORK MEGA-CAMP & STRUCTURES ---
 const ORK_CITADEL_MAX_HEALTH: int = 2500
 const ORK_SCRAP_HEAP_MAX_HEALTH: int = 400
 
-# --- RESEARCH TECH TREE (TECH SHRINE) ---
+const SANCTUM_TECH: Array[Dictionary] = [
+	{
+		"id": 0,
+		"name": "Omnissian Cartograph",
+		"icon": "🗺️",
+		"scrap": 25,
+		"req": 10,
+		"desc": "Unlocks the Tactical Minimap scope and Fullscreen Battlefield Map [M] tracking friendly outposts and ore deposits.",
+		"flavor": "\"Chart the wasteland, that the tread of our cohorts may find sure footing in the dust.\""
+	},
+	{
+		"id": 1,
+		"name": "WAAAGH! Psychic Interceptor",
+		"icon": "🔥",
+		"scrap": 30,
+		"req": 15,
+		"desc": "Calibrates auspex receivers to the xeno psychic wavelength, displaying active WAAAGH! field buffs and totem telemetry by the minimap.",
+		"flavor": "\"The psychic gestalt of the greenskins burns across the ether. Intercept their profane frequency.\""
+	},
+	{
+		"id": 2,
+		"name": "Long-Range Auspex Array",
+		"icon": "📡",
+		"scrap": 45,
+		"req": 25,
+		"desc": "Enables the 8-second assault warning vector system and adds periodic radar sweeps revealing hostile positions.",
+		"flavor": "\"No foe moves in the shadow where the piercing gaze of the Omnissiah falls.\""
+	},
+	{
+		"id": 3,
+		"name": "Noospheric Global Uplink",
+		"icon": "👁️",
+		"scrap": 70,
+		"req": 50,
+		"desc": "Continuous real-time tracking of all hostiles, WAAAGH! Totems, and the Ork Warboss Citadel across the entire planet.",
+		"flavor": "\"All data is sacred. When the Noosphere encompasses the world, victory is pre-ordained.\""
+	}
+]
+
 const TECH_DATA: Array[Dictionary] = [
 	{
 		"id": 0,

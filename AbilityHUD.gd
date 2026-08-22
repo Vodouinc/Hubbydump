@@ -25,6 +25,7 @@ var augment_buttons: Array[CompactSlot] = []
 var action_panel: PanelContainer = null
 var tooltip_card: TooltipCard = null
 var hovered_slot_data: Dictionary = {}
+var global_res_label: Label = null
 
 func _ready():
 	add_to_group("ability_hud")
@@ -57,30 +58,32 @@ func setup_hud_for_player(player_node: Node2D):
 	show()
 	refresh_hud_display()
 
-# ==============================================================================
-# 1. MODULAR 3-POD HUD BUILDER
-# ==============================================================================
 func _build_hud_layout():
 	for c in get_children():
 		c.queue_free()
 
-	# 1. Floating Hover Inspection Card
+	_build_top_resource_header()
+
 	tooltip_card = TooltipCard.new()
 	tooltip_card.name = "TooltipCard"
 	tooltip_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(tooltip_card)
 	tooltip_card.hide()
 
-	# 2. Master Bottom Bar Container
 	var main_hbox = HBoxContainer.new()
 	main_hbox.name = "MainHUDHBox"
 	main_hbox.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	main_hbox.position = Vector2(-360, -74)
+	main_hbox.offset_left = -390
+	main_hbox.offset_right = 390
+	main_hbox.offset_top = -78
+	main_hbox.offset_bottom = -10
+	main_hbox.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	main_hbox.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	main_hbox.add_theme_constant_override("separation", 10)
 	main_hbox.mouse_filter = Control.MOUSE_FILTER_PASS
 	add_child(main_hbox)
 
-	# --- POD A: ARMAMENTS (LMB, RMB, SPACE, R) ---
+	# --- POD A: ARMAMENTS ---
 	var weapon_panel = _create_pod_panel("ArmamentPod", main_hbox)
 	var weapon_vbox = VBoxContainer.new()
 	weapon_vbox.add_theme_constant_override("separation", 2)
@@ -106,7 +109,7 @@ func _build_hud_layout():
 		weapon_hbox.add_child(slot)
 		weapon_buttons.append(slot)
 
-	# --- POD B: TACTICAL FORGE PALETTE ([1] - [6] FOR TECH-PRIEST) ---
+	# --- POD B: TACTICAL FORGE PALETTE ([1] - [7]) ---
 	action_panel = _create_pod_panel("ActionPod", main_hbox)
 	var action_vbox = VBoxContainer.new()
 	action_vbox.add_theme_constant_override("separation", 2)
@@ -124,7 +127,7 @@ func _build_hud_layout():
 	action_vbox.add_child(action_hbox)
 
 	action_buttons.clear()
-	for i in range(6):
+	for i in range(7):
 		var slot = CompactSlot.new("action", i)
 		slot.custom_minimum_size = Vector2(48, 48)
 		slot.mouse_entered.connect(_on_slot_hovered.bind(slot))
@@ -132,7 +135,7 @@ func _build_hud_layout():
 		action_hbox.add_child(slot)
 		action_buttons.append(slot)
 
-	# --- POD C: CYBERNETIC BIONICS & AUGMENTATIONS ([Z], [X], [C]) ---
+	# --- POD C: CYBERNETIC BIONICS & AUGMENTATIONS ---
 	var augment_panel = _create_pod_panel("AugmentPod", main_hbox)
 	var augment_vbox = VBoxContainer.new()
 	augment_vbox.add_theme_constant_override("separation", 2)
@@ -157,6 +160,39 @@ func _build_hud_layout():
 		slot.mouse_exited.connect(_on_slot_unhovered)
 		augment_hbox.add_child(slot)
 		augment_buttons.append(slot)
+
+func _build_top_resource_header():
+	var top_panel = PanelContainer.new()
+	top_panel.name = "TopResourceHeader"
+	top_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	top_panel.offset_left = -280
+	top_panel.offset_right = 280
+	top_panel.offset_top = 8
+	top_panel.offset_bottom = 40
+	top_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	top_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0.04, 0.05, 0.08, 0.95)
+	sb.border_color = Color(0.82, 0.62, 0.24)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(4)
+	sb.content_margin_left = 12
+	sb.content_margin_right = 12
+	top_panel.add_theme_stylebox_override("panel", sb)
+	add_child(top_panel)
+
+	var hbox = HBoxContainer.new()
+	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	hbox.add_theme_constant_override("separation", 24)
+	top_panel.add_child(hbox)
+
+	global_res_label = Label.new()
+	global_res_label.name = "GlobalResLabel"
+	global_res_label.text = "⚙ 40 SCRAP   ⚡ 10 REQ   🤖 COHORT: 0/12   📡 NOOSPHERE: CONNECTED"
+	global_res_label.add_theme_font_size_override("font_size", 11)
+	global_res_label.add_theme_color_override("font_color", Color(0.90, 0.92, 0.96))
+	hbox.add_child(global_res_label)
 
 func _create_pod_panel(pod_name: String, parent_container: Container) -> PanelContainer:
 	var pc = PanelContainer.new()
@@ -187,9 +223,6 @@ func _on_slot_unhovered():
 	if tooltip_card:
 		tooltip_card.hide()
 
-# ==============================================================================
-# 2. DATA PROVIDER (ERGONOMIC WASD SHORTCUTS & ADMECH CANTICLES)
-# ==============================================================================
 func _get_data_for_category(category: String, idx: int) -> Dictionary:
 	if not is_instance_valid(local_player): return {}
 	var is_techpriest = (local_player.current_class == 0)
@@ -201,18 +234,17 @@ func _get_data_for_category(category: String, idx: int) -> Dictionary:
 					0: return {
 						"key": "LMB", "name": "Omnissian Power-Axe", "sub": "Heavy Melee Cleave",
 						"icon": "axe", "scrap": 0, "req": 0, "type_id": -1,
-						"desc": "Heavy two-handed energized power-axe. Cleaves forward in a wide 130° arc (40 DMG) that penetrates enemy armor and shreds swarms.",
+						"desc": "Heavy two-handed energized power-axe. Cleaves forward in a wide 130° arc (40 DMG) that penetrates enemy armor.",
 						"flavor": "\"The blade is the voice of the Omnissiah; it speaks in the severance of heretical flesh.\""
 					}
 					1: return {
-						"key": "RMB", "name": "Plasma Caliver", "sub": "Secondary Ranged Weapon",
+						"key": "RMB", "name": "Plasma Caliver", "sub": "Secondary Ranged & Auspex Paint",
 						"icon": "plasma_pistol", "scrap": 0, "req": 0, "type_id": -1,
-						"desc": "Fires a superheated overcharged plasma bolt (30 DMG / 0.65s CD). Instantly snipes and vaporizes fleeing Gretchins and distant Squigs.",
-						"flavor": "\"Vaporize the scavenger before its filthy hands defile the sacred scrap.\""
+						"desc": "Fires superheated plasma (30 DMG). Applies Auspex Lock-On (+35% Crit Damage taken by targets from all allies for 6s).",
+						"flavor": "\"Paint the xeno in telemetry, and let our cohorts extinguish their spark.\""
 					}
-					2: return {} # Empty third slot for Tech-Priest
+					2: return {}
 			else:
-				# SKITARII MARSHAL COMBAT ACTIVES
 				match idx:
 					0: return {
 						"key": "LMB", "name": "Radium Serpenta Carbine", "sub": "Primary Ranged Weapon",
@@ -242,41 +274,47 @@ func _get_data_for_category(category: String, idx: int) -> Dictionary:
 					0: return {
 						"key": "1", "name": "Aegis Blast Rampart", "sub": "Tactical Fortification",
 						"icon": "barricade", "scrap": 15, "req": 0, "type_id": 0,
-						"desc": "Heavy sloped ballistic blast wall. Snap-links into continuous defensive ramparts with dragon's teeth spikes. Upgradable to Motorized Gate [E].",
+						"desc": "Heavy sloped blast wall. Snap-links into continuous defensive ramparts. Upgradable to Motorized Gate [E].",
 						"flavor": "\"Armor is the iron shroud that preserves the sacred flesh of the faithful.\""
 					}
 					1: return {
 						"key": "2", "name": "Electro-Relay Substation", "sub": "Power & Scrap Distribution",
 						"icon": "distributor", "scrap": 20, "req": 0, "type_id": 4,
-						"desc": "Extends Noosphere power conduit channels. Magnetically siphons loose battlefield scrap directly to the base bank. Upgradable to Transmission Mast [E].",
+						"desc": "Extends Noosphere power conduits. Magnetically siphons loose battlefield scrap directly to the bank.",
 						"flavor": "\"Where the conductor reaches, the will of the Motive Force flows unbroken.\""
 					}
 					2: return {
 						"key": "3", "name": "Imperial Plasma Dynamo", "sub": "Energy Generation",
 						"icon": "generator", "scrap": 25, "req": 0, "type_id": 1,
-						"desc": "Siphons atom-fire to generate +2 Requisition per cycle. Energizes Noosphere Aegis shields and Necro-Mechanic repair swarms.",
+						"desc": "Generates +2 Requisition per cycle. Energizes Noosphere Aegis shields and repair swarms.",
 						"flavor": "\"From the caged fury of the atom do we draw the breath of civilization.\""
 					}
 					3: return {
 						"key": "4", "name": "Cognis Defense Battery", "sub": "Automated Heavy Emplacement",
 						"icon": "turret", "scrap": 35, "req": 5, "type_id": 2,
-						"desc": "Automated tracking battery with dual autocannons. Upgradable through 4 tiers to specialized Cognis Flak, Volkite Thermal Rays, or Arc Blasters.",
+						"desc": "Automated tracking battery. Upgradable through 4 tiers to specialized Gatling Flak, Volkite Culverins, or Arc Blasters.",
 						"flavor": "\"Let the wrath of the Machine God strike swift and without hesitation.\""
 					}
 					4: return {
 						"key": "5", "name": "Promethium Scrap Smelter", "sub": "Ore Extraction & Refining",
 						"icon": "foundry", "scrap": 30, "req": 5, "type_id": 3,
-						"desc": "Must be constructed over an active Scrap Deposit. Automatically extracts and refines raw debris, generating +5 Scrap periodically.",
+						"desc": "Must be built over a Scrap Deposit. Automatically extracts debris, generating +5 Scrap periodically.",
 						"flavor": "\"The broken iron of the foe is remade into the sanctified bulwarks of Mars.\""
 					}
 					5: return {
 						"key": "6", "name": "Omnissian Reliquary Vault", "sub": "Cogitator Archives",
 						"icon": "shrine", "scrap": 40, "req": 15, "type_id": 6,
-						"desc": "Houses ancient schematics of the Mechanicum. Access terminal [E] to research Aegis Shields, Cutting Lasers, Siphons, and Nanobots.",
+						"desc": "Access terminal [E] to research Aegis Shields, Cutting Lasers, Siphons, and Nanobots.",
 						"flavor": "\"Knowledge is the true holy relic; safeguard it from the taint of the xeno.\""
 					}
+					6: return {
+						"key": "7", "name": "Cybernetica Manufactorum", "sub": "Automata Assembly & Recruitment",
+						"icon": "foundry", "scrap": 50, "req": 20, "type_id": 7,
+						"desc": "Heavy robotic assembly facility. Construct Skitarii Vanguard, Rangers, Sicarians, Kataphrons, and Kastelan Battle-Automata.",
+						"flavor": "\"From the holy fires of the Manufactorum march the undying cohorts of the Omnissiah.\""
+					}
 			else:
-				return {} # Marshal has no building palette
+				return {}
 
 		"augment":
 			if is_techpriest:
@@ -287,12 +325,11 @@ func _get_data_for_category(category: String, idx: int) -> Dictionary:
 							"key": "C", "name": "Fabricate Servo-Skull", "sub": "Autonomous Cyber-Drone",
 							"icon": "skull", "scrap": GameData.SERVO_SKULL_SCRAP_COST, "req": GameData.SERVO_SKULL_REQ_COST, "type_id": -1,
 							"current_rank": skulls, "max_rank": GameData.MAX_SERVO_SKULLS,
-							"desc": "Deploys an autonomous hovering Servo-Skull drone to retrieve distant scrap and zap nearby pests (%d/%d Active)." % [skulls, GameData.MAX_SERVO_SKULLS],
+							"desc": "Deploys an autonomous Servo-Skull drone to retrieve distant scrap (%d/%d Active)." % [skulls, GameData.MAX_SERVO_SKULLS],
 							"flavor": "\"Even in death, the servant of the Omnissiah performs the holy work.\""
 						}
 					_: return {}
 			else:
-				# SKITARII MARSHAL BIONIC IMPLANTS & COHORT
 				match idx:
 					0:
 						var dmg_lvl = local_player.damage_upgrade_level if "damage_upgrade_level" in local_player else 0
@@ -318,28 +355,30 @@ func _get_data_for_category(category: String, idx: int) -> Dictionary:
 							"key": "C", "name": "Recruit Vanguard Cadre", "sub": "Cohort Reinforcement",
 							"icon": "squad", "scrap": 0, "req": GameData.BODYGUARD_REQ_COST, "type_id": -1,
 							"current_rank": lvl, "max_rank": GameData.MAX_BODYGUARDS,
-							"desc": "Summons Skitarii Vanguard snipers and Sicarian melee shock troops into your retinue (%d/%d Active)." % [lvl, GameData.MAX_BODYGUARDS],
+							"desc": "Summons Skitarii Vanguard snipers and shock troops into your retinue (%d/%d Active)." % [lvl, GameData.MAX_BODYGUARDS],
 							"flavor": "\"No soldier of Mars fights alone while the Noosphere weaves our minds into one.\""
 						}
 					_: return {}
 
 	return {}
 
-# ==============================================================================
-# 3. REFRESH DISPLAY LOOP
-# ==============================================================================
 func refresh_hud_display():
 	if not is_instance_valid(local_player): return
 
 	var main_node = get_tree().get_first_node_in_group("main")
 	var cur_scrap = main_node.scrap_amount if main_node and "scrap_amount" in main_node else 0
 	var cur_req = main_node.requisition_amount if main_node and "requisition_amount" in main_node else 0
+	var cur_pop = main_node.get_cohort_population() if main_node and main_node.has_method("get_cohort_population") else 0
+
+	if global_res_label:
+		global_res_label.text = "⚙ %d SCRAP   ⚡ %d REQ   🤖 COHORT: %d/%d   📡 NOOSPHERE: ACTIVE" % [
+			cur_scrap, cur_req, cur_pop, GameData.BASE_COHORT_CAP
+		]
 
 	var is_techpriest = (local_player.current_class == 0)
 	var selected_type = local_player.selected_building_type if "selected_building_type" in local_player else 0
 	var is_building = local_player.is_building_mode if "is_building_mode" in local_player else false
 
-	# 1. Update Armament Pod
 	for i in range(weapon_buttons.size()):
 		var slot = weapon_buttons[i]
 		var data = _get_data_for_category("weapon", i)
@@ -351,7 +390,6 @@ func refresh_hud_display():
 		elif not is_techpriest and i == 2:
 			slot.cooldown_left = local_player.orbital_strike_cooldown if "orbital_strike_cooldown" in local_player else 0.0
 
-	# 2. Update Tactical Forge Action Pod (Hidden for Marshal)
 	if is_instance_valid(action_panel):
 		action_panel.visible = is_techpriest
 
@@ -362,7 +400,6 @@ func refresh_hud_display():
 			_populate_slot(slot, data, cur_scrap, cur_req)
 			slot.is_selected = (is_building and selected_type == data.get("type_id", -1))
 
-	# 3. Update Cybernetic Augment Pod
 	for i in range(augment_buttons.size()):
 		var slot = augment_buttons[i]
 		var data = _get_data_for_category("augment", i)
@@ -400,9 +437,6 @@ func _update_tooltip_position(slot: CompactSlot):
 	tooltip_card.set_data(slot.cached_data, cur_scrap, cur_req, slot.cooldown_left, slot.is_maxed)
 	tooltip_card.global_position = Vector2(slot_center_x - (tooltip_card.size.x * 0.5), slot.global_position.y - tooltip_card.size.y - 12)
 
-# ==============================================================================
-# 4. COMPACT NOOSPHERIC SLOT BUTTON (48x48 px)
-# ==============================================================================
 class CompactSlot extends Button:
 	var category: String = "action"
 	var slot_index: int = 0
@@ -438,11 +472,9 @@ class CompactSlot extends Button:
 		elif is_hovered():
 			border_color = Color(0.95, 0.78, 0.35)
 
-		# 1. Base Plate & Outline
 		draw_rect(rect, bg_color, true)
 		draw_rect(rect, border_color, false, 1.2 if not is_selected else 1.8)
 
-		# 2. Corner Brackets
 		var c_len = 3.5
 		draw_line(rect.position, rect.position + Vector2(c_len, 0), border_color, 1.2)
 		draw_line(rect.position, rect.position + Vector2(0, c_len), border_color, 1.2)
@@ -450,16 +482,13 @@ class CompactSlot extends Button:
 		draw_line(tr, tr - Vector2(c_len, 0), border_color, 1.2)
 		draw_line(tr, tr + Vector2(0, c_len), border_color, 1.2)
 
-		# 3. Procedural Vector Icon
 		_draw_icon(rect.get_center())
 
-		# 4. Keycap Badge (Top-Left)
 		var font = ThemeDB.fallback_font
 		var key_color = Color(0.20, 0.88, 1.0) if is_selected else Color(0.85, 0.88, 0.92)
 		if cooldown_left > 0.0 or is_maxed: key_color = Color(0.5, 0.5, 0.5)
 		draw_string(font, Vector2(3, 10), key_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 8, key_color)
 
-		# 5. Hardware Rank Pips (for Augments) vs. Cost Badges
 		if max_rank > 0 and category == "augment":
 			_draw_rank_pips(rect)
 		elif cooldown_left > 0.0:
@@ -481,9 +510,9 @@ class CompactSlot extends Button:
 		for i in range(max_rank):
 			var pip_pos = Vector2(start_x + (i * 6.0) + 2.0, pips_y)
 			if i < current_rank:
-				draw_circle(pip_pos, 1.8, Color(0.20, 0.88, 1.0)) # Filled cyan pip
+				draw_circle(pip_pos, 1.8, Color(0.20, 0.88, 1.0))
 			else:
-				draw_circle(pip_pos, 1.2, Color(0.25, 0.28, 0.35)) # Empty pip
+				draw_circle(pip_pos, 1.2, Color(0.25, 0.28, 0.35))
 
 	func _draw_icon(center: Vector2):
 		var gold = Color(0.82, 0.62, 0.24)
@@ -492,72 +521,69 @@ class CompactSlot extends Button:
 		var p_mid = Vector2(center.x, center.y - 1.0)
 
 		match icon_type:
-			"axe": # Power-Axe
+			"axe":
 				draw_line(p_mid + Vector2(-6, 7), p_mid + Vector2(6, -7), Color(0.2, 0.24, 0.3), 3.0)
 				draw_circle(p_mid + Vector2(4, -5), 3.5, gold)
 				draw_colored_polygon(PackedVector2Array([p_mid + Vector2(2, -9), p_mid + Vector2(8, -9), p_mid + Vector2(7, -1)]), cyan)
-			"plasma_pistol": # Plasma Caliver
+			"plasma_pistol":
 				draw_line(p_mid + Vector2(-6, 2), p_mid + Vector2(7, 2), Color(0.25, 0.28, 0.35), 3.0)
 				draw_circle(p_mid + Vector2(1, 2), 2.5, cyan)
 				draw_circle(p_mid + Vector2(7, 2), 1.5, Color.WHITE)
-			"gun": # Radium Serpenta
+			"gun":
 				draw_line(p_mid + Vector2(-6, 2), p_mid + Vector2(8, 2), Color(0.4, 0.45, 0.5), 2.5)
 				draw_line(p_mid + Vector2(-4, 2), p_mid + Vector2(-6, 6), gold, 1.8)
 				draw_circle(p_mid + Vector2(2, 2), 1.5, cyan)
-			"barricade": # Rampart
+			"barricade":
 				var shield = PackedVector2Array([p_mid + Vector2(-7, -7), p_mid + Vector2(7, -7), p_mid + Vector2(5, 3), p_mid + Vector2(0, 7), p_mid + Vector2(-5, 3)])
 				draw_colored_polygon(shield, red)
 				draw_polyline(shield, gold, 1.2)
-			"distributor": # Substation
+			"distributor":
 				draw_line(p_mid + Vector2(0, 7), p_mid + Vector2(0, -5), Color(0.24, 0.28, 0.35), 2.8)
 				draw_circle(p_mid + Vector2(0, -5), 2.5, Color(1.0, 0.72, 0.15))
-			"generator": # Dynamo
+			"generator":
 				draw_rect(Rect2(p_mid - Vector2(6, 6), Vector2(12, 12)), red)
 				draw_rect(Rect2(p_mid - Vector2(6, 6), Vector2(12, 12)), gold, false, 1.0)
 				draw_circle(p_mid, 3.0, cyan)
-			"turret": # Cognis Battery
+			"turret":
 				draw_circle(p_mid, 5.5, red)
 				draw_arc(p_mid, 5.5, 0, TAU, 12, gold, 1.0)
 				draw_line(p_mid + Vector2(2, -2), p_mid + Vector2(8, -2), Color(0.4, 0.45, 0.5), 1.8)
 				draw_line(p_mid + Vector2(2, 2), p_mid + Vector2(8, 2), Color(0.4, 0.45, 0.5), 1.8)
-			"foundry": # Smelter
+			"foundry":
 				draw_rect(Rect2(p_mid - Vector2(6, 3), Vector2(12, 10)), Color(0.2, 0.22, 0.28))
 				draw_circle(p_mid + Vector2(0, 2), 2.2, Color(1.0, 0.5, 0.1))
-			"shrine": # Reliquary
+			"shrine":
 				var arch = PackedVector2Array([p_mid + Vector2(-6, 6), p_mid + Vector2(-6, -2), p_mid + Vector2(0, -7), p_mid + Vector2(6, -2), p_mid + Vector2(6, 6)])
 				draw_colored_polygon(arch, red)
 				draw_polyline(arch, gold, 1.2)
 				draw_circle(p_mid + Vector2(0, 1), 2.0, cyan)
-			"doctrina_conq": # Conqueror
+			"doctrina_conq":
 				draw_line(p_mid + Vector2(-5, -5), p_mid + Vector2(5, 5), Color(1.0, 0.80, 0.20), 1.8)
 				draw_line(p_mid + Vector2(-5, 5), p_mid + Vector2(5, -5), Color(1.0, 0.80, 0.20), 1.8)
-			"doctrina_prot": # Protector
+			"doctrina_prot":
 				draw_arc(p_mid, 6.0, 0, TAU, 16, cyan, 1.6)
 				draw_circle(p_mid, 2.0, Color.WHITE)
-			"skull": # Servo-Skull
+			"skull":
 				draw_circle(p_mid, 5.0, Color(0.88, 0.85, 0.75))
 				draw_circle(p_mid + Vector2(1.5, -0.5), 1.5, cyan)
 				draw_line(p_mid + Vector2(3, 2), p_mid + Vector2(6, 2), gold, 1.2)
-			"squad": # Vanguard Cadre
+			"squad":
 				draw_circle(p_mid + Vector2(-3, 0), 3.5, red)
 				draw_circle(p_mid + Vector2(3, 0), 3.5, red)
 				draw_circle(p_mid + Vector2(-3, 0), 1.0, Color(0.2, 0.95, 0.35))
 				draw_circle(p_mid + Vector2(3, 0), 1.0, Color(0.2, 0.95, 0.35))
-			"dmg_up": # Damage Upgrade
+			"dmg_up":
 				draw_polyline(PackedVector2Array([p_mid + Vector2(-5, 3), p_mid + Vector2(0, -2), p_mid + Vector2(5, 3)]), cyan, 1.5)
 				draw_polyline(PackedVector2Array([p_mid + Vector2(-5, -1), p_mid + Vector2(0, -6), p_mid + Vector2(5, -1)]), gold, 1.5)
-			"speed_up": # Speed Upgrade
+			"speed_up":
 				draw_line(p_mid + Vector2(-6, 0), p_mid + Vector2(6, 0), Color(0.2, 0.95, 0.45), 2.0)
 				draw_line(p_mid + Vector2(2, -4), p_mid + Vector2(6, 0), Color(0.2, 0.95, 0.45), 2.0)
 				draw_line(p_mid + Vector2(2, 4), p_mid + Vector2(6, 0), Color(0.2, 0.95, 0.45), 2.0)
-			"orbital": # Orbital Lance
+			"orbital":
 				draw_circle(p_mid, 6.0, Color(0.2, 0.88, 1.0, 0.3))
 				draw_line(p_mid + Vector2(0, -8), p_mid + Vector2(0, 8), cyan, 1.8)
 				draw_line(p_mid + Vector2(-8, 0), p_mid + Vector2(8, 0), cyan, 1.8)
 
-# ==============================================================================
-# 5. EXPANDED AUSPEX COGITATOR TOOLTIP INSPECTION CARD
-# ==============================================================================
 class TooltipCard extends PanelContainer:
 	var title_lbl: Label
 	var sub_lbl: Label

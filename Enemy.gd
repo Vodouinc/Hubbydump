@@ -1,4 +1,5 @@
 extends CharacterBody2D
+class_name Enemy
 
 enum EnemyType { GRETCHIN, SQUIG, ORK_BOY, STORMBOY, NOB }
 
@@ -24,7 +25,6 @@ var counts_toward_wave: bool = true
 var stuck_check_timer: float = 0.0
 var last_stuck_pos: Vector2 = Vector2.ZERO
 
-# AI Navigation & Flocking State
 var aggro_scan_timer: float = 0.0
 var mob_rule_scan_timer: float = 0.0
 const MOB_RULE_SCAN_INTERVAL: float = 0.3
@@ -35,11 +35,12 @@ var is_mob_rule_active: bool = false
 var is_berserk: bool = false
 var lateral_fanning_seed: float = 0.0
 
-# Gretchin Scrap Stealing State
 var targeted_scrap_item: Node2D = null
 var has_stolen_scrap: bool = false
 
-# Hit Feedback
+var has_telemetry_mark: bool = false
+var telemetry_mark_timer: float = 0.0
+
 var knockback_velocity: Vector2 = Vector2.ZERO
 var flash_timer: float = 0.0
 
@@ -158,9 +159,25 @@ func _process(delta: float) -> void:
 		if flash_timer <= 0.0 and visual_sprite:
 			visual_sprite.modulate = Color.WHITE
 
-	# Update 2.5D visual facing from velocity
+	if telemetry_mark_timer > 0.0:
+		telemetry_mark_timer -= delta
+		if telemetry_mark_timer <= 0.0:
+			has_telemetry_mark = false
+		queue_redraw()
+
 	if visual_sprite and visual_sprite.has_method("update_facing"):
 		visual_sprite.update_facing(velocity)
+
+func apply_telemetry_mark(duration: float = 6.0):
+	has_telemetry_mark = true
+	telemetry_mark_timer = duration
+	rpc("sync_telemetry_mark", true, duration)
+
+@rpc("call_local", "unreliable")
+func sync_telemetry_mark(marked: bool, duration: float):
+	has_telemetry_mark = marked
+	telemetry_mark_timer = duration
+	queue_redraw()
 
 func _physics_process(delta: float) -> void:
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
@@ -179,7 +196,6 @@ func _physics_process(delta: float) -> void:
 			velocity = Vector2.ZERO
 			return
 
-	# Knockback processing
 	if knockback_velocity.length() > 10.0:
 		knockback_velocity = knockback_velocity.move_toward(Vector2.ZERO, 1500.0 * delta)
 		velocity = knockback_velocity
@@ -189,7 +205,6 @@ func _physics_process(delta: float) -> void:
 	if is_jumping_or_lunging:
 		return
 
-	# 1. Throttled Mob Rule Check
 	mob_rule_scan_timer += delta
 	if mob_rule_scan_timer >= MOB_RULE_SCAN_INTERVAL:
 		mob_rule_scan_timer = 0.0
@@ -210,22 +225,18 @@ func _physics_process(delta: float) -> void:
 
 	var current_speed = speed * speed_multiplier * waaagh_speed_mult
 
-	# 2. Objective Guard Behavior
 	if is_objective_guard:
 		_process_guard_behavior(delta, current_speed)
 		return
 
-	# 3. Special Abilities
 	_process_enemy_special_abilities(delta)
 
-	# 4. Immediate Target Attack Check
 	var immediate_target = _find_nearest_attackable_target(attack_range)
 	if is_instance_valid(immediate_target) and type != EnemyType.GRETCHIN:
 		velocity = Vector2.ZERO
 		perform_attack(immediate_target)
 		return
 
-	# Stormboy Jump Trigger: Leaps over any nearby barricade within 80px
 	if type == EnemyType.STORMBOY and ability_timer <= 0.0:
 		var nearby_barricade = _find_nearest_building_in_range(80.0)
 		if is_instance_valid(nearby_barricade):
@@ -233,7 +244,6 @@ func _physics_process(delta: float) -> void:
 			_execute_stormboy_jump(to_base)
 			return
 
-	# 5. Movement & Wall Obstruction Resolution
 	var move_dir = Vector2.ZERO
 	
 	if type == EnemyType.GRETCHIN and _process_gretchin_thievery() and is_instance_valid(targeted_scrap_item):
@@ -245,7 +255,6 @@ func _physics_process(delta: float) -> void:
 			var next_path = nav_agent.get_next_path_position()
 			move_dir = global_position.direction_to(next_path)
 		else:
-			# Base is walled off -> March directly toward the base or nearest blocking wall
 			var blocking_wall = _find_nearest_building_in_range(110.0)
 			if is_instance_valid(blocking_wall):
 				move_dir = global_position.direction_to(blocking_wall.global_position)
@@ -266,24 +275,19 @@ func _physics_process(delta: float) -> void:
 
 	velocity = move_dir * current_speed
 
-	# Move and slide with friendly obstacle deflection
 	if move_and_slide():
 		for i in range(get_slide_collision_count()):
 			var collision = get_slide_collision(i)
 			var collider = collision.get_collider()
 			if is_instance_valid(collider):
-				# 1. Attack hostile structures or players
 				if collider.has_method("take_damage") and not collider.is_in_group("enemies"):
 					velocity = Vector2.ZERO
 					perform_attack(collider)
 					return
-				
-				# 2. If bumping into a friendly Ork structure, slide smoothly around it
 				elif collider.is_in_group("enemies") or collider.is_in_group("ork_citadel") or collider.is_in_group("ork_structures"):
 					var slide_dir = move_dir.slide(collision.get_normal()).normalized()
 					velocity = slide_dir * current_speed
 
-	# 3. Anti-Stuck Watchdog: If an enemy is trapped in place for 2.5s, nudge it forward
 	stuck_check_timer += delta
 	if stuck_check_timer >= 2.5:
 		stuck_check_timer = 0.0
@@ -293,10 +297,6 @@ func _physics_process(delta: float) -> void:
 				var side_nudge = push_dir.orthogonal() * (24.0 if (get_instance_id() % 2 == 0) else -24.0)
 				global_position += (push_dir * 18.0) + side_nudge
 		last_stuck_pos = global_position
-
-# ==============================================================================
-# MOB RULE, BERSERK & GRETCHIN THIEVERY
-# ==============================================================================
 
 func _evaluate_mob_rule_and_berserk():
 	var nearby_allies = 0
@@ -362,10 +362,6 @@ func trigger_scrap_stolen_fx():
 	tween.tween_interval(1.5)
 	tween.tween_callback(label.queue_free)
 
-# ==============================================================================
-# SPECIAL ABILITIES & WEAPONS
-# ==============================================================================
-
 func _process_enemy_special_abilities(_delta: float):
 	match type:
 		EnemyType.GRETCHIN:
@@ -428,7 +424,6 @@ func _lob_stikkbomb(target_pos: Vector2):
 	ability_timer = 9.0
 	rpc("trigger_stikkbomb_fx", global_position, target_pos)
 
-	# 1.2s Fuse Time gives players time to dodge the warning circle!
 	var tween = create_tween()
 	tween.tween_interval(1.2)
 	tween.tween_callback(func():
@@ -457,89 +452,6 @@ func trigger_stikkbomb_fx(start_pos: Vector2, target_pos: Vector2):
 	bomb_fx.target_pos = target_pos
 	bomb_fx.duration = 1.2
 	get_parent().add_child(bomb_fx)
-
-# ==============================================================================
-# V-RISING STYLE STIKKBOMB PARABOLIC LOB & GROUND WARNING CIRCLE
-# ==============================================================================
-class StikkbombTelegraphFX extends Node2D:
-	var start_pos: Vector2 = Vector2.ZERO
-	var target_pos: Vector2 = Vector2.ZERO
-	var duration: float = 1.2
-	var elapsed: float = 0.0
-	var arc_height: float = 85.0
-	var blast_radius: float = 65.0
-
-	func _ready() -> void:
-		z_index = 80
-		var mat = CanvasItemMaterial.new()
-		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
-		material = mat
-
-	func _process(delta: float) -> void:
-		elapsed += delta
-		queue_redraw()
-		if elapsed >= duration + 0.25:
-			queue_free()
-
-	func _draw() -> void:
-		var t = clampf(elapsed / duration, 0.0, 1.0)
-		var pulse = 0.6 + sin(elapsed * 12.0) * 0.4
-		var warning_color = Color(1.0, 0.20, 0.15, 0.75 * pulse)
-		var fill_color = Color(1.0, 0.15, 0.10, 0.18 * (1.0 - t))
-
-		# --- 1. GROUND WARNING DANGER CIRCLE (AT TARGET DESTINATION) ---
-		if elapsed <= duration:
-			# Danger Zone Fill & Outer Perimeter
-			draw_circle(target_pos, blast_radius, fill_color)
-			draw_arc(target_pos, blast_radius, 0.0, TAU, 32, warning_color, 2.0)
-			
-			# Shrinking/Filling Fuse Countdown Ring
-			var fuse_radius = blast_radius * (1.0 - t)
-			draw_arc(target_pos, fuse_radius, 0.0, TAU, 24, Color(1.0, 0.85, 0.20, 0.8), 1.5)
-			
-			# Hazard Notches on the ring
-			for i in range(4):
-				var a = (float(i) * TAU / 4.0) + (elapsed * 3.0)
-				var pt = target_pos + Vector2(cos(a), sin(a)) * blast_radius
-				draw_circle(pt, 3.0, warning_color)
-
-		# --- 2. PARABOLIC 3D GRENADE FLIGHT ---
-		if elapsed <= duration:
-			var ground_pos = start_pos.lerp(target_pos, t)
-			var height = sin(t * PI) * arc_height
-			var bomb_pos = ground_pos + Vector2(0.0, -height)
-
-			# Drop Shadow on the floor beneath the grenade
-			var shadow_scale = clampf(1.0 - (height / arc_height) * 0.5, 0.4, 1.0)
-			draw_set_transform(ground_pos, 0.0, Vector2(1.0, 0.5))
-			draw_circle(Vector2.ZERO, 6.0 * shadow_scale, Color(0.02, 0.02, 0.05, 0.45 * shadow_scale))
-			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-
-			# Tumbling Stikkbomb Sprite (Wood Handle + Iron Cylinder + Sparks)
-			var spin_angle = elapsed * 10.0
-			draw_set_transform(bomb_pos, spin_angle, Vector2.ONE)
-			
-			# Wooden handle
-			draw_line(Vector2(0, 0), Vector2(0, 10), Color("#4a3219"), 3.0)
-			# Iron grenade canister head
-			draw_rect(Rect2(-4, -8, 8, 8), Color("#32373b"))
-			draw_rect(Rect2(-4, -8, 8, 8), Color("#7a1f1d"), false, 1.0)
-			
-			# Burning fuse sparks
-			draw_circle(Vector2(0, -9), 2.5 + randf_range(-1, 1), Color(1.0, 0.85, 0.2))
-			draw_circle(Vector2(0, -9), 1.2, Color.WHITE)
-			
-			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-
-		# --- 3. DETONATION BLAST EXPANSION ---
-		if elapsed > duration:
-			var exp_t = (elapsed - duration) / 0.25 # 0.0 -> 1.0
-			var exp_r = blast_radius * (0.8 + exp_t * 0.4)
-			var exp_alpha = 1.0 - exp_t
-			draw_circle(target_pos, exp_r, Color(1.0, 0.45, 0.1, 0.6 * exp_alpha))
-			draw_circle(target_pos, exp_r * 0.6, Color(1.0, 0.90, 0.3, 0.8 * exp_alpha))
-			draw_circle(target_pos, exp_r * 0.25, Color(1.0, 1.0, 1.0, exp_alpha))
-			draw_arc(target_pos, exp_r, 0.0, TAU, 32, Color(1.0, 0.3, 0.1, exp_alpha), 3.0)
 
 func _execute_nob_warcry():
 	ability_timer = 10.0
@@ -608,10 +520,6 @@ func _process_guard_behavior(_delta: float, current_speed: float):
 		velocity = Vector2.ZERO
 		
 	move_and_slide()
-
-# ==============================================================================
-# TARGETING & DEATH
-# ==============================================================================
 
 func _find_nearest_building_in_range(range_limit: float) -> Node2D:
 	var buildings = get_tree().get_nodes_in_group("buildings")
@@ -754,3 +662,84 @@ func _handle_death() -> void:
 func update_ui() -> void:
 	if health_bar and health_bar.has_method("update_health"):
 		health_bar.update_health(current_health, max_health)
+
+func _draw() -> void:
+	if has_telemetry_mark:
+		var rot = Time.get_ticks_msec() * 0.004
+		var pulse = 0.75 + sin(Time.get_ticks_msec() * 0.01) * 0.25
+		var reticle_color = Color(0.20, 0.88, 1.0, 0.85 * pulse)
+		var r = 26.0
+
+		draw_set_transform(Vector2(0, -14), rot, Vector2.ONE)
+		for i in range(4):
+			var a = i * (PI / 2.0)
+			var p = Vector2(cos(a), sin(a)) * r
+			draw_arc(p, 6.0, a + PI * 0.75, a + PI * 1.25, 6, reticle_color, 1.8)
+		draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
+
+		var font = ThemeDB.fallback_font
+		draw_string(font, Vector2(-22, -42), "TARGET LOCKED", HORIZONTAL_ALIGNMENT_CENTER, 44, 7, reticle_color)
+
+class StikkbombTelegraphFX extends Node2D:
+	var start_pos: Vector2 = Vector2.ZERO
+	var target_pos: Vector2 = Vector2.ZERO
+	var duration: float = 1.2
+	var elapsed: float = 0.0
+	var arc_height: float = 85.0
+	var blast_radius: float = 65.0
+
+	func _ready() -> void:
+		z_index = 80
+		var mat = CanvasItemMaterial.new()
+		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+		material = mat
+
+	func _process(delta: float) -> void:
+		elapsed += delta
+		queue_redraw()
+		if elapsed >= duration + 0.25:
+			queue_free()
+
+	func _draw() -> void:
+		var t = clampf(elapsed / duration, 0.0, 1.0)
+		var pulse = 0.6 + sin(elapsed * 12.0) * 0.4
+		var warning_color = Color(1.0, 0.20, 0.15, 0.75 * pulse)
+		var fill_color = Color(1.0, 0.15, 0.10, 0.18 * (1.0 - t))
+
+		if elapsed <= duration:
+			draw_circle(target_pos, blast_radius, fill_color)
+			draw_arc(target_pos, blast_radius, 0.0, TAU, 32, warning_color, 2.0)
+			var fuse_radius = blast_radius * (1.0 - t)
+			draw_arc(target_pos, fuse_radius, 0.0, TAU, 24, Color(1.0, 0.85, 0.20, 0.8), 1.5)
+			for i in range(4):
+				var a = (float(i) * TAU / 4.0) + (elapsed * 3.0)
+				var pt = target_pos + Vector2(cos(a), sin(a)) * blast_radius
+				draw_circle(pt, 3.0, warning_color)
+
+		if elapsed <= duration:
+			var ground_pos = start_pos.lerp(target_pos, t)
+			var height = sin(t * PI) * arc_height
+			var bomb_pos = ground_pos + Vector2(0.0, -height)
+
+			var shadow_scale = clampf(1.0 - (height / arc_height) * 0.5, 0.4, 1.0)
+			draw_set_transform(ground_pos, 0.0, Vector2(1.0, 0.5))
+			draw_circle(Vector2.ZERO, 6.0 * shadow_scale, Color(0.02, 0.02, 0.05, 0.45 * shadow_scale))
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+			var spin_angle = elapsed * 10.0
+			draw_set_transform(bomb_pos, spin_angle, Vector2.ONE)
+			draw_line(Vector2(0, 0), Vector2(0, 10), Color("#4a3219"), 3.0)
+			draw_rect(Rect2(-4, -8, 8, 8), Color("#32373b"))
+			draw_rect(Rect2(-4, -8, 8, 8), Color("#7a1f1d"), false, 1.0)
+			draw_circle(Vector2(0, -9), 2.5 + randf_range(-1, 1), Color(1.0, 0.85, 0.2))
+			draw_circle(Vector2(0, -9), 1.2, Color.WHITE)
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+		if elapsed > duration:
+			var exp_t = (elapsed - duration) / 0.25
+			var exp_r = blast_radius * (0.8 + exp_t * 0.4)
+			var exp_alpha = 1.0 - exp_t
+			draw_circle(target_pos, exp_r, Color(1.0, 0.45, 0.1, 0.6 * exp_alpha))
+			draw_circle(target_pos, exp_r * 0.6, Color(1.0, 0.90, 0.3, 0.8 * exp_alpha))
+			draw_circle(target_pos, exp_r * 0.25, Color(1.0, 1.0, 1.0, exp_alpha))
+			draw_arc(target_pos, exp_r, 0.0, TAU, 32, Color(1.0, 0.3, 0.1, exp_alpha), 3.0)

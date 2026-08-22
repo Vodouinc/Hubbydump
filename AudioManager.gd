@@ -202,7 +202,29 @@ func _generate_sound_effects():
 	sfx_library["gate_toggle"] = _synth_blast_gate(0.22)
 	sfx_library["scrap_pickup"] = _synth_brass_cog_clink(0.16)
 	sfx_library["klaxon_alert"] = _synth_vox_klaxon(0.75)
+	
+	# Binary Canticle
+	sfx_library["binary_canticle"] = _synth_binary_burst(0.22)
 
+
+func _synth_binary_burst(duration: float) -> AudioStreamWAV:
+	var sample_rate = 22050
+	var total_samples = int(sample_rate * duration)
+	var byte_data = PackedByteArray()
+	byte_data.resize(total_samples * 2)
+
+	var phase = 0.0
+	for i in range(total_samples):
+		var t = float(i) / float(total_samples)
+		# Rapid frequency-shift keying (FSK data-burst chirps)
+		var freq = 1200.0 if (int(t * 32.0) % 2 == 0) else 1850.0
+		phase += (freq * TAU) / sample_rate
+		var tone = (1.0 if sin(phase) > 0.0 else -1.0) * 0.4
+		var env = sin(t * PI)
+		byte_data.encode_s16(i * 2, int(tone * env * 32767.0))
+
+	return _create_stream_from_bytes(byte_data, sample_rate)
+	
 # --- 1. HEAVY KINETIC BOLTER / RADIUM SHOT ---
 func _synth_heavy_bolter_shot(duration: float) -> AudioStreamWAV:
 	var sample_rate = 22050

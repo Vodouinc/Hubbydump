@@ -11,6 +11,10 @@ var anchor_position: Vector2 = Vector2.ZERO
 
 var rally_anchor: Vector2 = Vector2.ZERO
 var has_received_player_order: bool = false
+var base_movement_speed: float = 0.0
+
+var is_in_marshal_aura: bool = false
+var aura_is_conqueror: bool = true
 
 var rts_target_pos: Vector2 = Vector2.ZERO
 var is_rts_moving: bool = false
@@ -53,6 +57,8 @@ func _ready() -> void:
 	add_to_group("friendlies")
 	add_to_group("controllable_units")
 	
+	# Cache original movement speed on spawn
+	base_movement_speed = movement_speed
 	current_health = max_health
 	current_shield = max_shield
 	if health_bar and health_bar.has_method("setup"):
@@ -367,6 +373,22 @@ func _find_owner_player() -> void:
 			elif fallback_player == null:
 				fallback_player = p
 	player_owner = fallback_player
+
+func set_doctrina_buff(is_conq: bool, active: bool) -> void:
+	# Safety fallback in case buff is called before _ready
+	if base_movement_speed <= 0.0:
+		base_movement_speed = movement_speed
+
+	is_in_marshal_aura = active
+	aura_is_conqueror = is_conq
+
+	if not active:
+		movement_speed = base_movement_speed
+		return
+
+	# Conqueror (+30% Speed) vs Protector (-15% Speed)
+	var speed_mult = 1.30 if is_conq else 0.85
+	movement_speed = base_movement_speed * speed_mult
 
 # ==============================================================================
 # 2.5D KASTELAN BATTLE-AUTOMATA PROCEDURAL DRAWING

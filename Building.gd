@@ -1081,16 +1081,14 @@ func setup_as_preview():
 	if is_instance_valid(light):
 		light.queue_free()
 
+func _draw() -> void:
+	if building_type == Type.CYBERNETICA_FORGE and not is_preview:
+		if rally_point_world != Vector2.ZERO:
+			_draw_rally_point_beacon()
+
 func _draw_cybernetica_forge():
-	IsoDraw.box(self, Vector3(-24, -24, 0), Vector3(48, 48, 12), Color(0.12, 0.14, 0.18))
-
-	var pulse = 0.65 + sin(Time.get_ticks_msec() * 0.008) * 0.35
-	IsoDraw.cylinder(self, Vector3(0, 0, 12), 14.0, 8.0, Color(0.20, 0.88, 1.0 * pulse))
-
-	draw_line(Vector2(-14, -20), Vector2(-4, -36), Color(0.40, 0.45, 0.52), 3.5)
-	draw_line(Vector2(-4, -36), Vector2(8, -28), Color(0.82, 0.62, 0.24), 2.5)
-
-	IsoDraw.opus_machina_cog(self, Vector2(0, -6), 7.0, 8)
+	# (You can remove this from Building.gd since VisualBuildingSprite now draws it)
+	pass
 
 func _draw_rally_point_beacon():
 	var local_rally = to_local(rally_point_world)

@@ -550,6 +550,7 @@ func sync_match_started() -> void:
 
 func _begin_match_local() -> void:
 	match_started = true
+	DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_CONFINED)
 	_hide_lobby_ui()
 	var hud = get_tree().get_first_node_in_group("ability_hud")
 	if hud and hud.has_method("show"): hud.show()
@@ -609,6 +610,7 @@ func _refresh_lobby_roster():
 
 func _show_lobby_ui():
 	match_started = false
+	DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_VISIBLE)
 	if lobby_root_control: lobby_root_control.show()
 
 func _hide_lobby_ui():

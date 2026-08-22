@@ -55,7 +55,7 @@ func sync_base_health(new_hp: int):
 	current_health = new_hp
 	update_ui()
 	
-	if current_health <= 0 and multiplayer.is_server():
+	if current_health <= 0 and (multiplayer.is_server() or not multiplayer.has_multiplayer_peer()):
 		remove_from_group("navmesh_source")
 		var main_node = get_parent()
 		if not (main_node and main_node.has_method("game_over")):
@@ -65,7 +65,7 @@ func sync_base_health(new_hp: int):
 			if main_node.has_method("request_navmesh_rebake"):
 				main_node.request_navmesh_rebake()
 			if main_node.has_method("game_over"):
-				main_node.game_over(false)
+				main_node.game_over(false, "CORE BREACH: Main Base Sanctum was destroyed.")
 
 func update_ui():
 	if health_bar and health_bar.has_method("update_health"):

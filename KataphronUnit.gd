@@ -9,6 +9,10 @@ var attack_range: float = 260.0
 var attack_cooldown: float = 0.85
 var can_attack: bool = true
 
+var is_in_marshal_aura: bool = false
+var aura_is_conqueror: bool = true
+var base_movement_speed: float = 0.0
+
 var rally_anchor: Vector2 = Vector2.ZERO
 var has_received_player_order: bool = false
 
@@ -217,6 +221,22 @@ func take_damage(amount: int, _knockback: Vector2 = Vector2.ZERO):
 		if main_node and main_node.has_method("notify_cohort_unit_lost"):
 			main_node.notify_cohort_unit_lost()
 		queue_free()
+
+func set_doctrina_buff(is_conq: bool, active: bool) -> void:
+	# Safety fallback in case buff is called before _ready
+	if base_movement_speed <= 0.0:
+		base_movement_speed = movement_speed
+
+	is_in_marshal_aura = active
+	aura_is_conqueror = is_conq
+
+	if not active:
+		movement_speed = base_movement_speed
+		return
+
+	# Conqueror (+30% Speed) vs Protector (-15% Speed)
+	var speed_mult = 1.30 if is_conq else 0.85
+	movement_speed = base_movement_speed * speed_mult
 
 @rpc("call_local", "reliable")
 func sync_health(hp: int):

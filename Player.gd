@@ -12,6 +12,11 @@ var speed: float = 300.0
 var max_health: int = 100
 var current_health: int = 100
 
+var camera_trauma: float = 0.0
+const TRAUMA_DECAY: float = 1.6
+const MAX_SHAKE_OFFSET: float = 18.0
+const MAX_SHAKE_ROLL: float = 0.04
+
 var bullet_scene = preload("res://Bullet.tscn")
 var attack_cooldown: float = 0.4
 var bullet_damage: int = 20
@@ -20,6 +25,10 @@ var can_attack: bool = true
 var can_plasma_attack: bool = true
 var plasma_cooldown: float = 0.65
 var plasma_damage: int = 30
+
+var is_dead: bool = false
+var respawn_timer: float = 0.0
+const RESPAWN_DURATION: float = 10.0
 
 var preview_validation_info: Dictionary = {"valid": false, "reason": "INITIALIZING"}
 var tooltip_overlay: Node2D = null
@@ -97,6 +106,13 @@ func _ready():
 	set_process_unhandled_input(_is_local_authority())
 	
 	if _is_local_authority():
+		z_index = 88 # Render hero and selection box above shadows and atmospheric dust
+		
+		# Prevent Godot from culling the selection box when Marshal is off-screen
+		RenderingServer.canvas_item_set_custom_rect(get_canvas_item(), true, Rect2(-100000, -100000, 200000, 200000))
+
+		DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_CONFINED)
+
 		_setup_tooltip_overlay()
 		if label:
 			label.text += " [YOU]"
@@ -150,11 +166,119 @@ func apply_class_stats():
 	if health_bar and health_bar.has_method("setup"):
 		health_bar.setup(current_health, max_health)
 
+# ------------------------------------------------------------------------------
+# DAMAGE & HEALTH HANDLING
+# ------------------------------------------------------------------------------
+
+func take_damage(amount: int, _knockback: Vector2 = Vector2.ZERO):
+	if is_dead: return
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
+
+	var actual_damage = float(amount)
+	
+	if current_class == PlayerClass.RANGED:
+		if active_doctrina == Doctrina.PROTECTOR:
+			actual_damage *= 0.65
+		elif active_doctrina == Doctrina.CONQUEROR:
+			actual_damage *= 1.20
+
+	var new_health = max(0, current_health - int(actual_damage))
+	if multiplayer.has_multiplayer_peer():
+		rpc("sync_health", new_health)
+	else:
+		sync_health(new_health)
+
+@rpc("call_local", "reliable")
+func sync_health(new_hp: int):
+	current_health = new_hp
+	if health_bar and health_bar.has_method("update_health"):
+		health_bar.update_health(current_health, max_health)
+
+	if _is_local_authority():
+		add_camera_trauma(0.30)
+		AudioManager.play_sfx("hit", global_position, 1.0, 0.9)
+		
+		if current_class == PlayerClass.RANGED and is_instance_valid(camera):
+			var cam_dist = camera.global_position.distance_to(global_position)
+			if cam_dist > 450.0:
+				AudioManager.play_sfx("klaxon_alert", camera.global_position, 2.0, 1.5)
+
+	# Enter Cybernetic Reboot Stasis
+	if current_health <= 0 and not is_dead:
+		_handle_player_death_stasis()
+
+func _handle_player_death_stasis():
+	is_dead = true
+	respawn_timer = RESPAWN_DURATION
+	velocity = Vector2.ZERO
+	is_building_mode = false
+	is_box_selecting = false
+	is_attack_move_queued = false
+
+	# Disable collisions and hide sprite during reboot
+	collision_layer = 0
+	collision_mask = 0
+	if visual_sprite: visual_sprite.visible = false
+	if health_bar: health_bar.visible = false
+	if shadow_node: shadow_node.visible = false
+
+	if _is_local_authority():
+		add_camera_trauma(0.60)
+		AudioManager.play_sfx("orbital_strike", global_position, -2.0, 1.6)
+
+		# Pan camera back to the Main Sanctum so player watches the base
+		var base_node = get_tree().get_first_node_in_group("base")
+		if is_instance_valid(base_node) and is_instance_valid(camera):
+			var tween = create_tween()
+			tween.tween_property(camera, "global_position", base_node.global_position, 0.8).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+func _execute_sanctum_respawn():
+	var base_node = get_tree().get_first_node_in_group("base")
+	var spawn_pos = base_node.global_position + Vector2(0, 60) if is_instance_valid(base_node) else Vector2(500, 500)
+
+	if multiplayer.has_multiplayer_peer():
+		rpc("sync_respawn", spawn_pos)
+	else:
+		sync_respawn(spawn_pos)
+
+@rpc("call_local", "reliable")
+func sync_respawn(respawn_pos: Vector2):
+	is_dead = false
+	respawn_timer = 0.0
+	current_health = max_health
+	global_position = respawn_pos
+
+	# Re-enable collision & visuals
+	collision_layer = 1
+	collision_mask = 1
+	if visual_sprite: visual_sprite.visible = true
+	if health_bar: 
+		health_bar.visible = true
+		health_bar.update_health(current_health, max_health)
+	if shadow_node: shadow_node.visible = true
+
+	# Resurrect sound & camera focus
+	AudioManager.play_sfx("volkite_beam", global_position, 2.0, 1.4)
+	
+	if _is_local_authority():
+		if camera:
+			camera.global_position = global_position
+		if current_class == PlayerClass.RANGED:
+			_add_unit_to_selection(self)
+
+# ------------------------------------------------------------------------------
+# MOVEMENT & PHYSICS
+# ------------------------------------------------------------------------------
+
 func _physics_process(delta: float) -> void:
+	if is_dead: return # Halt all physics movement while dead
+
 	if current_class == PlayerClass.MELEE:
 		_process_techpriest_movement(delta)
 	else:
 		_process_marshal_rts_movement(delta)
+		if _is_local_authority():
+			_broadcast_marshal_doctrina_aura()
 
 func _process_techpriest_movement(delta: float) -> void:
 	if not _is_local_authority(): return
@@ -175,19 +299,18 @@ func _process_techpriest_movement(delta: float) -> void:
 	velocity += _calculate_friendly_separation() * 60.0
 	move_and_slide()
 
-func _process_marshal_rts_movement(delta: float) -> void:
-	var wasd_dir = Vector2.ZERO
-	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT): wasd_dir.x -= 1
-	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): wasd_dir.x += 1
-	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP): wasd_dir.y -= 1
-	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN): wasd_dir.y += 1
+func _broadcast_marshal_doctrina_aura() -> void:
+	var aura_radius = 230.0
+	var is_conqueror = (active_doctrina == Doctrina.CONQUEROR)
+	
+	for unit in get_tree().get_nodes_in_group("controllable_units"):
+		if is_instance_valid(unit) and unit != self:
+			var in_range = global_position.distance_to(unit.global_position) <= aura_radius
+			if unit.has_method("set_doctrina_buff"):
+				unit.set_doctrina_buff(is_conqueror, in_range)
 
-	if wasd_dir != Vector2.ZERO:
-		rts_is_moving = false
-		wasd_dir = wasd_dir.normalized()
-		var corner_nudge = _calculate_corner_nudge(wasd_dir)
-		velocity = (wasd_dir + corner_nudge).normalized() * speed
-	elif rts_is_moving:
+func _process_marshal_rts_movement(delta: float) -> void:
+	if rts_is_moving:
 		var dist = global_position.distance_to(rts_target_move_pos)
 		if dist > 12.0:
 			var dir = global_position.direction_to(rts_target_move_pos)
@@ -253,6 +376,10 @@ func _calculate_corner_nudge(move_dir: Vector2) -> Vector2:
 
 	return Vector2.ZERO
 
+# ------------------------------------------------------------------------------
+# BUILDING & INTERACTION
+# ------------------------------------------------------------------------------
+
 func toggle_build_mode(building_type_idx: int = 0):
 	if is_building_mode and selected_building_type == building_type_idx:
 		_cancel_build_mode()
@@ -298,13 +425,12 @@ func request_interact_nearby_structure() -> void:
 		var b_type = int(closest.building_type) if "building_type" in closest else -1
 
 		match b_type:
-			0: # Barricade -> Gate
+			0:
 				if multiplayer.has_multiplayer_peer():
 					if main_node: main_node.rpc_id(1, "request_upgrade_gate", closest.name)
 				elif closest.has_method("try_upgrade_to_gate"):
 					closest.try_upgrade_to_gate()
-
-			2: # Turret
+			2:
 				var lvl = closest.turret_upgrade_level if "turret_upgrade_level" in closest else 0
 				var spec = closest.turret_spec if "turret_spec" in closest else 0
 				if lvl < 3:
@@ -314,17 +440,14 @@ func request_interact_nearby_structure() -> void:
 						closest.try_upgrade_turret()
 				elif spec == GameData.TurretSpec.NONE and t_ui:
 					t_ui.open_modal(closest)
-
-			4: # Distributor -> Antenna
+			4:
 				if multiplayer.has_multiplayer_peer():
 					if main_node: main_node.rpc_id(1, "request_upgrade_distributor", closest.name)
 				elif closest.has_method("try_upgrade_distributor"):
 					closest.try_upgrade_distributor()
-
-			6: # Tech Shrine
+			6:
 				if r_ui: r_ui.open_terminal(closest)
-
-			7: # Cybernetica Forge
+			7:
 				if c_ui: c_ui.open_terminal(closest)
 
 func _get_closest_interactable_structure() -> Node2D:
@@ -348,12 +471,26 @@ func _get_closest_interactable_structure() -> Node2D:
 	return closest
 
 # ------------------------------------------------------------------------------
-# 1. PROCESS & REAL-TIME PREVIEW
+# PROCESS & REAL-TIME PREVIEW
 # ------------------------------------------------------------------------------
 
 func _process(delta: float):
+# Handle Cybernetic Reboot Countdown
+	if is_dead:
+		if (not multiplayer.has_multiplayer_peer()) or multiplayer.is_server():
+			respawn_timer -= delta
+			if respawn_timer <= 0.0:
+				_execute_sanctum_respawn()
+		return
+
 	if _is_local_authority():
 		hovered_interact_building = _get_closest_interactable_structure()
+		_process_camera_shake(delta)
+
+		if is_box_selecting:
+			box_select_current_world = get_global_mouse_position()
+			queue_redraw()
+
 
 	if orbital_strike_cooldown > 0.0:
 		orbital_strike_cooldown = maxf(0.0, orbital_strike_cooldown - delta)
@@ -401,7 +538,6 @@ func _update_building_preview_position():
 	var mouse_world = get_global_mouse_position()
 	var snapped_pos = mouse_world.snapped(Vector2(GRID_SIZE, GRID_SIZE))
 
-	# Snap to nearest deposit if building an extractor
 	var info = GameData.STRUCTURE_INFO.get(selected_building_type, {})
 	var requires_deposit = info.get("requires_deposit", false)
 	if requires_deposit:
@@ -415,20 +551,18 @@ func _update_building_preview_position():
 	preview_is_valid = preview_validation_info.valid
 
 	if preview_is_valid:
-		preview_instance.modulate = Color(0.20, 0.88, 1.00, 0.80) # Holographic Cyan
+		preview_instance.modulate = Color(0.20, 0.88, 1.00, 0.80)
 	else:
-		preview_instance.modulate = Color(0.92, 0.22, 0.18, 0.55) # Warning Red
+		preview_instance.modulate = Color(0.92, 0.22, 0.18, 0.55)
 
 func _validate_structure_placement(target_pos: Vector2, b_type: int) -> Dictionary:
 	var info = GameData.STRUCTURE_INFO.get(b_type, {})
 	if info.is_empty():
 		return {"valid": false, "reason": "UNKNOWN BLUEPRINT"}
 
-	# 1. Auspex Range Check
 	if global_position.distance_to(target_pos) > BUILD_RANGE:
 		return {"valid": false, "reason": "OUT OF AUSPEX RANGE"}
 
-	# 2. Resource Reserves Check
 	var main_node = get_tree().get_first_node_in_group("main")
 	if main_node:
 		var cur_scrap = main_node.scrap_amount if "scrap_amount" in main_node else 0
@@ -439,7 +573,6 @@ func _validate_structure_placement(target_pos: Vector2, b_type: int) -> Dictiona
 	var my_size: Vector2 = info.get("size", Vector2(32, 32))
 	var my_radius = maxf(my_size.x, my_size.y) * 0.45
 
-	# 3. Scrap Deposit Rules & Extractor Clearance
 	var requires_deposit = info.get("requires_deposit", false)
 	var deposits = get_tree().get_nodes_in_group("scrap_deposits")
 
@@ -459,13 +592,11 @@ func _validate_structure_placement(target_pos: Vector2, b_type: int) -> Dictiona
 				if dep.global_position.distance_to(target_pos) < min_clearance:
 					return {"valid": false, "reason": "RESERVED FOR EXTRACTOR"}
 
-	# 4. Sanctum Zone Clearance
 	var base_node = get_tree().get_first_node_in_group("base")
 	if is_instance_valid(base_node):
 		if base_node.global_position.distance_to(target_pos) < 54.0:
 			return {"valid": false, "reason": "SANCTUM ZONE OBSTRUCTED"}
 
-	# 5. Clearance from Existing Buildings
 	for b in get_tree().get_nodes_in_group("buildings"):
 		if is_instance_valid(b) and not b.get("is_preview") and b != preview_instance:
 			var other_type = int(b.get("building_type")) if "building_type" in b else 0
@@ -494,12 +625,62 @@ func _find_nearest_deposit(world_pos: Vector2, max_dist: float) -> Node2D:
 	return closest
 
 # ------------------------------------------------------------------------------
-# 2. HOLOGRAPHIC GRID & EXCLUSION ZONE DRAWING
+# HOLOGRAPHIC GRID & EXCLUSION ZONE DRAWING
 # ------------------------------------------------------------------------------
 
 func _draw():
-	if _is_local_authority() and is_building_mode and current_class == PlayerClass.MELEE:
+	if not _is_local_authority(): return
+
+	if is_building_mode and current_class == PlayerClass.MELEE:
 		_draw_holographic_build_grid()
+
+	elif current_class == PlayerClass.RANGED:
+		if is_box_selecting:
+			_draw_rts_selection_box()
+		if is_attack_move_queued:
+			_draw_attack_move_cursor_reticle()
+
+func _draw_rts_selection_box():
+	var p1 = to_local(box_select_start_world)
+	var p2 = to_local(box_select_current_world)
+
+	var rect_min = Vector2(minf(p1.x, p2.x), minf(p1.y, p2.y))
+	var rect_max = Vector2(maxf(p1.x, p2.x), maxf(p1.y, p2.y))
+	var select_rect = Rect2(rect_min, rect_max - rect_min)
+
+	var col_fill = Color(0.20, 0.88, 1.0, 0.15) if not is_attack_move_queued else Color(1.0, 0.25, 0.20, 0.15)
+	var col_edge = Color(0.20, 0.88, 1.0, 0.90) if not is_attack_move_queued else Color(1.0, 0.25, 0.20, 0.90)
+
+	draw_rect(select_rect, col_fill, true)
+	draw_rect(select_rect, col_edge, false, 1.5)
+
+	# Corner bracket crosshairs on the selection box
+	var c = 6.0
+	draw_line(select_rect.position, select_rect.position + Vector2(c, 0), col_edge, 2.0)
+	draw_line(select_rect.position, select_rect.position + Vector2(0, c), col_edge, 2.0)
+	var tr = select_rect.position + Vector2(select_rect.size.x, 0)
+	draw_line(tr, tr - Vector2(c, 0), col_edge, 2.0)
+	draw_line(tr, tr + Vector2(0, c), col_edge, 2.0)
+	var bl = select_rect.position + Vector2(0, select_rect.size.y)
+	draw_line(bl, bl + Vector2(c, 0), col_edge, 2.0)
+	draw_line(bl, bl - Vector2(0, c), col_edge, 2.0)
+	var br = select_rect.position + select_rect.size
+	draw_line(br, br - Vector2(c, 0), col_edge, 2.0)
+	draw_line(br, br - Vector2(0, c), col_edge, 2.0)
+
+func _draw_attack_move_cursor_reticle():
+	var mouse_local = to_local(get_global_mouse_position())
+	var pulse = 0.75 + sin(Time.get_ticks_msec() * 0.01) * 0.25
+	var red_col = Color(1.0, 0.25, 0.20, 0.85 * pulse)
+
+	draw_arc(mouse_local, 14.0, 0.0, TAU, 16, red_col, 1.4)
+	draw_line(mouse_local + Vector2(-18, 0), mouse_local + Vector2(-6, 0), red_col, 1.5)
+	draw_line(mouse_local + Vector2(6, 0), mouse_local + Vector2(18, 0), red_col, 1.5)
+	draw_line(mouse_local + Vector2(0, -18), mouse_local + Vector2(0, -6), red_col, 1.5)
+	draw_line(mouse_local + Vector2(0, 6), mouse_local + Vector2(0, 18), red_col, 1.5)
+
+	var font = ThemeDB.fallback_font
+	draw_string(font, mouse_local + Vector2(-30, 26), "ATTACK-MOVE", HORIZONTAL_ALIGNMENT_CENTER, 60, 8, red_col)
 
 func _draw_holographic_build_grid() -> void:
 	var pulse = 0.70 + sin(Time.get_ticks_msec() * 0.007) * 0.30
@@ -514,7 +695,6 @@ func _draw_holographic_build_grid() -> void:
 	var info = GameData.STRUCTURE_INFO.get(selected_building_type, {})
 	var requires_deposit = info.get("requires_deposit", false)
 
-	# 1. Auspex Range Perimeter & Radial Ticks
 	draw_circle(Vector2.ZERO, BUILD_RANGE, Color(0.20, 0.88, 1.00, 0.04 * pulse))
 	draw_arc(Vector2.ZERO, BUILD_RANGE, 0.0, TAU, 64, c_cyan_bright, 1.5)
 
@@ -524,7 +704,6 @@ func _draw_holographic_build_grid() -> void:
 		var p_inner = Vector2(cos(a), sin(a)) * (BUILD_RANGE - (8.0 if i % 3 == 0 else 4.0))
 		draw_line(p_inner, p_outer, c_cyan_bright, 1.2 if i % 3 != 0 else 2.0)
 
-	# 2. Snapped Tactical Grid Points
 	var half_grid_steps = int(ceil(BUILD_RANGE / GRID_SIZE))
 	var player_snapped = global_position.snapped(Vector2(GRID_SIZE, GRID_SIZE))
 
@@ -535,10 +714,8 @@ func _draw_holographic_build_grid() -> void:
 			if local_cell.length() <= BUILD_RANGE:
 				draw_circle(local_cell, 1.2, c_cyan_grid)
 
-	# 3. Obstacle Clearance & Scrap Exclusion Zones
 	_draw_obstacle_exclusion_zones(c_red_alert, c_red_dim, pulse, requires_deposit)
 
-	# 4. Cursor Hover Bracket & Invalid Cross [ ✕ ]
 	var snap_target_world = preview_instance.global_position if is_instance_valid(preview_instance) else mouse_world.snapped(Vector2(GRID_SIZE, GRID_SIZE))
 	var snap_local = to_local(snap_target_world)
 	var tile_color = c_cyan_bright if preview_is_valid else (c_amber if not in_range else c_red_alert)
@@ -566,10 +743,7 @@ func _draw_holographic_build_grid() -> void:
 	else:
 		draw_rect(tile_rect, Color(0.20, 0.88, 1.00, 0.10), true)
 
-	# 5. Tether Line to Tech-Priest
 	draw_line(Vector2.ZERO, snap_local, Color(tile_color.r, tile_color.g, tile_color.b, 0.35), 1.2)
-
-	# 6. Floating Status Badge Below Cursor
 	_draw_cursor_status_badge(snap_local, tile_color)
 
 func _draw_obstacle_exclusion_zones(c_red_alert: Color, c_red_dim: Color, pulse: float, placing_smelter: bool):
@@ -577,7 +751,6 @@ func _draw_obstacle_exclusion_zones(c_red_alert: Color, c_red_dim: Color, pulse:
 	var my_size: Vector2 = info.get("size", Vector2(32, 32))
 	var my_radius = maxf(my_size.x, my_size.y) * 0.45
 
-	# Base Sanctum Zone
 	var base_node = get_tree().get_first_node_in_group("base")
 	if is_instance_valid(base_node):
 		var base_local = to_local(base_node.global_position)
@@ -585,7 +758,6 @@ func _draw_obstacle_exclusion_zones(c_red_alert: Color, c_red_dim: Color, pulse:
 			draw_arc(base_local, 46.0, 0, TAU, 32, Color(c_red_alert.r, c_red_alert.g, c_red_alert.b, 0.45 * pulse), 1.2)
 			draw_circle(base_local, 46.0, c_red_dim)
 
-	# Existing Buildings Zones
 	for b in get_tree().get_nodes_in_group("buildings"):
 		if is_instance_valid(b) and not b.get("is_preview") and b != preview_instance:
 			var b_local = to_local(b.global_position)
@@ -600,7 +772,6 @@ func _draw_obstacle_exclusion_zones(c_red_alert: Color, c_red_dim: Color, pulse:
 				draw_line(b_rect.position, b_rect.position + b_rect.size, Color(0.92, 0.22, 0.18, 0.25), 1.0)
 				draw_line(b_rect.position + Vector2(b_rect.size.x, 0), b_rect.position + Vector2(0, b_rect.size.y), Color(0.92, 0.22, 0.18, 0.25), 1.0)
 
-	# Scrap Deposits
 	for dep in get_tree().get_nodes_in_group("scrap_deposits"):
 		if is_instance_valid(dep):
 			var dep_local = to_local(dep.global_position)
@@ -647,7 +818,7 @@ func _draw_cursor_status_badge(snap_local: Vector2, badge_color: Color):
 	draw_string(font, badge_pos + Vector2(8, 12), text_str, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, badge_color)
 
 # ------------------------------------------------------------------------------
-# 3. INPUT HANDLING
+# CAMERA, RTS INPUT & SELECTION
 # ------------------------------------------------------------------------------
 
 func _process_rts_camera_panning(delta: float):
@@ -711,11 +882,6 @@ func _handle_rts_commander_input(event: InputEvent):
 		get_viewport().set_input_as_handled()
 		return
 
-	if event is InputEventKey and event.pressed and event.keycode == KEY_SPACE:
-		if is_instance_valid(camera): camera.global_position = global_position
-		get_viewport().set_input_as_handled()
-		return
-
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			is_box_selecting = true
@@ -752,7 +918,19 @@ func _handle_rts_commander_input(event: InputEvent):
 		return
 
 	if event is InputEventKey and event.pressed:
-		if event.keycode == KEY_A:
+		if event.keycode == KEY_SPACE:
+			if is_instance_valid(camera): 
+				camera.global_position = global_position
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_Q:
+			_toggle_doctrina_imperative()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_F:
+			var target_enemy = _find_enemy_under_cursor(mouse_world)
+			if is_instance_valid(target_enemy):
+				_designate_priority_target(target_enemy)
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_A:
 			is_attack_move_queued = true
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_S:
@@ -781,6 +959,28 @@ func _handle_rts_commander_input(event: InputEvent):
 			if Input.is_key_pressed(KEY_CTRL): _save_control_group(group_num)
 			else: _load_control_group(group_num)
 			get_viewport().set_input_as_handled()
+
+func _toggle_doctrina_imperative() -> void:
+	active_doctrina = Doctrina.PROTECTOR if active_doctrina == Doctrina.CONQUEROR else Doctrina.CONQUEROR
+	
+	if AudioManager.sfx_library.has("binary_canticle"):
+		AudioManager.play_sfx("binary_canticle", global_position, 1.0, 1.2 if active_doctrina == Doctrina.CONQUEROR else 0.85)
+	else:
+		AudioManager.play_sfx("building_place", global_position, -2.0, 1.8 if active_doctrina == Doctrina.CONQUEROR else 1.2)
+	
+	_broadcast_marshal_doctrina_aura()
+	var hud = get_tree().get_first_node_in_group("ability_hud")
+	if hud and hud.has_method("refresh_hud_display"):
+		hud.refresh_hud_display()
+	queue_redraw()
+
+func _designate_priority_target(enemy: Node2D):
+	if enemy.has_method("apply_telemetry_mark"):
+		enemy.apply_telemetry_mark(8.0)
+	
+	_issue_attack_order_to_selection(enemy)
+	AudioManager.play_sfx("volkite_beam", enemy.global_position, 1.0, 1.6)
+	add_camera_trauma(0.20)
 
 func _handle_techpriest_arpg_input(event: InputEvent):
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
@@ -827,9 +1027,10 @@ func _handle_techpriest_arpg_input(event: InputEvent):
 		elif event.keycode in [KEY_6, KEY_KP_6]: toggle_build_mode(6); get_viewport().set_input_as_handled()
 		elif event.keycode in [KEY_7, KEY_KP_7]: toggle_build_mode(7); get_viewport().set_input_as_handled()
 
-# ==============================================================================
+# ------------------------------------------------------------------------------
 # WORLD-SPACE BOX SELECTION
-# ==============================================================================
+# ------------------------------------------------------------------------------
+
 func _execute_box_selection(add_to_selection: bool):
 	if not add_to_selection: _clear_rts_selection()
 
@@ -866,12 +1067,16 @@ func _clear_rts_selection():
 			elif "is_rts_selected" in unit: unit.is_rts_selected = false
 	rts_selected_units.clear()
 
-# ==============================================================================
+# ------------------------------------------------------------------------------
 # NETWORKED RTS COMMAND ROUTING (CLIENT -> SERVER)
-# ==============================================================================
+# ------------------------------------------------------------------------------
+
 func _issue_order_to_selection(target_pos: Vector2, is_attack_move: bool):
 	if rts_selected_units.is_empty(): 
 		_add_unit_to_selection(self)
+
+	_spawn_rts_waypoint_marker(target_pos, is_attack_move)
+	AudioManager.play_sfx("building_place", target_pos, -4.0, 1.6)
 
 	var count = rts_selected_units.size()
 	var unit_names: Array[String] = []
@@ -899,7 +1104,20 @@ func _issue_order_to_selection(target_pos: Vector2, is_attack_move: bool):
 	if multiplayer.has_multiplayer_peer():
 		rpc_id(1, "request_rts_move_order", unit_names, target_pos, is_attack_move)
 
-	AudioManager.play_sfx("building_place", target_pos, -4.0, 1.6)
+func _calculate_tactical_slot_offset(unit: Node2D, index: int, total_units: int, move_dir: Vector2) -> Vector2:
+	if total_units <= 1: return Vector2.ZERO
+
+	var perp = move_dir.orthogonal()
+	var col_spacing = 26.0
+	
+	var depth_offset = 0.0
+	if unit is KataphronUnit or unit is KastelanRobot:
+		depth_offset = 20.0
+	elif unit.get("unit_type") == GameData.CohortUnitType.RANGER:
+		depth_offset = -35.0
+
+	var lateral_slot = (index - (total_units * 0.5)) * col_spacing
+	return (perp * lateral_slot) + (move_dir * depth_offset)
 
 @rpc("any_peer", "call_local", "reliable")
 func request_rts_move_order(unit_names: Array, target_pos: Vector2, is_attack_move: bool):
@@ -1081,6 +1299,10 @@ func _find_nearest_enemy_in_range(range_limit: float) -> Node2D:
 				closest_target = e
 	return closest_target
 
+# ------------------------------------------------------------------------------
+# ATTACKS & UPGRADES
+# ------------------------------------------------------------------------------
+
 @rpc("any_peer", "call_local", "reliable")
 func perform_attack(target_pos: Vector2):
 	can_attack = false
@@ -1193,6 +1415,10 @@ func request_orbital_strike(target_pos: Vector2):
 @rpc("any_peer", "call_local", "unreliable")
 func execute_orbital_strike_fx(target_pos: Vector2):
 	AudioManager.play_sfx("orbital_strike", target_pos, 4.0)
+	if _is_local_authority():
+		var dist = global_position.distance_to(target_pos)
+		var intensity = clampf(1.0 - (dist / 900.0), 0.35, 1.0)
+		add_camera_trauma(0.85 * intensity)
 
 @rpc("any_peer", "call_local", "reliable")
 func sync_orbital_cooldown(new_cd: float):
@@ -1266,6 +1492,10 @@ func sync_speed_upgrade(new_lvl: int, new_spd: float):
 	speed_upgrade_level = new_lvl
 	speed = new_spd
 
+# ------------------------------------------------------------------------------
+# TOOLTIP & OVERLAY RENDERER
+# ------------------------------------------------------------------------------
+
 func _setup_tooltip_overlay() -> void:
 	if not has_node("TooltipOverlay"):
 		tooltip_overlay = TooltipOverlayRenderer.new()
@@ -1310,3 +1540,63 @@ class TooltipOverlayRenderer extends Node2D:
 
 		var font = ThemeDB.fallback_font
 		draw_string(font, key_rect.position + Vector2(0, 14), "E", HORIZONTAL_ALIGNMENT_CENTER, 20, 10, ring_col)
+
+# ------------------------------------------------------------------------------
+# RTS WAYPOINT MARKER & CAMERA SHAKE
+# ------------------------------------------------------------------------------
+
+func _spawn_rts_waypoint_marker(target_pos: Vector2, is_attack_move: bool):
+	var marker = RTSWaypointMarker.new()
+	marker.global_position = target_pos
+	marker.is_attack = is_attack_move
+	get_parent().add_child(marker)
+
+class RTSWaypointMarker extends Node2D:
+	var is_attack: bool = false
+	var lifetime: float = 0.45
+	var elapsed: float = 0.0
+
+	func _ready() -> void:
+		z_index = 88 # Render hero and selection box above shadows and atmospheric dust
+		var mat = CanvasItemMaterial.new()
+		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+		material = mat
+
+	func _process(delta: float) -> void:
+		elapsed += delta
+		queue_redraw()
+		if elapsed >= lifetime:
+			queue_free()
+
+	func _draw() -> void:
+		var t = elapsed / lifetime
+		var alpha = 1.0 - t
+		var base_color = Color(1.0, 0.25, 0.20, alpha) if is_attack else Color(0.20, 0.88, 1.0, alpha)
+		var r = lerpf(8.0, 22.0, sqrt(t))
+
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2(1.0, 0.50))
+		draw_arc(Vector2.ZERO, r, 0.0, TAU, 24, base_color, 1.5)
+		draw_arc(Vector2.ZERO, r * 0.5, 0.0, TAU, 16, Color(base_color.r, base_color.g, base_color.b, alpha * 0.4), 1.0)
+
+		for i in range(4):
+			var a = (float(i) * TAU / 4.0) + (t * 2.0)
+			var p_out = Vector2(cos(a), sin(a)) * r
+			var p_in = Vector2(cos(a), sin(a)) * (r - 4.0)
+			draw_line(p_in, p_out, base_color, 1.6)
+
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func add_camera_trauma(amount: float) -> void:
+	camera_trauma = clampf(camera_trauma + amount, 0.0, 1.0)
+
+func _process_camera_shake(delta: float):
+	if not is_instance_valid(camera): return
+
+	if camera_trauma > 0.0:
+		camera_trauma = maxf(0.0, camera_trauma - (TRAUMA_DECAY * delta))
+		var shake = camera_trauma * camera_trauma
+		camera.offset = Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * MAX_SHAKE_OFFSET * shake
+		camera.rotation = randf_range(-1.0, 1.0) * MAX_SHAKE_ROLL * shake
+	else:
+		camera.offset = Vector2.ZERO
+		camera.rotation = 0.0

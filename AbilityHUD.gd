@@ -7,6 +7,9 @@ var context_banner: PanelContainer = null
 var context_label: Label = null
 const UPDATE_INTERVAL: float = 0.06
 
+var reboot_panel: PanelContainer = null
+var reboot_timer_lbl: Label = null
+
 # Theme Colors
 const C_BG_DARK     := Color(0.04, 0.05, 0.08, 0.96)
 const C_PANEL_EDGE  := Color(0.18, 0.22, 0.28, 0.95)
@@ -19,13 +22,14 @@ const C_GREEN_READY := Color(0.35, 0.95, 0.45)
 const C_PARCHMENT   := Color(0.88, 0.84, 0.72)
 const C_MUTED       := Color(0.50, 0.54, 0.60)
 
-# Layout Containers
-var weapon_buttons: Array[CompactSlot] = []
-var action_buttons: Array[CompactSlot] = []
-var augment_buttons: Array[CompactSlot] = []
+# Layout Containers (Using base types so inner classes don't cause scope errors)
+var weapon_buttons: Array[Button] = []
+var action_buttons: Array[Button] = []
+var augment_buttons: Array[Button] = []
 
 var action_panel: PanelContainer = null
-var tooltip_card: TooltipCard = null
+var action_title_lbl: Label = null
+var tooltip_card: PanelContainer = null
 var hovered_slot_data: Dictionary = {}
 var global_res_label: Label = null
 
@@ -65,7 +69,8 @@ func _build_hud_layout():
 		c.queue_free()
 
 	_build_top_left_resource_monitor()
-	_build_context_interaction_banner() # <-- Add this line
+	_build_context_interaction_banner()
+	_build_reboot_overlay()
 
 	tooltip_card = TooltipCard.new()
 	tooltip_card.name = "TooltipCard"
@@ -76,8 +81,8 @@ func _build_hud_layout():
 	var main_hbox = HBoxContainer.new()
 	main_hbox.name = "MainHUDHBox"
 	main_hbox.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	main_hbox.offset_left = -390
-	main_hbox.offset_right = 390
+	main_hbox.offset_left = -440
+	main_hbox.offset_right = 440
 	main_hbox.offset_top = -78
 	main_hbox.offset_bottom = -10
 	main_hbox.grow_horizontal = Control.GROW_DIRECTION_BOTH
@@ -86,7 +91,7 @@ func _build_hud_layout():
 	main_hbox.mouse_filter = Control.MOUSE_FILTER_PASS
 	add_child(main_hbox)
 
-	# --- POD A: ARMAMENTS ---
+	# --- POD A: ARMAMENTS & ACTIVES ---
 	var weapon_panel = _create_pod_panel("ArmamentPod", main_hbox)
 	var weapon_vbox = VBoxContainer.new()
 	weapon_vbox.add_theme_constant_override("separation", 2)
@@ -109,21 +114,22 @@ func _build_hud_layout():
 		slot.custom_minimum_size = Vector2(48, 48)
 		slot.mouse_entered.connect(_on_slot_hovered.bind(slot))
 		slot.mouse_exited.connect(_on_slot_unhovered)
+		slot.pressed.connect(_on_slot_clicked.bind(slot))
 		weapon_hbox.add_child(slot)
 		weapon_buttons.append(slot)
 
-	# --- POD B: TACTICAL FORGE PALETTE ([1] - [7]) ---
+	# --- POD B: TACTICAL FORGE (TECH-PRIEST) / COHORT DIRECTIVES (MARSHAL) ---
 	action_panel = _create_pod_panel("ActionPod", main_hbox)
 	var action_vbox = VBoxContainer.new()
 	action_vbox.add_theme_constant_override("separation", 2)
 	action_panel.add_child(action_vbox)
 
-	var a_title = Label.new()
-	a_title.text = "TACTICAL FORGE PROTOCOLS"
-	a_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	a_title.add_theme_font_size_override("font_size", 8)
-	a_title.add_theme_color_override("font_color", C_CYAN)
-	action_vbox.add_child(a_title)
+	action_title_lbl = Label.new()
+	action_title_lbl.text = "TACTICAL PROTOCOLS"
+	action_title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	action_title_lbl.add_theme_font_size_override("font_size", 8)
+	action_title_lbl.add_theme_color_override("font_color", C_CYAN)
+	action_vbox.add_child(action_title_lbl)
 
 	var action_hbox = HBoxContainer.new()
 	action_hbox.add_theme_constant_override("separation", 4)
@@ -135,17 +141,18 @@ func _build_hud_layout():
 		slot.custom_minimum_size = Vector2(48, 48)
 		slot.mouse_entered.connect(_on_slot_hovered.bind(slot))
 		slot.mouse_exited.connect(_on_slot_unhovered)
+		slot.pressed.connect(_on_slot_clicked.bind(slot))
 		action_hbox.add_child(slot)
 		action_buttons.append(slot)
 
-	# --- POD C: CYBERNETIC BIONICS & AUGMENTATIONS ---
+	# --- POD C: CYBERNETICS & REINFORCEMENTS ---
 	var augment_panel = _create_pod_panel("AugmentPod", main_hbox)
 	var augment_vbox = VBoxContainer.new()
 	augment_vbox.add_theme_constant_override("separation", 2)
 	augment_panel.add_child(augment_vbox)
 
 	var aug_title = Label.new()
-	aug_title.text = "CYBERNETIC BIONICS & COHORT"
+	aug_title.text = "BIONICS & REINFORCEMENTS"
 	aug_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	aug_title.add_theme_font_size_override("font_size", 8)
 	aug_title.add_theme_color_override("font_color", C_AMBER)
@@ -161,8 +168,51 @@ func _build_hud_layout():
 		slot.custom_minimum_size = Vector2(48, 48)
 		slot.mouse_entered.connect(_on_slot_hovered.bind(slot))
 		slot.mouse_exited.connect(_on_slot_unhovered)
+		slot.pressed.connect(_on_slot_clicked.bind(slot))
 		augment_hbox.add_child(slot)
 		augment_buttons.append(slot)
+
+func _build_reboot_overlay():
+	reboot_panel = PanelContainer.new()
+	reboot_panel.name = "RebootOverlay"
+	reboot_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	reboot_panel.offset_left = -260
+	reboot_panel.offset_right = 260
+	reboot_panel.offset_top = 80
+	reboot_panel.offset_bottom = 140
+	reboot_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0.04, 0.05, 0.08, 0.95)
+	sb.border_color = Color(0.92, 0.22, 0.18)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(4)
+	sb.content_margin_left = 16
+	sb.content_margin_right = 16
+	sb.content_margin_top = 8
+	sb.content_margin_bottom = 8
+	reboot_panel.add_theme_stylebox_override("panel", sb)
+	add_child(reboot_panel)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 2)
+	reboot_panel.add_child(vbox)
+
+	reboot_timer_lbl = Label.new()
+	reboot_timer_lbl.text = "⚡ CEREBRAL REBOOT IN PROGRESS: 10.0s ⚡"
+	reboot_timer_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	reboot_timer_lbl.add_theme_color_override("font_color", Color(1.0, 0.72, 0.15))
+	reboot_timer_lbl.add_theme_font_size_override("font_size", 12)
+	vbox.add_child(reboot_timer_lbl)
+
+	var sub_lbl = Label.new()
+	sub_lbl.text = "Chassis destroyed. Re-materializing at Main Base Sanctum..."
+	sub_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub_lbl.add_theme_color_override("font_color", Color(0.75, 0.78, 0.82))
+	sub_lbl.add_theme_font_size_override("font_size", 9)
+	vbox.add_child(sub_lbl)
+
+	reboot_panel.hide()
 
 func _build_context_interaction_banner():
 	context_banner = PanelContainer.new()
@@ -197,7 +247,6 @@ func _build_context_interaction_banner():
 	context_banner.add_child(context_label)
 	context_banner.hide()
 
-# Dedicated Top-Left Resource Auspex Monitor
 func _build_top_left_resource_monitor():
 	var top_panel = PanelContainer.new()
 	top_panel.name = "TopLeftResourceMonitor"
@@ -258,16 +307,57 @@ func _create_pod_panel(pod_name: String, parent_container: Container) -> PanelCo
 	parent_container.add_child(pc)
 	return pc
 
-func _on_slot_hovered(slot: CompactSlot):
-	hovered_slot_data = slot.cached_data
-	if not hovered_slot_data.is_empty():
-		_update_tooltip_position(slot)
-		tooltip_card.show()
+func _on_slot_hovered(slot: Button):
+	if slot is CompactSlot:
+		hovered_slot_data = slot.cached_data
+		if not hovered_slot_data.is_empty():
+			_update_tooltip_position(slot)
+			tooltip_card.show()
 
 func _on_slot_unhovered():
 	hovered_slot_data.clear()
 	if tooltip_card:
 		tooltip_card.hide()
+
+func _on_slot_clicked(slot: Button):
+	if not is_instance_valid(local_player) or not (slot is CompactSlot): return
+	var is_techpriest = (local_player.current_class == 0)
+
+	if slot.category == "action":
+		if is_techpriest:
+			var t_id = slot.cached_data.get("type_id", -1)
+			if t_id != -1 and local_player.has_method("toggle_build_mode"):
+				local_player.toggle_build_mode(t_id)
+		else:
+			match slot.slot_index:
+				0:
+					local_player.is_attack_move_queued = not local_player.is_attack_move_queued
+				1:
+					local_player._issue_stop_to_selection()
+				2:
+					local_player._issue_hold_to_selection()
+				3:
+					var mouse_w = local_player.get_global_mouse_position()
+					var tgt = local_player._find_enemy_under_cursor(mouse_w)
+					if is_instance_valid(tgt) and local_player.has_method("_designate_priority_target"):
+						local_player._designate_priority_target(tgt)
+				4:
+					if is_instance_valid(local_player.camera):
+						local_player.camera.global_position = local_player.global_position
+
+	elif slot.category == "weapon":
+		if not is_techpriest and slot.slot_index == 1:
+			if local_player.has_method("_toggle_doctrina_imperative"):
+				local_player._toggle_doctrina_imperative()
+
+	elif slot.category == "augment":
+		if is_techpriest and slot.slot_index == 0:
+			local_player.rpc_id(1, "request_spawn_servo_skull")
+		elif not is_techpriest:
+			match slot.slot_index:
+				0: local_player.rpc_id(1, "request_upgrade_damage")
+				1: local_player.rpc_id(1, "request_upgrade_speed")
+				2: local_player.rpc_id(1, "request_upgrade_bodyguards")
 
 func _get_data_for_category(category: String, idx: int) -> Dictionary:
 	if not is_instance_valid(local_player): return {}
@@ -280,87 +370,83 @@ func _get_data_for_category(category: String, idx: int) -> Dictionary:
 					0: return {
 						"key": "LMB", "name": "Omnissian Power-Axe", "sub": "Heavy Melee Cleave",
 						"icon": "axe", "scrap": 0, "req": 0, "type_id": -1,
-						"desc": "Heavy two-handed energized power-axe. Cleaves forward in a wide 130° arc (40 DMG) that penetrates enemy armor.",
+						"desc": "Heavy energized power-axe. Cleaves forward in a wide arc (40 DMG) that cuts through enemy armor.",
 						"flavor": "\"The blade is the voice of the Omnissiah; it speaks in the severance of heretical flesh.\""
 					}
 					1: return {
 						"key": "RMB", "name": "Plasma Caliver", "sub": "Secondary Ranged & Auspex Paint",
 						"icon": "plasma_pistol", "scrap": 0, "req": 0, "type_id": -1,
-						"desc": "Fires superheated plasma (30 DMG). Applies Auspex Lock-On (+35% Crit Damage taken by targets from all allies for 6s).",
+						"desc": "Fires superheated plasma (30 DMG). Applies Auspex Lock-On (+35% Crit Damage taken by target for 6s).",
 						"flavor": "\"Paint the xeno in telemetry, and let our cohorts extinguish their spark.\""
 					}
 					2: return {}
 			else:
 				match idx:
 					0: return {
-						"key": "LMB", "name": "Radium Serpenta Carbine", "sub": "Primary Ranged Weapon",
+						"key": "LMB", "name": "Radium Serpenta Carbine", "sub": "Primary Ranged Munition",
 						"icon": "gun", "scrap": 0, "req": 0, "type_id": -1,
-						"desc": "Rapid-fire irradiated rifle. Fires phosphor-laced munitions that decay the cellular composition of organic targets.",
+						"desc": "Rapid-fire irradiated rifle. Decays organic cellular structures on impact.",
 						"flavor": "\"Breathe deep the holy fallout, and let your flesh be cleansed in phosphor fire.\""
 					}
 					1:
 						var is_conq = (local_player.active_doctrina == 0) if "active_doctrina" in local_player else true
 						return {
-							"key": "SPACE", "name": "Doctrina: " + ("CONQUEROR (DPS)" if is_conq else "PROTECTOR (ARMOR)"),
-							"sub": "Noospheric Stance Shift",
+							"key": "Q", "name": "Doctrina: " + ("CONQUEROR (DPS)" if is_conq else "PROTECTOR (ARMOR)"),
+							"sub": "Noospheric Cohort Broadcast",
 							"icon": "doctrina_conq" if is_conq else "doctrina_prot", "scrap": 0, "req": 0, "type_id": -1,
-							"desc": "+60% Movement Speed & +25% Fire Rate / -20% Armor" if is_conq else "+35% Armor & Ranged Resistance / -15% Speed",
+							"desc": "Broadcasts aura: +30% Cohort Speed & +25% Fire Rate (-15% Armor)" if is_conq else "Broadcasts aura: +35% Cohort Armor & +20% Range (-15% Speed)",
 							"flavor": "\"The Omnissiah guides our feet as He guides our guns. Upload the sacred canticle.\""
 						}
 					2: return {
 						"key": "R", "name": "Orbital Lance Strike", "sub": "Fleet Telemetry Bombardment",
 						"icon": "orbital", "scrap": 0, "req": GameData.ORBITAL_REQ_COST, "type_id": -1,
-						"desc": "Calls down a searing orbital lance strike from low-orbit void cruisers directly at your cursor (220 DMG / 45s CD).",
+						"desc": "Calls down a searing orbital lance strike directly at your cursor (220 DMG / 45s CD).",
 						"flavor": "\"Let the stars themselves descend upon the blasphemer in cleansing fire.\""
 					}
 
 		"action":
 			if is_techpriest:
 				match idx:
+					0: return {"key": "1", "name": "Aegis Blast Rampart", "sub": "Tactical Fortification", "icon": "barricade", "scrap": 15, "req": 0, "type_id": 0, "desc": "Heavy blast wall. Snap-links into continuous defensive ramparts. Upgradable to Motorized Gate [E].", "flavor": "\"Armor is the iron shroud that preserves the faithful.\""}
+					1: return {"key": "2", "name": "Electro-Relay Substation", "sub": "Power & Scrap Distribution", "icon": "distributor", "scrap": 20, "req": 0, "type_id": 4, "desc": "Extends Noosphere power conduits. Magnetically siphons loose battlefield scrap.", "flavor": "\"Where the conductor reaches, the Motive Force flows unbroken.\""}
+					2: return {"key": "3", "name": "Imperial Plasma Dynamo", "sub": "Energy Generation", "icon": "generator", "scrap": 25, "req": 0, "type_id": 1, "desc": "Generates +2 Requisition per cycle. Energizes Noosphere Aegis shields and repair swarms.", "flavor": "\"From the caged fury of the atom do we draw civilization.\""}
+					3: return {"key": "4", "name": "Cognis Defense Battery", "sub": "Automated Heavy Emplacement", "icon": "turret", "scrap": 35, "req": 5, "type_id": 2, "desc": "Automated tracking battery. Upgradable through 4 tiers to specialized Flak, Volkite, or Arc Blasters.", "flavor": "\"Let the wrath of the Machine God strike swift.\""}
+					4: return {"key": "5", "name": "Promethium Scrap Smelter", "sub": "Ore Extraction & Refining", "icon": "foundry", "scrap": 30, "req": 5, "type_id": 3, "desc": "Must be built over a Scrap Deposit. Automatically extracts debris, generating +5 Scrap periodically.", "flavor": "\"The broken iron of the foe is remade into bulwarks.\""}
+					5: return {"key": "6", "name": "Omnissian Reliquary Vault", "sub": "Cogitator Archives", "icon": "shrine", "scrap": 40, "req": 15, "type_id": 6, "desc": "Access terminal [E] to research Aegis Shields, Cutting Lasers, Siphons, and Targeting Uplinks.", "flavor": "\"Knowledge is the true holy relic; safeguard it.\""}
+					6: return {"key": "7", "name": "Cybernetica Manufactorum", "sub": "Automata Assembly", "icon": "foundry", "scrap": 50, "req": 20, "type_id": 7, "desc": "Construct Skitarii Vanguard, Rangers, Ruststalkers, Kataphrons, and Kastelan Battle-Automata.", "flavor": "\"From the holy fires march the undying cohorts of Mars.\""}
+			else:
+				match idx:
 					0: return {
-						"key": "1", "name": "Aegis Blast Rampart", "sub": "Tactical Fortification",
-						"icon": "barricade", "scrap": 15, "req": 0, "type_id": 0,
-						"desc": "Heavy sloped blast wall. Snap-links into continuous defensive ramparts. Upgradable to Motorized Gate [E].",
-						"flavor": "\"Armor is the iron shroud that preserves the sacred flesh of the faithful.\""
+						"key": "A", "name": "Attack-Move Protocol", "sub": "Aggressive March",
+						"icon": "gun", "scrap": 0, "req": 0, "type_id": -1,
+						"desc": "Orders selected cohort units to march to destination, engaging any hostiles encountered along the path.",
+						"flavor": "\"Advance with fury; leave no heretic standing in your wake.\""
 					}
 					1: return {
-						"key": "2", "name": "Electro-Relay Substation", "sub": "Power & Scrap Distribution",
-						"icon": "distributor", "scrap": 20, "req": 0, "type_id": 4,
-						"desc": "Extends Noosphere power conduits. Magnetically siphons loose battlefield scrap directly to the bank.",
-						"flavor": "\"Where the conductor reaches, the will of the Motive Force flows unbroken.\""
+						"key": "S", "name": "Halt / Stop Order", "sub": "Cancel Directives",
+						"icon": "stop", "scrap": 0, "req": 0, "type_id": -1,
+						"desc": "Immediately cancels movement and combat orders for all currently selected units.",
+						"flavor": "\"Hold position. Recalibrate targeting arrays.\""
 					}
 					2: return {
-						"key": "3", "name": "Imperial Plasma Dynamo", "sub": "Energy Generation",
-						"icon": "generator", "scrap": 25, "req": 0, "type_id": 1,
-						"desc": "Generates +2 Requisition per cycle. Energizes Noosphere Aegis shields and repair swarms.",
-						"flavor": "\"From the caged fury of the atom do we draw the breath of civilization.\""
+						"key": "H", "name": "Hold Ground Protocol", "sub": "Defensive Stance",
+						"icon": "barricade", "scrap": 0, "req": 0, "type_id": -1,
+						"desc": "Units hold their exact ground, refusing to pursue enemies while firing at max range.",
+						"flavor": "\"Stand like iron. The line does not yield.\""
 					}
 					3: return {
-						"key": "4", "name": "Cognis Defense Battery", "sub": "Automated Heavy Emplacement",
-						"icon": "turret", "scrap": 35, "req": 5, "type_id": 2,
-						"desc": "Automated tracking battery. Upgradable through 4 tiers to specialized Gatling Flak, Volkite Culverins, or Arc Blasters.",
-						"flavor": "\"Let the wrath of the Machine God strike swift and without hesitation.\""
+						"key": "F", "name": "Auspex Target Paint", "sub": "Priority Designation",
+						"icon": "plasma_pistol", "scrap": 0, "req": 0, "type_id": -1,
+						"desc": "Paints the targeted enemy (+35% Crit). Directs all cohort units and connected turrets to focus-fire.",
+						"flavor": "\"Mark the xeno warlord for total eradication.\""
 					}
 					4: return {
-						"key": "5", "name": "Promethium Scrap Smelter", "sub": "Ore Extraction & Refining",
-						"icon": "foundry", "scrap": 30, "req": 5, "type_id": 3,
-						"desc": "Must be built over a Scrap Deposit. Automatically extracts debris, generating +5 Scrap periodically.",
-						"flavor": "\"The broken iron of the foe is remade into the sanctified bulwarks of Mars.\""
+						"key": "SPACE", "name": "Lock Auspex on Commander", "sub": "Camera Focus",
+						"icon": "squad", "scrap": 0, "req": 0, "type_id": -1,
+						"desc": "Instantly centers the tactical camera back onto the Skitarii Marshal.",
+						"flavor": "\"Re-center telemetry on the commanding officer.\""
 					}
-					5: return {
-						"key": "6", "name": "Omnissian Reliquary Vault", "sub": "Cogitator Archives",
-						"icon": "shrine", "scrap": 40, "req": 15, "type_id": 6,
-						"desc": "Access terminal [E] to research Aegis Shields, Cutting Lasers, Siphons, and Nanobots.",
-						"flavor": "\"Knowledge is the true holy relic; safeguard it from the taint of the xeno.\""
-					}
-					6: return {
-						"key": "7", "name": "Cybernetica Manufactorum", "sub": "Automata Assembly & Recruitment",
-						"icon": "foundry", "scrap": 50, "req": 20, "type_id": 7,
-						"desc": "Heavy robotic assembly facility. Construct Skitarii Vanguard, Rangers, Sicarians, Kataphrons, and Kastelan Battle-Automata.",
-						"flavor": "\"From the holy fires of the Manufactorum march the undying cohorts of the Omnissiah.\""
-					}
-			else:
-				return {}
+					_: return {}
 
 		"augment":
 			if is_techpriest:
@@ -372,7 +458,7 @@ func _get_data_for_category(category: String, idx: int) -> Dictionary:
 							"icon": "skull", "scrap": GameData.SERVO_SKULL_SCRAP_COST, "req": GameData.SERVO_SKULL_REQ_COST, "type_id": -1,
 							"current_rank": skulls, "max_rank": GameData.MAX_SERVO_SKULLS,
 							"desc": "Deploys an autonomous Servo-Skull drone to retrieve distant scrap (%d/%d Active)." % [skulls, GameData.MAX_SERVO_SKULLS],
-							"flavor": "\"Even in death, the servant of the Omnissiah performs the holy work.\""
+							"flavor": "\"Even in death, the servant of Mars performs the holy work.\""
 						}
 					_: return {}
 			else:
@@ -380,29 +466,29 @@ func _get_data_for_category(category: String, idx: int) -> Dictionary:
 					0:
 						var dmg_lvl = local_player.damage_upgrade_level if "damage_upgrade_level" in local_player else 0
 						return {
-							"key": "Z", "name": "Galvanic Weapon Calibration", "sub": "Damage Overcharge",
+							"key": "Z", "name": "Galvanic Calibration", "sub": "Damage Overcharge",
 							"icon": "dmg_up", "scrap": 0, "req": GameData.DAMAGE_UPGRADE_REQ_COST, "type_id": -1,
 							"current_rank": dmg_lvl, "max_rank": GameData.MAX_DAMAGE_UPGRADES,
 							"desc": "Permanent weapon damage amplification (+10 Damage per rank, %d/%d)." % [dmg_lvl, GameData.MAX_DAMAGE_UPGRADES],
-							"flavor": "\"Recalibrate the coils, sanctify the firing pin, and let the discharge sing.\""
+							"flavor": "\"Sanctify the firing pin and let the discharge sing.\""
 						}
 					1:
 						var spd_lvl = local_player.speed_upgrade_level if "speed_upgrade_level" in local_player else 0
 						return {
-							"key": "X", "name": "Bionic Locomotion Servos", "sub": "Speed Augment",
+							"key": "X", "name": "Bionic Locomotion", "sub": "Speed Augment",
 							"icon": "speed_up", "scrap": 0, "req": GameData.SPEED_UPGRADE_REQ_COST, "type_id": -1,
 							"current_rank": spd_lvl, "max_rank": GameData.MAX_SPEED_UPGRADES,
-							"desc": "Replaces organic leg joints with high-speed bionic servos (+35 Speed per rank, %d/%d)." % [spd_lvl, GameData.MAX_SPEED_UPGRADES],
-							"flavor": "\"Cast aside the sluggish flesh; embrace the relentless stride of steel.\""
+							"desc": "Replaces limbs with high-speed bionic servos (+35 Speed per rank, %d/%d)." % [spd_lvl, GameData.MAX_SPEED_UPGRADES],
+							"flavor": "\"Embrace the relentless stride of steel.\""
 						}
 					2:
 						var lvl = local_player.bodyguard_level if "bodyguard_level" in local_player else 0
 						return {
-							"key": "C", "name": "Recruit Vanguard Cadre", "sub": "Cohort Reinforcement",
+							"key": "C", "name": "Recruit Vanguard Cadre", "sub": "Cohort Retinue",
 							"icon": "squad", "scrap": 0, "req": GameData.BODYGUARD_REQ_COST, "type_id": -1,
 							"current_rank": lvl, "max_rank": GameData.MAX_BODYGUARDS,
-							"desc": "Summons Skitarii Vanguard snipers and shock troops into your retinue (%d/%d Active)." % [lvl, GameData.MAX_BODYGUARDS],
-							"flavor": "\"No soldier of Mars fights alone while the Noosphere weaves our minds into one.\""
+							"desc": "Summons elite Skitarii Vanguard snipers and shock troops (%d/%d Active)." % [lvl, GameData.MAX_BODYGUARDS],
+							"flavor": "\"No soldier of Mars fights alone while the Noosphere binds us.\""
 						}
 					_: return {}
 
@@ -425,6 +511,17 @@ func refresh_hud_display():
 	var selected_type = local_player.selected_building_type if "selected_building_type" in local_player else 0
 	var is_building = local_player.is_building_mode if "is_building_mode" in local_player else false
 
+	# Handle Reboot Banner Visibility (Safe check without 2-arg Object.get)
+	if is_instance_valid(reboot_panel):
+		var is_player_dead = local_player.is_dead if "is_dead" in local_player else false
+		if is_player_dead:
+			var time_left = maxf(0.0, local_player.respawn_timer if "respawn_timer" in local_player else 0.0)
+			reboot_timer_lbl.text = "⚡ CEREBRAL REBOOT IN PROGRESS: %.1fs ⚡" % time_left
+			reboot_panel.show()
+		else:
+			reboot_panel.hide()
+
+	# 1. Update Weapon Pod
 	for i in range(weapon_buttons.size()):
 		var slot = weapon_buttons[i]
 		var data = _get_data_for_category("weapon", i)
@@ -436,16 +533,27 @@ func refresh_hud_display():
 		elif not is_techpriest and i == 2:
 			slot.cooldown_left = local_player.orbital_strike_cooldown if "orbital_strike_cooldown" in local_player else 0.0
 
-	if is_instance_valid(action_panel):
-		action_panel.visible = is_techpriest
+	# 2. Update Action Pod (Tactical Forge vs Cohort Directives)
+	if is_instance_valid(action_title_lbl):
+		if is_techpriest:
+			action_title_lbl.text = "TACTICAL FORGE PROTOCOLS"
+			action_title_lbl.add_theme_color_override("font_color", C_CYAN)
+		else:
+			var sel_count = local_player.rts_selected_units.size() if "rts_selected_units" in local_player else 0
+			action_title_lbl.text = "◆ COHORT DIRECTIVES (%d SELECTED) ◆" % sel_count
+			action_title_lbl.add_theme_color_override("font_color", C_CYAN if sel_count > 0 else C_MUTED)
 
-	if is_techpriest:
-		for i in range(action_buttons.size()):
-			var slot = action_buttons[i]
-			var data = _get_data_for_category("action", i)
-			_populate_slot(slot, data, cur_scrap, cur_req)
+	for i in range(action_buttons.size()):
+		var slot = action_buttons[i]
+		var data = _get_data_for_category("action", i)
+		_populate_slot(slot, data, cur_scrap, cur_req)
+		if is_techpriest:
 			slot.is_selected = (is_building and selected_type == data.get("type_id", -1))
+		else:
+			if i == 0 and "is_attack_move_queued" in local_player:
+				slot.is_selected = local_player.is_attack_move_queued
 
+	# 3. Update Augment Pod
 	for i in range(augment_buttons.size()):
 		var slot = augment_buttons[i]
 		var data = _get_data_for_category("augment", i)
@@ -479,17 +587,15 @@ func _update_context_banner_display(is_techpriest: bool, cur_scrap: int, cur_req
 	else:
 		var b_type = int(b.building_type) if "building_type" in b else -1
 		match b_type:
-			0: # Barricade -> Gate
+			0:
 				if b.get("is_gate"):
 					prompt_text = "◆ MOTORIZED GATE: PROXIMITY SENSOR OPERATIONAL ◆"
 				else:
 					can_afford = (cur_scrap >= 10 and cur_req >= 5)
 					prompt_text = "◆ BARRICADE: PRESS [E] TO UPGRADE TO MOTORIZED GATE (⚙ 10 SCRAP   ⚡ 5 REQ) ◆"
-
-			1: # Generator
+			1:
 				prompt_text = "◆ PLASMA DYNAMO: GENERATING +2 REQUISITION / CYCLE ◆"
-
-			2: # Turret
+			2:
 				var lvl = b.turret_upgrade_level if "turret_upgrade_level" in b else 0
 				var spec = b.turret_spec if "turret_spec" in b else 0
 				if lvl < 3:
@@ -502,21 +608,16 @@ func _update_context_banner_display(is_techpriest: bool, cur_scrap: int, cur_req
 				else:
 					var spec_info = GameData.TURRET_SPEC_INFO.get(spec, {})
 					prompt_text = "◆ %s: SPECIALIZATION ACTIVE ◆" % spec_info.get("name", "COGNIS BATTERY").to_upper()
-
-			3: # Smelter
+			3:
 				prompt_text = "◆ PROMETHEUM SMELTER: EXTRACTING +5 SCRAP / CYCLE ◆"
-
-			4: # Distributor -> Antenna
+			4:
 				can_afford = (cur_req >= 15)
 				prompt_text = "◆ ELECTRO-RELAY: PRESS [E] TO UPGRADE TO ANTENNA MAST (⚡ 15 REQ) ◆"
-
-			5: # Antenna
+			5:
 				prompt_text = "◆ NOOSPHERE MAST: BROADCASTING MOTIVE FORCE GRID (240px) ◆"
-
-			6: # Tech Shrine
+			6:
 				prompt_text = "◆ TECH SHRINE: PRESS [E] TO ACCESS NOOSPHERE RESEARCH ARCHIVES ◆"
-
-			7: # Cybernetica Forge
+			7:
 				prompt_text = "◆ LEGIO CYBERNETICA: PRESS [E] TO ACCESS COHORT FABRICATION TERMINAL ◆"
 
 	if prompt_text.is_empty():
@@ -527,7 +628,8 @@ func _update_context_banner_display(is_techpriest: bool, cur_scrap: int, cur_req
 	context_label.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0) if can_afford else Color(0.92, 0.22, 0.18))
 	context_banner.show()
 
-func _populate_slot(slot: CompactSlot, data: Dictionary, cur_scrap: int, cur_req: int):
+func _populate_slot(slot: Button, data: Dictionary, cur_scrap: int, cur_req: int):
+	if not (slot is CompactSlot): return
 	if data.is_empty():
 		slot.hide()
 		slot.cached_data.clear()
@@ -542,14 +644,20 @@ func _populate_slot(slot: CompactSlot, data: Dictionary, cur_scrap: int, cur_req
 	slot.can_afford = (cur_scrap >= data.scrap and cur_req >= data.req)
 	slot.queue_redraw()
 
-func _update_tooltip_position(slot: CompactSlot):
+func _update_tooltip_position(slot: Button):
+	if not (slot is CompactSlot): return
 	var main_node = get_tree().get_first_node_in_group("main")
 	var cur_scrap = main_node.scrap_amount if main_node and "scrap_amount" in main_node else 0
 	var cur_req = main_node.requisition_amount if main_node and "requisition_amount" in main_node else 0
 
 	var slot_center_x = slot.global_position.x + (slot.size.x * 0.5)
-	tooltip_card.set_data(slot.cached_data, cur_scrap, cur_req, slot.cooldown_left, slot.is_maxed)
-	tooltip_card.global_position = Vector2(slot_center_x - (tooltip_card.size.x * 0.5), slot.global_position.y - tooltip_card.size.y - 12)
+	if tooltip_card and tooltip_card.has_method("set_data"):
+		tooltip_card.set_data(slot.cached_data, cur_scrap, cur_req, slot.cooldown_left, slot.is_maxed)
+		tooltip_card.global_position = Vector2(slot_center_x - (tooltip_card.size.x * 0.5), slot.global_position.y - tooltip_card.size.y - 12)
+
+# ==============================================================================
+# COMPACT HUD SLOT BUTTON
+# ==============================================================================
 
 class CompactSlot extends Button:
 	var category: String = "action"
@@ -647,6 +755,9 @@ class CompactSlot extends Button:
 				draw_line(p_mid + Vector2(-6, 2), p_mid + Vector2(8, 2), Color(0.4, 0.45, 0.5), 2.5)
 				draw_line(p_mid + Vector2(-4, 2), p_mid + Vector2(-6, 6), gold, 1.8)
 				draw_circle(p_mid + Vector2(2, 2), 1.5, cyan)
+			"stop":
+				draw_rect(Rect2(p_mid - Vector2(5, 5), Vector2(10, 10)), red)
+				draw_rect(Rect2(p_mid - Vector2(5, 5), Vector2(10, 10)), gold, false, 1.2)
 			"barricade":
 				var shield = PackedVector2Array([p_mid + Vector2(-7, -7), p_mid + Vector2(7, -7), p_mid + Vector2(5, 3), p_mid + Vector2(0, 7), p_mid + Vector2(-5, 3)])
 				draw_colored_polygon(shield, red)
@@ -697,6 +808,10 @@ class CompactSlot extends Button:
 				draw_circle(p_mid, 6.0, Color(0.2, 0.88, 1.0, 0.3))
 				draw_line(p_mid + Vector2(0, -8), p_mid + Vector2(0, 8), cyan, 1.8)
 				draw_line(p_mid + Vector2(-8, 0), p_mid + Vector2(8, 0), cyan, 1.8)
+
+# ==============================================================================
+# TOOLTIP CARD
+# ==============================================================================
 
 class TooltipCard extends PanelContainer:
 	var title_lbl: Label
@@ -771,10 +886,10 @@ class TooltipCard extends PanelContainer:
 			cost_lbl.text = "⏳ RECHARGING (%.1fs Remaining)" % cooldown_left
 			cost_lbl.add_theme_color_override("font_color", Color(1.0, 0.72, 0.15))
 		elif is_maxed:
-			cost_lbl.text = "◆ AUGMENTATION MAXED ◆"
+			cost_lbl.text = "◆ PROTOCOL MAXED ◆"
 			cost_lbl.add_theme_color_override("font_color", Color(0.4, 0.95, 0.5))
 		elif scrap == 0 and req == 0:
-			cost_lbl.text = "STATUS: NOOSPHERIC LINK READY"
+			cost_lbl.text = "STATUS: NOOSPHERIC LINK ACTIVE"
 			cost_lbl.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
 		else:
 			var parts: Array[String] = []

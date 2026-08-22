@@ -420,18 +420,56 @@ func _execute_squig_pounce(target: Node2D):
 				target.take_damage(damage)
 	)
 
+# In Enemy.gd
+
 func _lob_stikkbomb(target_pos: Vector2):
 	ability_timer = 9.0
 	rpc("trigger_stikkbomb_fx", global_position, target_pos)
 
-	var tween = create_tween()
-	tween.tween_interval(1.2)
-	tween.tween_callback(func():
+@rpc("call_local", "unreliable")
+func trigger_stikkbomb_fx(start_pos: Vector2, target_pos: Vector2):
+	var bomb_fx = StikkbombTelegraphFX.new()
+	bomb_fx.start_pos = start_pos
+	bomb_fx.target_pos = target_pos
+	bomb_fx.duration = 1.2
+	get_parent().add_child(bomb_fx)
+
+class StikkbombTelegraphFX extends Node2D:
+	var start_pos: Vector2 = Vector2.ZERO
+	var target_pos: Vector2 = Vector2.ZERO
+	var duration: float = 1.2
+	var elapsed: float = 0.0
+	var arc_height: float = 85.0
+	var blast_radius: float = 65.0
+	var has_detonated: bool = false
+
+	func _ready() -> void:
+		z_index = 85
+		var mat = CanvasItemMaterial.new()
+		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+		material = mat
+
+	func _process(delta: float) -> void:
+		elapsed += delta
+
+		# Independent detonation logic (fires even if the thrower died)
+		if elapsed >= duration and not has_detonated:
+			has_detonated = true
+			_detonate_blast()
+
+		queue_redraw()
+		if elapsed >= duration + 0.35:
+			queue_free()
+
+	func _detonate_blast() -> void:
 		AudioManager.play_sfx("orbital_strike", target_pos, -2.0, 1.6)
+		get_tree().call_group("players", "add_camera_trauma", 0.45)
+
 		var space = get_world_2d().direct_space_state
 		if not space: return
+
 		var shape = CircleShape2D.new()
-		shape.radius = 65.0
+		shape.radius = blast_radius
 		var q = PhysicsShapeQueryParameters2D.new()
 		q.shape = shape
 		q.transform = Transform2D(0.0, target_pos)
@@ -443,15 +481,43 @@ func _lob_stikkbomb(target_pos: Vector2):
 				if body.has_method("take_damage"):
 					var dir = (body.global_position - target_pos).normalized()
 					body.take_damage(28, dir * 200.0)
-	)
 
-@rpc("call_local", "unreliable")
-func trigger_stikkbomb_fx(start_pos: Vector2, target_pos: Vector2):
-	var bomb_fx = StikkbombTelegraphFX.new()
-	bomb_fx.start_pos = start_pos
-	bomb_fx.target_pos = target_pos
-	bomb_fx.duration = 1.2
-	get_parent().add_child(bomb_fx)
+	func _draw() -> void:
+		var t = clampf(elapsed / duration, 0.0, 1.0)
+		var pulse = 0.6 + sin(elapsed * 12.0) * 0.4
+		var warning_color = Color(1.0, 0.20, 0.15, 0.75 * pulse)
+		var fill_color = Color(1.0, 0.15, 0.10, 0.18 * (1.0 - t))
+
+		if elapsed <= duration:
+			draw_circle(target_pos, blast_radius, fill_color)
+			draw_arc(target_pos, blast_radius, 0.0, TAU, 32, warning_color, 2.0)
+			var fuse_radius = blast_radius * (1.0 - t)
+			draw_arc(target_pos, fuse_radius, 0.0, TAU, 24, Color(1.0, 0.85, 0.20, 0.8), 1.5)
+
+			var ground_pos = start_pos.lerp(target_pos, t)
+			var height = sin(t * PI) * arc_height
+			var bomb_pos = ground_pos + Vector2(0.0, -height)
+
+			var shadow_scale = clampf(1.0 - (height / arc_height) * 0.5, 0.4, 1.0)
+			draw_set_transform(ground_pos, 0.0, Vector2(1.0, 0.5))
+			draw_circle(Vector2.ZERO, 6.0 * shadow_scale, Color(0.02, 0.02, 0.05, 0.45 * shadow_scale))
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+			var spin_angle = elapsed * 10.0
+			draw_set_transform(bomb_pos, spin_angle, Vector2.ONE)
+			draw_line(Vector2(0, 0), Vector2(0, 10), Color("#4a3219"), 3.0)
+			draw_rect(Rect2(-4, -8, 8, 8), Color("#32373b"))
+			draw_rect(Rect2(-4, -8, 8, 8), Color("#7a1f1d"), false, 1.0)
+			draw_circle(Vector2(0, -9), 2.5, Color(1.0, 0.85, 0.2))
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+		if elapsed > duration:
+			var exp_t = (elapsed - duration) / 0.35
+			var exp_r = blast_radius * (0.8 + exp_t * 0.4)
+			var exp_alpha = 1.0 - exp_t
+			draw_circle(target_pos, exp_r, Color(1.0, 0.45, 0.1, 0.6 * exp_alpha))
+			draw_circle(target_pos, exp_r * 0.6, Color(1.0, 0.90, 0.3, 0.8 * exp_alpha))
+			draw_circle(target_pos, exp_r * 0.25, Color.WHITE)
 
 func _execute_nob_warcry():
 	ability_timer = 10.0
@@ -679,67 +745,3 @@ func _draw() -> void:
 
 		var font = ThemeDB.fallback_font
 		draw_string(font, Vector2(-22, -42), "TARGET LOCKED", HORIZONTAL_ALIGNMENT_CENTER, 44, 7, reticle_color)
-
-class StikkbombTelegraphFX extends Node2D:
-	var start_pos: Vector2 = Vector2.ZERO
-	var target_pos: Vector2 = Vector2.ZERO
-	var duration: float = 1.2
-	var elapsed: float = 0.0
-	var arc_height: float = 85.0
-	var blast_radius: float = 65.0
-
-	func _ready() -> void:
-		z_index = 80
-		var mat = CanvasItemMaterial.new()
-		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
-		material = mat
-
-	func _process(delta: float) -> void:
-		elapsed += delta
-		queue_redraw()
-		if elapsed >= duration + 0.25:
-			queue_free()
-
-	func _draw() -> void:
-		var t = clampf(elapsed / duration, 0.0, 1.0)
-		var pulse = 0.6 + sin(elapsed * 12.0) * 0.4
-		var warning_color = Color(1.0, 0.20, 0.15, 0.75 * pulse)
-		var fill_color = Color(1.0, 0.15, 0.10, 0.18 * (1.0 - t))
-
-		if elapsed <= duration:
-			draw_circle(target_pos, blast_radius, fill_color)
-			draw_arc(target_pos, blast_radius, 0.0, TAU, 32, warning_color, 2.0)
-			var fuse_radius = blast_radius * (1.0 - t)
-			draw_arc(target_pos, fuse_radius, 0.0, TAU, 24, Color(1.0, 0.85, 0.20, 0.8), 1.5)
-			for i in range(4):
-				var a = (float(i) * TAU / 4.0) + (elapsed * 3.0)
-				var pt = target_pos + Vector2(cos(a), sin(a)) * blast_radius
-				draw_circle(pt, 3.0, warning_color)
-
-		if elapsed <= duration:
-			var ground_pos = start_pos.lerp(target_pos, t)
-			var height = sin(t * PI) * arc_height
-			var bomb_pos = ground_pos + Vector2(0.0, -height)
-
-			var shadow_scale = clampf(1.0 - (height / arc_height) * 0.5, 0.4, 1.0)
-			draw_set_transform(ground_pos, 0.0, Vector2(1.0, 0.5))
-			draw_circle(Vector2.ZERO, 6.0 * shadow_scale, Color(0.02, 0.02, 0.05, 0.45 * shadow_scale))
-			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-
-			var spin_angle = elapsed * 10.0
-			draw_set_transform(bomb_pos, spin_angle, Vector2.ONE)
-			draw_line(Vector2(0, 0), Vector2(0, 10), Color("#4a3219"), 3.0)
-			draw_rect(Rect2(-4, -8, 8, 8), Color("#32373b"))
-			draw_rect(Rect2(-4, -8, 8, 8), Color("#7a1f1d"), false, 1.0)
-			draw_circle(Vector2(0, -9), 2.5 + randf_range(-1, 1), Color(1.0, 0.85, 0.2))
-			draw_circle(Vector2(0, -9), 1.2, Color.WHITE)
-			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-
-		if elapsed > duration:
-			var exp_t = (elapsed - duration) / 0.25
-			var exp_r = blast_radius * (0.8 + exp_t * 0.4)
-			var exp_alpha = 1.0 - exp_t
-			draw_circle(target_pos, exp_r, Color(1.0, 0.45, 0.1, 0.6 * exp_alpha))
-			draw_circle(target_pos, exp_r * 0.6, Color(1.0, 0.90, 0.3, 0.8 * exp_alpha))
-			draw_circle(target_pos, exp_r * 0.25, Color(1.0, 1.0, 1.0, exp_alpha))
-			draw_arc(target_pos, exp_r, 0.0, TAU, 32, Color(1.0, 0.3, 0.1, exp_alpha), 3.0)

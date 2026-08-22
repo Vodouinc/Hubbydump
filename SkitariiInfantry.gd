@@ -5,10 +5,13 @@ class_name SkitariiInfantry
 
 var rally_anchor: Vector2 = Vector2.ZERO
 var has_received_player_order: bool = false
+var is_in_marshal_aura: bool = false
+var aura_is_conqueror: bool = true
 
 var max_health: int = 90
 var current_health: int = 90
 var movement_speed: float = 210.0
+var base_movement_speed: float = 0.0
 var damage: int = 18
 var attack_range: float = 280.0
 var attack_cooldown: float = 0.35
@@ -35,7 +38,9 @@ func _ready() -> void:
 	current_health = max_health
 	if health_bar and health_bar.has_method("setup"):
 		health_bar.setup(current_health, max_health)
-
+	
+	base_movement_speed = movement_speed
+	
 	var col = get_node_or_null("CollisionShape2D")
 	if not col:
 		col = CollisionShape2D.new()
@@ -167,6 +172,22 @@ func _execute_attack(target: Node2D):
 		})
 
 	get_tree().create_timer(attack_cooldown).timeout.connect(func(): if is_instance_valid(self): can_attack = true)
+
+func set_doctrina_buff(is_conq: bool, active: bool) -> void:
+	# Safety fallback in case buff is called before _ready
+	if base_movement_speed <= 0.0:
+		base_movement_speed = movement_speed
+
+	is_in_marshal_aura = active
+	aura_is_conqueror = is_conq
+
+	if not active:
+		movement_speed = base_movement_speed
+		return
+
+	# Conqueror (+30% Speed) vs Protector (-15% Speed)
+	var speed_mult = 1.30 if is_conq else 0.85
+	movement_speed = base_movement_speed * speed_mult
 
 func set_initial_rally(target_pos: Vector2) -> void:
 	rally_anchor = target_pos

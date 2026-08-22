@@ -219,11 +219,15 @@ func show_my_pause_menu():
 	panel_container.show()
 	ally_pause_banner.hide()
 	show()
+	# Release mouse cursor so player can click menu buttons freely
+	DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_VISIBLE)
 	_sync_pause_state_with_main(true)
 
 func hide_my_pause_menu():
 	panel_container.hide()
 	hide()
+	# Re-confine mouse cursor for gameplay edge-panning
+	DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_CONFINED)
 	_sync_pause_state_with_main(false)
 
 func _sync_pause_state_with_main(is_paused: bool):

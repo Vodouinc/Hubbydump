@@ -1,4 +1,5 @@
 extends StaticBody2D
+class_name Building
 
 enum Type { BARRICADE = 0, GENERATOR = 1, TURRET = 2, MANUFACTORUM = 3, DISTRIBUTOR = 4, NOOSPHERE_ANTENNA = 5, RESEARCH_SHRINE = 6 }
 
@@ -71,9 +72,6 @@ func _ready():
 	add_to_group("navmesh_source")
 	health_float = float(current_health)
 
-	if has_node("TurretLight"):
-		get_node("TurretLight").queue_free()
-
 	_apply_type_setup()
 	
 	current_health = max_health
@@ -87,7 +85,9 @@ func _ready():
 		gen_timer.timeout.connect(_on_gen_timer_timeout)
 
 	if not is_preview:
-		call_deferred("refresh_barricade_connections")
+		_setup_building_light()
+		if building_type == Type.BARRICADE:
+			call_deferred("refresh_barricade_connections")
 		get_tree().call_group("sandy_floor", "refresh_foundations")
 
 func _process(delta: float):
@@ -99,7 +99,6 @@ func _process(delta: float):
 		noosphere_check_timer = 0.0
 		_update_noosphere_connection()
 
-	# Host/Server Scrap Foundry Mining Loop
 	if ((not multiplayer.has_multiplayer_peer()) or multiplayer.is_server()) and building_type == Type.MANUFACTORUM:
 		foundry_timer += delta
 		if foundry_timer >= FOUNDRY_INTERVAL:
@@ -118,6 +117,34 @@ func _process(delta: float):
 			gate_check_timer = 0.0
 			_process_gate_sensor()
 
+func _setup_building_light() -> void:
+	if is_preview: return
+
+	var existing = get_node_or_null("BuildingPointLight")
+	if existing: existing.queue_free()
+
+	var light: PointLight2D = null
+
+	match building_type:
+		Type.GENERATOR:
+			light = LightUtils.create_point_light(Color(0.20, 0.88, 1.0), 1.3, 2.6)
+		Type.MANUFACTORUM:
+			light = LightUtils.create_point_light(Color(1.0, 0.55, 0.15), 1.4, 2.8)
+		Type.TURRET:
+			light = LightUtils.create_point_light(Color(0.20, 0.88, 1.0), 0.7, 1.8)
+		Type.DISTRIBUTOR, Type.NOOSPHERE_ANTENNA:
+			light = LightUtils.create_point_light(Color(1.0, 0.72, 0.15), 0.8, 1.8)
+		Type.RESEARCH_SHRINE:
+			light = LightUtils.create_point_light(Color(0.25, 0.95, 0.40), 0.9, 2.2)
+		Type.BARRICADE:
+			if is_gate:
+				light = LightUtils.create_point_light(Color(0.20, 0.88, 1.0), 0.6, 1.4)
+
+	if light:
+		light.name = "BuildingPointLight"
+		light.position = Vector2.ZERO
+		add_child(light)
+
 func _produce_foundry_scrap():
 	var main_node = get_tree().get_first_node_in_group("main")
 	if main_node and main_node.has_method("add_scrap"):
@@ -127,7 +154,6 @@ func _produce_foundry_scrap():
 @rpc("call_local", "unreliable")
 func trigger_foundry_smoke_fx():
 	AudioManager.play_sfx("building_place", global_position, -6.0, 1.6)
-	
 	var label = Label.new()
 	label.script = load("res://DamageNumber.gd")
 	label.global_position = global_position + Vector2(-15, -34)
@@ -191,6 +217,7 @@ func try_upgrade_to_gate() -> bool:
 @rpc("call_local", "reliable")
 func sync_gate_upgrade():
 	is_gate = true
+	_setup_building_light()
 	if visual_spriteNode and "is_gate" in visual_spriteNode:
 		visual_spriteNode.is_gate = true
 		visual_spriteNode.queue_redraw()
@@ -217,8 +244,7 @@ func _update_noosphere_connection():
 
 func _apply_tech_stats():
 	var main_node = get_tree().get_first_node_in_group("main")
-	if not main_node:
-		return
+	if not main_node: return
 
 	if is_noosphere_connected and main_node.get("tech_shields_unlocked"):
 		max_shield = max_health * 0.4
@@ -291,8 +317,7 @@ func sync_laser_target(target_name: String):
 		visual_spriteNode.queue_redraw()
 
 func take_damage(amount: int, knockback: Vector2 = Vector2.ZERO):
-	if is_preview or not multiplayer.is_server():
-		return
+	if is_preview or not multiplayer.is_server(): return
 
 	shield_recharge_timer = SHIELD_RECHARGE_DELAY
 	var damage_remaining = float(amount)
@@ -308,7 +333,6 @@ func take_damage(amount: int, knockback: Vector2 = Vector2.ZERO):
 		health_float = float(new_hp)
 		rpc("sync_building_health", new_hp)
 
-	# --- BARRICADE TECH RETALIATION ---
 	if building_type == Type.BARRICADE and multiplayer.is_server():
 		var main_node = get_tree().get_first_node_in_group("main")
 		if main_node:
@@ -344,13 +368,10 @@ func update_ui():
 			health_bar.update_shield(int(current_shield), int(max_shield))
 
 func try_upgrade_distributor() -> bool:
-	if not multiplayer.is_server() or building_type != Type.DISTRIBUTOR:
-		return false
+	if not multiplayer.is_server() or building_type != Type.DISTRIBUTOR: return false
 	var main_node = get_tree().get_first_node_in_group("main")
-	if not main_node or not main_node.has_method("spend_requisition"):
-		return false
-	if not main_node.spend_requisition(GameData.ANTENNA_UPGRADE_REQ):
-		return false
+	if not main_node or not main_node.has_method("spend_requisition"): return false
+	if not main_node.spend_requisition(GameData.ANTENNA_UPGRADE_REQ): return false
 	rpc("sync_distributor_upgrade")
 	return true
 
@@ -358,49 +379,37 @@ func try_upgrade_distributor() -> bool:
 func sync_distributor_upgrade():
 	building_type = Type.NOOSPHERE_ANTENNA
 	_apply_type_setup()
+	_setup_building_light()
 	get_tree().call_group("buildings", "_update_noosphere_connection")
 
 func try_purchase_research(tech_index: int) -> bool:
-	if not multiplayer.is_server() or building_type != Type.RESEARCH_SHRINE:
-		return false
+	if not multiplayer.is_server() or building_type != Type.RESEARCH_SHRINE: return false
 	var main_node = get_tree().get_first_node_in_group("main")
-	if not main_node:
-		return false
-
-	if tech_index < 0 or tech_index >= GameData.TECH_DATA.size():
-		return false
+	if not main_node: return false
+	if tech_index < 0 or tech_index >= GameData.TECH_DATA.size(): return false
 
 	var tech_cost = GameData.TECH_DATA[tech_index].cost
-	if not main_node.spend_requisition(tech_cost):
-		return false
+	if not main_node.spend_requisition(tech_cost): return false
 
 	main_node.unlock_tech(tech_index)
 	return true
 
 func try_upgrade_turret() -> bool:
-	if not multiplayer.is_server() or building_type != Type.TURRET:
-		return false
-	if turret_upgrade_level >= GameData.TURRET_UPGRADE_COSTS.size():
-		return false
+	if not multiplayer.is_server() or building_type != Type.TURRET: return false
+	if turret_upgrade_level >= GameData.TURRET_UPGRADE_COSTS.size(): return false
 	var main_node = get_tree().get_first_node_in_group("main")
-	if not main_node or not main_node.has_method("spend_requisition"):
-		return false
+	if not main_node or not main_node.has_method("spend_requisition"): return false
 	var cost: int = GameData.TURRET_UPGRADE_COSTS[turret_upgrade_level]
-	if not main_node.spend_requisition(cost):
-		return false
+	if not main_node.spend_requisition(cost): return false
 	rpc("sync_turret_upgrade", turret_upgrade_level + 1)
 	return true
 
 func try_specialize_turret(spec_id: int) -> bool:
-	if not multiplayer.is_server() or building_type != Type.TURRET:
-		return false
-	if turret_upgrade_level < 3 or turret_spec != GameData.TurretSpec.NONE:
-		return false
+	if not multiplayer.is_server() or building_type != Type.TURRET: return false
+	if turret_upgrade_level < 3 or turret_spec != GameData.TurretSpec.NONE: return false
 	var main_node = get_tree().get_first_node_in_group("main")
-	if not main_node or not main_node.has_method("spend_requisition"):
-		return false
-	if not main_node.spend_requisition(GameData.TURRET_SPEC_REQ_COST):
-		return false
+	if not main_node or not main_node.has_method("spend_requisition"): return false
+	if not main_node.spend_requisition(GameData.TURRET_SPEC_REQ_COST): return false
 
 	rpc("sync_turret_spec", spec_id)
 	return true
@@ -409,12 +418,14 @@ func try_specialize_turret(spec_id: int) -> bool:
 func sync_turret_spec(new_spec: int) -> void:
 	turret_spec = new_spec
 	_apply_turret_upgrade()
+	_setup_building_light()
 	AudioManager.play_sfx("orbital_strike", global_position, -2.0, 1.4)
 
 @rpc("call_local", "reliable")
 func sync_turret_upgrade(new_level: int) -> void:
 	turret_upgrade_level = clampi(new_level, 0, GameData.TURRET_DAMAGE_BY_LEVEL.size() - 1)
 	_apply_turret_upgrade()
+	_setup_building_light()
 
 func _apply_turret_upgrade() -> void:
 	if is_instance_valid(turret_timer):
@@ -433,11 +444,7 @@ func _apply_turret_upgrade() -> void:
 
 func _apply_type_setup():
 	var info = GameData.STRUCTURE_INFO.get(int(building_type), null)
-	if info:
-		max_health = info["max_hp"]
-	else:
-		max_health = 100
-
+	max_health = info["max_hp"] if info else 100
 	health_float = float(max_health)
 
 	if is_instance_valid(visual_spriteNode):
@@ -476,27 +483,6 @@ func _apply_type_setup():
 		if turret_timer: turret_timer.stop()
 		if gen_timer: gen_timer.stop()
 
-func _setup_building_light() -> void:
-	var existing = get_node_or_null("BuildingPointLight")
-	if existing: existing.queue_free()
-
-	var light: PointLight2D = null
-
-	match building_type:
-		Type.GENERATOR:
-			light = LightUtils.create_point_light(Color(0.20, 0.88, 1.0), 1.2, 2.5) # Glowing Cyan Reactor
-		Type.MANUFACTORUM:
-			light = LightUtils.create_point_light(Color(1.0, 0.55, 0.15), 1.4, 2.8) # Molten Smelter Fire
-		Type.DISTRIBUTOR, Type.NOOSPHERE_ANTENNA:
-			light = LightUtils.create_point_light(Color(1.0, 0.72, 0.15), 0.8, 1.8) # Beacon Glow
-		Type.RESEARCH_SHRINE:
-			light = LightUtils.create_point_light(Color(0.25, 0.95, 0.40), 0.9, 2.2) # Cogitator Emerald
-
-	if light:
-		light.name = "BuildingPointLight"
-		light.position = Vector2.ZERO
-		add_child(light)
-
 func _on_gen_timer_timeout():
 	if multiplayer.is_server():
 		var main_node = get_tree().get_first_node_in_group("main")
@@ -523,7 +509,6 @@ func _process_turret_logic(delta: float):
 		var bullet_speed = 550.0
 		var lead_time = clampf(dist / bullet_speed, 0.0, 0.6)
 		var predicted_pos = cached_target_enemy.global_position + (enemy_vel * lead_time)
-
 		var target_angle = (predicted_pos - global_position).angle()
 		var track_speed = 6.5 if is_noosphere_connected else 5.0
 		current_turret_rotation = lerp_angle(current_turret_rotation, target_angle, track_speed * delta)
@@ -776,7 +761,8 @@ func destroy_building():
 func client_destroy():
 	get_tree().call_group("sandy_floor", "refresh_foundations")
 	get_tree().call_group("buildings", "_update_noosphere_connection")
-	call_deferred("refresh_barricade_connections")
+	if building_type == Type.BARRICADE:
+		call_deferred("refresh_barricade_connections")
 	queue_free()
 
 func setup_as_preview():

@@ -26,6 +26,47 @@ enum BaseRadarTier {
 	TIER_3_NOOSPHERE = 3
 }
 
+# --- MAIN SANCTUM AUSPEX & PSYCHIC RESEARCH ---
+const SANCTUM_TECH: Array[Dictionary] = [
+	{
+		"id": 0,
+		"name": "Omnissian Cartograph",
+		"icon": "🗺️",
+		"scrap": 25,
+		"req": 10,
+		"desc": "Unlocks the Tactical Minimap scope and Fullscreen Battlefield Map [M] tracking friendly outposts and ore deposits.",
+		"flavor": "\"Chart the wasteland, that the tread of our cohorts may find sure footing in the dust.\""
+	},
+	{
+		"id": 1,
+		"name": "WAAAGH! Psychic Interceptor",
+		"icon": "🔥",
+		"scrap": 30,
+		"req": 15,
+		"desc": "Calibrates auspex receivers to the xeno psychic wavelength, displaying active WAAAGH! field buffs and totem telemetry by the minimap.",
+		"flavor": "\"The psychic gestalt of the greenskins burns across the ether. Intercept their profane frequency.\""
+	},
+	{
+		"id": 2,
+		"name": "Long-Range Auspex Array",
+		"icon": "📡",
+		"scrap": 45,
+		"req": 25,
+		"desc": "Enables the 8-second assault warning vector system and adds periodic radar sweeps revealing hostile positions.",
+		"flavor": "\"No foe moves in the shadow where the piercing gaze of the Omnissiah falls.\""
+	},
+	{
+		"id": 3,
+		"name": "Noospheric Global Uplink",
+		"icon": "👁️",
+		"scrap": 70,
+		"req": 50,
+		"desc": "Continuous real-time tracking of all hostiles, WAAAGH! Totems, and the Ork Warboss Citadel across the entire planet.",
+		"flavor": "\"All data is sacred. When the Noosphere encompasses the world, victory is pre-ordained.\""
+	}
+]
+
+# Legacy dictionary alias to prevent breaking existing checks
 const BASE_RADAR_UPGRADE_INFO = {
 	BaseRadarTier.TIER_1_CARTOGRAPH: {
 		"name": "Omnissian Cartograph",
@@ -181,7 +222,7 @@ const MAX_SPEED_UPGRADES: int = 3
 const ORK_CITADEL_MAX_HEALTH: int = 2500
 const ORK_SCRAP_HEAP_MAX_HEALTH: int = 400
 
-# --- RESEARCH TECH TREE ---
+# --- RESEARCH TECH TREE (TECH SHRINE) ---
 const TECH_DATA: Array[Dictionary] = [
 	{
 		"id": 0,

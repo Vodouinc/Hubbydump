@@ -28,21 +28,18 @@ const GRID_SIZE: float = 32.0
 @export var conduit_glow_color: Color = Color(0.20, 0.88, 1.0, 0.75)
 
 # Cached Grid State
-var cached_active_cells: Dictionary = {} # Vector2i (Grid X, Y) -> true
-var cached_perimeter_edges: Array[Dictionary] = [] # [{ "p1": Vector2, "p2": Vector2 }]
+var cached_active_cells: Dictionary = {}
+var cached_perimeter_edges: Array[Dictionary] = []
 var cached_active_structures: Array[Dictionary] = []
 var cached_conduit_links: Array[Dictionary] = []
 
 var conduit_pulse_renderer: Node2D = null
+var _refresh_scheduled: bool = false
 
 func _ready() -> void:
 	z_index = -10
 	add_to_group("sandy_floor")
 	_setup_pulse_renderer()
-	
-	if not Engine.is_editor_hint():
-		get_tree().node_added.connect(_on_node_added)
-		get_tree().node_removed.connect(_on_node_removed)
 	refresh_foundations()
 
 func _setup_pulse_renderer() -> void:
@@ -57,15 +54,14 @@ func _setup_pulse_renderer() -> void:
 	else:
 		conduit_pulse_renderer = get_node("ConduitPulseRenderer")
 
-func _on_node_added(node: Node) -> void:
-	if node is StaticBody2D and (node.is_in_group("buildings") or node.is_in_group("base") or node.name.begins_with("Base") or node.name.begins_with("Building")):
-		call_deferred("refresh_foundations")
-
-func _on_node_removed(node: Node) -> void:
-	if node is StaticBody2D and (node.is_in_group("buildings") or node.is_in_group("base") or node.name.begins_with("Base") or node.name.begins_with("Building")):
-		call_deferred("refresh_foundations")
-
+## Debounced single-pass refresh (Runs only once per frame at most)
 func refresh_foundations() -> void:
+	if _refresh_scheduled: return
+	_refresh_scheduled = true
+	call_deferred("_execute_refresh_foundations")
+
+func _execute_refresh_foundations() -> void:
+	_refresh_scheduled = false
 	cached_active_structures = _gather_active_structures()
 	cached_conduit_links = _build_conduit_network(cached_active_structures)
 	_rasterize_radial_grid_cells()
@@ -135,7 +131,6 @@ func _rasterize_radial_grid_cells() -> void:
 				if cell_center.distance_squared_to(center) <= rad_sq:
 					cached_active_cells[Vector2i(gx, gy)] = true
 
-	# Continuous slab beneath barricade walls
 	if not Engine.is_editor_hint():
 		for b in get_tree().get_nodes_in_group("buildings"):
 			if is_instance_valid(b) and int(b.get("building_type")) == 0:
@@ -226,13 +221,11 @@ func _draw() -> void:
 		draw_rect(full_cell, plate_base_color)
 		draw_rect(inset_cell, plate_inset_color)
 
-		# Bevel highlights & shadow seams
 		draw_line(origin, origin + Vector2(GRID_SIZE, 0), plate_highlight, 1.0)
 		draw_line(origin, origin + Vector2(0, GRID_SIZE), plate_highlight, 1.0)
 		draw_line(origin + Vector2(GRID_SIZE, 0), origin + Vector2(GRID_SIZE, GRID_SIZE), plate_shadow, 1.0)
 		draw_line(origin + Vector2(0, GRID_SIZE), origin + Vector2(GRID_SIZE, GRID_SIZE), plate_shadow, 1.0)
 
-		# Corner hex rivets
 		draw_circle(origin + Vector2(3, 3), 0.9, plate_highlight)
 		draw_circle(origin + Vector2(GRID_SIZE - 3, 3), 0.9, plate_highlight)
 		draw_circle(origin + Vector2(3, GRID_SIZE - 3), 0.9, plate_highlight)
@@ -266,7 +259,6 @@ func _draw_static_conduit(p1: Vector2, p2: Vector2, v_radius_1: float, v_radius_
 	draw_circle(start, 2.0, brass_rim_color)
 	draw_circle(finish, 2.0, brass_rim_color)
 
-## Clean power tree hierarchy
 func _build_conduit_network(structures: Array[Dictionary]) -> Array[Dictionary]:
 	var links: Array[Dictionary] = []
 	if structures.size() < 2: return links

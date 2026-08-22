@@ -254,10 +254,20 @@ func update_global_pause_state(is_paused_globally: bool):
 			ally_pause_banner.hide()
 
 func _on_exit_to_lobby():
-	hide_my_pause_menu()
+	# 1. Unpause locally and hide pause menu
+	get_tree().paused = false
+	panel_container.hide()
+	hide()
+	
+	# 2. Trigger rematch / return to lobby on Main
 	var main_node = get_tree().get_first_node_in_group("main")
-	if main_node and main_node.has_method("request_rematch"):
-		main_node.request_rematch()
+	if main_node:
+		if not multiplayer.has_multiplayer_peer():
+			main_node.execute_rematch()
+		elif multiplayer.is_server():
+			main_node.rpc("execute_rematch")
+		else:
+			main_node.rpc_id(1, "request_rematch")
 
 # ==============================================================================
 # 4. VIDEO SETTINGS LOGIC

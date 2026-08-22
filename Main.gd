@@ -7,31 +7,31 @@ const TurretUpgradeUI = preload("res://TurretUpgradeUI.gd")
 const ResearchUI = preload("res://ResearchUI.gd")
 const PauseMenuUI = preload("res://PauseMenuUI.gd")
 const SettingsUI = preload("res://SettingsUI.gd")
-const WaveHUD = preload("res://WaveHUD.gd") # <-- Add this line
+const WaveHUD = preload("res://WaveHUD.gd")
 
-const PORT = 7000
+const DEFAULT_PORT = 7000
 const DEFAULT_IP = "127.0.0.1"
 
 # --------------------------------------------------
 # CLASS DEFINITIONS & DATA
 # --------------------------------------------------
 enum CharacterClass {
-	ADMECH_TECHPRIEST,
-	SKITARII_MARSHAL,
-	SISTER_OF_BATTLE,
-	SPACE_MARINE
+	ADMECH_TECHPRIEST = 0,
+	SKITARII_MARSHAL = 1
 }
 
 const CLASS_DATA = {
 	CharacterClass.ADMECH_TECHPRIEST: {
 		"name": "Tech-Priest Enginseer",
 		"faction": "Adeptus Mechanicus",
-		"role": "Defense & Fortification"
+		"role": "Melee & Fortification",
+		"desc": "Master of the Machine Cult. Wields the heavy Omnissian Power-Axe, secondary Plasma Caliver, and constructs defense grids."
 	},
 	CharacterClass.SKITARII_MARSHAL: {
 		"name": "Skitarii Marshal",
 		"faction": "Adeptus Mechanicus",
-		"role": "Recon & Direct Combat"
+		"role": "Tactical Commander & Ranged",
+		"desc": "Frontline cohort officer. Wields rapid Radium Carbines, shifts Doctrina Imperatives, and designates priority targets for bodyguards."
 	}
 }
 
@@ -47,7 +47,7 @@ var waaagh_idol_scene = preload("res://WaaaghIdol.tscn")
 # Class Preview Node
 var class_preview_node: Node2D = null
 
-var peer: ENetMultiplayerPeer
+var peer: ENetMultiplayerPeer = null
 var enemy_count: int = 0
 var bullet_count: int = 0
 var building_count: int = 0
@@ -56,37 +56,39 @@ var building_count: int = 0
 var scrap_amount: int = 40
 var requisition_amount: int = 10
 
-# Radar
+# Radar & Research
 var base_radar_level: int = 0
+var tech_waaagh_reader_unlocked: bool = false
 var wave_hud_node: Control = null
 var total_wave_enemies_cached: int = 0
 
 # Ork Citadel & Flankers
 var flanker_raid_timer: float = 30.0
-var ork_citadel_node: Node2D = null
 
 # Class Tracking per Peer ID
 var player_classes: Dictionary = {}
 var player_ready: Dictionary = {}
 var match_started: bool = false
+var my_selected_class: CharacterClass = CharacterClass.ADMECH_TECHPRIEST
+var is_ready: bool = false
 
 # Wave Management
 const WAVE_NARRATIVE_TITLES = [
-	"LOST RECON SCOUTS",               # Wave 1
-	"PROBING WARBAND RAID",             # Wave 2
-	"WAAAGH! BEACON DETECTED",          # Wave 3
-	"SQUIG FLANK INVASION",             # Wave 4
-	"FRONTLINE ORK ASSAULT",            # Wave 5
-	"AIRBORNE STORMBOY INCURSION",      # Wave 6
-	"HEAVY CHOPPA SQUADRONS",           # Wave 7
-	"ORIK NOB SIEGE BREACHERS",         # Wave 8
-	"BOMBARDMENT & STIKKBOMBS",         # Wave 9
-	"MULTI-LANCE WAAAGH! CONVERGENCE",  # Wave 10
-	"ARMORED NOB WARBAND SIEGE",        # Wave 11
-	"FOUR-FRONT FORTRESS PRESSURE",     # Wave 12
-	"DESPERATE NOOSPHERIC STAND",       # Wave 13
-	"TOTAL CITADEL BREACH",             # Wave 14
-	"THE WARBOSS - THE FINAL WAAAGH!"   # Wave 15
+	"LOST RECON SCOUTS",
+	"PROBING WARBAND RAID",
+	"WAAAGH! BEACON DETECTED",
+	"SQUIG FLANK INVASION",
+	"FRONTLINE ORK ASSAULT",
+	"AIRBORNE STORMBOY INCURSION",
+	"HEAVY CHOPPA SQUADRONS",
+	"ORIK NOB SIEGE BREACHERS",
+	"BOMBARDMENT & STIKKBOMBS",
+	"MULTI-LANCE WAAAGH! CONVERGENCE",
+	"ARMORED NOB WARBAND SIEGE",
+	"FOUR-FRONT FORTRESS PRESSURE",
+	"DESPERATE NOOSPHERIC STAND",
+	"TOTAL CITADEL BREACH",
+	"THE WARBOSS - THE FINAL WAAAGH!"
 ]
 
 var current_wave: int = 0
@@ -100,7 +102,6 @@ var spawn_lane_angles: Array[float] = []
 var spawn_serial: int = 0
 var objective_count: int = 0
 var wave_squad_queue: Array[Dictionary] = []
-var current_squad_timer: float = 0.0
 
 # --- GLOBAL TECH TREE UNLOCKS ---
 var tech_shields_unlocked: bool = false
@@ -110,75 +111,248 @@ var tech_magnet_unlocked: bool = false
 var tech_electro_barricades_unlocked: bool = false
 var tech_spikes_cover_unlocked: bool = false
 
-var research_ui_node: Control = null
-
-# --------------------------------------------------
-# UI & NETWORK NODE REFERENCES
-# --------------------------------------------------
-@onready var ui_layer: CanvasLayer = get_node_or_null("UI")
-@onready var hud_root: Control = get_node_or_null("%RootControl")
-@onready var spawner: MultiplayerSpawner = get_node_or_null("MultiplayerSpawner")
-
-# Lobby & Connection UI
-@onready var lobby_panel: Control = get_node_or_null("%ClassSelectUI")
-@onready var host_button: Button = get_node_or_null("%HostButton")
-@onready var join_button: Button = get_node_or_null("%JoinButton")
-@onready var ip_input: LineEdit = get_node_or_null("%IPInput")
-@onready var resource_label: Label = get_node_or_null("%ResourceLabel")
-@onready var top_bar: Control = get_node_or_null("%TopBar")
-@onready var wave_info_label: Label = get_node_or_null("%WaveInfoLabel")
-
-# Game Over UI
-@onready var game_over_ui: Control = get_node_or_null("%GameOverUI")
-@onready var game_over_panel: PanelContainer = get_node_or_null("%GameOverPanel")
-@onready var title_label: Label = get_node_or_null("%TitleLabel")
-@onready var subtitle_label: Label = get_node_or_null("%SubtitleLabel")
-@onready var restart_button: Button = get_node_or_null("%RestartButton")
-@onready var bg_drawing_node: Control = get_node_or_null("%BackgroundDrawingNode")
-
-# Class Selection Buttons & Info
-@onready var techpriest_button: Button = get_node_or_null("%TechPriestButton")
-@onready var skitarii_button: Button = get_node_or_null("%SkitariiButton")
-@onready var ready_button: Button = get_node_or_null("%ReadyButton")
-@onready var class_label: Label = get_node_or_null("%SelectedClassLabel")
-@onready var roster_label: Label = get_node_or_null("%RosterLabel")
-@onready var session_label: Label = get_node_or_null("%SessionLabel")
-
-# Navigation Node Reference
-@onready var nav_region: NavigationRegion2D = get_node_or_null("NavigationRegion2D")
-
-var my_selected_class: CharacterClass = CharacterClass.ADMECH_TECHPRIEST
+# UI Nodes
 var pause_menu_ui_node: Control = null
 var active_paused_peers: Dictionary = {}
-var is_ready: bool = false
 var settings_ui_node: Control = null
+var research_ui_node: Control = null
 
-# --- WAVE PACING TIMERS ---
+# Custom Procedural Lobby Nodes
+var lobby_root_control: Control = null
+var lobby_session_label: Label = null
+var lobby_roster_label: Label = null
+var lobby_class_desc_label: Label = null
+var lobby_ip_edit: LineEdit = null
+var lobby_port_edit: LineEdit = null
+var lobby_ready_btn: Button = null
+var lobby_host_btn: Button = null
+var lobby_join_btn: Button = null
+var lobby_disconnect_btn: Button = null
+var lobby_start_btn: Button = null
+
+# Wave Pacing
 var wave_prep_timer: float = 0.0
 var is_wave_preparing: bool = false
 const WAVE_PREP_DURATION: float = 8.0
 const WAVE_BREAK_DURATION: float = 14.0
 
+@onready var ui_layer: CanvasLayer = get_node_or_null("UI")
+@onready var spawner: MultiplayerSpawner = get_node_or_null("MultiplayerSpawner")
+@onready var nav_region: NavigationRegion2D = get_node_or_null("NavigationRegion2D")
+
 func _ready():
-	process_mode = Node.PROCESS_MODE_ALWAYS # <-- Add this line
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	add_to_group("main")
-	if hud_root:
-		hud_root.theme = AdmechTheme.make()
-	if host_button: host_button.pressed.connect(_on_host_pressed)
-	if join_button: join_button.pressed.connect(_on_join_pressed)
-	if restart_button: restart_button.pressed.connect(_on_restart_pressed)
 	
-	if techpriest_button: techpriest_button.pressed.connect(_on_techpriest_selected)
-	if skitarii_button: skitarii_button.pressed.connect(_on_skitarii_selected)
-	if ready_button: ready_button.pressed.connect(_on_ready_pressed)
+	# Network Lifecycle Signals
+	multiplayer.peer_connected.connect(_on_peer_connected)
+	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
+	multiplayer.connected_to_server.connect(_on_connected_to_server)
+	multiplayer.connection_failed.connect(_on_connection_failed)
+	multiplayer.server_disconnected.connect(_on_server_disconnected)
 	
-	if game_over_ui: game_over_ui.hide()
+	if spawner:
+		spawner.spawn_function = _custom_spawner
+
+	_setup_core_sub_uis()
+	_build_procedural_lobby_ui()
+	_show_lobby_ui()
+
+func _process(delta: float) -> void:
+	if multiplayer.is_server():
+		# 1. Wave Preparation Countdown
+		if is_wave_preparing:
+			wave_prep_timer -= delta
+			if wave_prep_timer <= 0.0:
+				is_wave_preparing = false
+				_begin_wave_spawning()
+			_broadcast_wave_hud()
+
+		# 2. Flanker Raids
+		if is_wave_active:
+			flanker_raid_timer -= delta
+			if flanker_raid_timer <= 0.0:
+				flanker_raid_timer = randf_range(28.0, 42.0)
+				_spawn_flanker_raid()
+
+# ==============================================================================
+# 1. PROCEDURAL GRIMDARK LOBBY UI
+# ==============================================================================
+func _build_procedural_lobby_ui():
+	if not ui_layer: return
+
+	# Root Lobby Control Panel
+	lobby_root_control = Control.new()
+	lobby_root_control.name = "LobbyUI"
+	lobby_root_control.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lobby_root_control.theme = AdmechTheme.make()
+	ui_layer.add_child(lobby_root_control)
+
+	var backdrop = ColorRect.new()
+	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
+	backdrop.color = Color(0.03, 0.04, 0.06, 0.92)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_PASS
+	lobby_root_control.add_child(backdrop)
+
+	var center = CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lobby_root_control.add_child(center)
+
+	var main_panel = PanelContainer.new()
+	main_panel.custom_minimum_size = Vector2(880, 520)
+	center.add_child(main_panel)
+
+	var root_vbox = VBoxContainer.new()
+	root_vbox.add_theme_constant_override("separation", 10)
+	main_panel.add_child(root_vbox)
+
+	# Header Title
+	var title = Label.new()
+	title.text = "◆ OMNISSIAN VOX-LINK CONGREGATION CHAMBER ◆"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
+	title.add_theme_font_size_override("font_size", 16)
+	root_vbox.add_child(title)
+
+	lobby_session_label = Label.new()
+	lobby_session_label.text = "Standing by. Host a sanctum forge or link via Vox IP."
+	lobby_session_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lobby_session_label.add_theme_color_override("font_color", Color(0.95, 0.75, 0.20))
+	lobby_session_label.add_theme_font_size_override("font_size", 11)
+	root_vbox.add_child(lobby_session_label)
+
+	var sep = ColorRect.new()
+	sep.custom_minimum_size = Vector2(0, 1)
+	sep.color = Color(0.25, 0.28, 0.35, 0.6)
+	root_vbox.add_child(sep)
+
+	# 3-Column Body
+	var body_hbox = HBoxContainer.new()
+	body_hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body_hbox.add_theme_constant_override("separation", 14)
+	root_vbox.add_child(body_hbox)
+
+	# --- COLUMN 1: VOX CONNECTION ---
+	var col1 = _create_lobby_sub_card("1. VOX-LINK PROTOCOLS", body_hbox)
 	
-	# Hide the legacy top_bar and wave_info_label so they don't ghost behind WaveHUD
-	if top_bar: top_bar.show()
-	if wave_info_label: wave_info_label.hide()
-	
-	# Initialize Wave HUD Widget
+	var ip_lbl = Label.new()
+	ip_lbl.text = "Target Sanctum IP:"
+	ip_lbl.add_theme_font_size_override("font_size", 10)
+	col1.add_child(ip_lbl)
+
+	lobby_ip_edit = LineEdit.new()
+	lobby_ip_edit.text = DEFAULT_IP
+	lobby_ip_edit.placeholder_text = "e.g. 127.0.0.1"
+	col1.add_child(lobby_ip_edit)
+
+	var port_lbl = Label.new()
+	port_lbl.text = "Vox Port:"
+	port_lbl.add_theme_font_size_override("font_size", 10)
+	col1.add_child(port_lbl)
+
+	lobby_port_edit = LineEdit.new()
+	lobby_port_edit.text = str(DEFAULT_PORT)
+	col1.add_child(lobby_port_edit)
+
+	lobby_host_btn = Button.new()
+	lobby_host_btn.text = "ACTIVATE SANCTUM (Host)"
+	lobby_host_btn.pressed.connect(_on_host_pressed)
+	col1.add_child(lobby_host_btn)
+
+	lobby_join_btn = Button.new()
+	lobby_join_btn.text = "ESTABLISH LINK (Join)"
+	lobby_join_btn.pressed.connect(_on_join_pressed)
+	col1.add_child(lobby_join_btn)
+
+	lobby_disconnect_btn = Button.new()
+	lobby_disconnect_btn.text = "DISENGAGE LINK"
+	lobby_disconnect_btn.disabled = true
+	lobby_disconnect_btn.pressed.connect(_on_disconnect_pressed)
+	col1.add_child(lobby_disconnect_btn)
+
+	# --- COLUMN 2: CLASS INDUCTION ---
+	var col2 = _create_lobby_sub_card("2. CADRE DESIGNATION", body_hbox)
+
+	var class_btn_hbox = HBoxContainer.new()
+	class_btn_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	class_btn_hbox.add_theme_constant_override("separation", 6)
+	col2.add_child(class_btn_hbox)
+
+	var tp_btn = Button.new()
+	tp_btn.text = "TECH-PRIEST"
+	tp_btn.pressed.connect(func(): _select_class_local(CharacterClass.ADMECH_TECHPRIEST))
+	class_btn_hbox.add_child(tp_btn)
+
+	var sk_btn = Button.new()
+	sk_btn.text = "MARSHAL"
+	sk_btn.pressed.connect(func(): _select_class_local(CharacterClass.SKITARII_MARSHAL))
+	class_btn_hbox.add_child(sk_btn)
+
+	lobby_class_desc_label = Label.new()
+	lobby_class_desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lobby_class_desc_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	lobby_class_desc_label.add_theme_font_size_override("font_size", 10)
+	lobby_class_desc_label.add_theme_color_override("font_color", Color(0.85, 0.88, 0.94))
+	col2.add_child(lobby_class_desc_label)
+
+	lobby_ready_btn = Button.new()
+	lobby_ready_btn.text = "READY UP"
+	lobby_ready_btn.disabled = true
+	lobby_ready_btn.pressed.connect(_on_ready_pressed)
+	col2.add_child(lobby_ready_btn)
+
+	# --- COLUMN 3: ROSTER MANIFEST ---
+	var col3 = _create_lobby_sub_card("3. CADRE MANIFEST", body_hbox)
+
+	lobby_roster_label = Label.new()
+	lobby_roster_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lobby_roster_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	lobby_roster_label.add_theme_font_size_override("font_size", 11)
+	col3.add_child(lobby_roster_label)
+
+	lobby_start_btn = Button.new()
+	lobby_start_btn.text = "INITIATE CRUSADE (Host)"
+	lobby_start_btn.disabled = true
+	lobby_start_btn.pressed.connect(_begin_match)
+	col3.add_child(lobby_start_btn)
+
+	_update_class_ui()
+	_refresh_lobby_roster()
+
+func _create_lobby_sub_card(card_title: String, parent_hbox: Container) -> VBoxContainer:
+	var pc = PanelContainer.new()
+	pc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0.05, 0.06, 0.09, 0.90)
+	sb.border_color = Color(0.24, 0.28, 0.35)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(3)
+	sb.content_margin_left = 10
+	sb.content_margin_right = 10
+	sb.content_margin_top = 8
+	sb.content_margin_bottom = 8
+	pc.add_theme_stylebox_override("panel", sb)
+	parent_hbox.add_child(pc)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 6)
+	pc.add_child(vbox)
+
+	var t_lbl = Label.new()
+	t_lbl.text = card_title
+	t_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	t_lbl.add_theme_color_override("font_color", Color(0.82, 0.62, 0.24))
+	t_lbl.add_theme_font_size_override("font_size", 11)
+	vbox.add_child(t_lbl)
+
+	var sep = ColorRect.new()
+	sep.custom_minimum_size = Vector2(0, 1)
+	sep.color = Color(0.25, 0.28, 0.35, 0.4)
+	vbox.add_child(sep)
+
+	return vbox
+
+func _setup_core_sub_uis():
 	if not has_node("UI/WaveHUD"):
 		var w_hud = WaveHUD.new()
 		w_hud.name = "WaveHUD"
@@ -194,298 +368,202 @@ func _ready():
 		var b_ui = BaseUpgradeUI.new()
 		b_ui.name = "BaseUpgradeUI"
 		$UI.add_child(b_ui)
-	
-	# Network signals
-	multiplayer.peer_connected.connect(_on_peer_connected)
-	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
-	multiplayer.connected_to_server.connect(_on_connected_to_server)
-	
-	spawner.spawn_function = _custom_spawner
-	
-	_show_lobby_ui()
-	_update_class_ui()
-	_refresh_lobby_roster()
-	_setup_research_ui()
-	_setup_settings_ui()
-	_setup_pause_menu_ui()
-	_setup_turret_upgrade_ui()
 
-func _setup_turret_upgrade_ui():
 	if not has_node("UI/TurretUpgradeUI"):
 		var t_ui = TurretUpgradeUI.new()
 		t_ui.name = "TurretUpgradeUI"
 		$UI.add_child(t_ui)
 
-func _process(delta: float) -> void:
-	if multiplayer.is_server():
-		# 1. Wave Preparation Warning Countdown
-		if is_wave_preparing:
-			wave_prep_timer -= delta
-			if wave_prep_timer <= 0.0:
-				is_wave_preparing = false
-				_begin_wave_spawning()
-			_broadcast_wave_hud()
-
-		# 2. Random Edge Flanker Raids
-		if is_wave_active:
-			flanker_raid_timer -= delta
-			if flanker_raid_timer <= 0.0:
-				flanker_raid_timer = randf_range(28.0, 42.0)
-				_spawn_flanker_raid()
-
-# --------------------------------------------------
-# CLASS SELECTION & LOBBY UI
-# --------------------------------------------------
-
-func _setup_settings_ui():
 	if not has_node("UI/SettingsUI"):
 		var s_ui = SettingsUI.new()
 		s_ui.name = "SettingsUI"
 		$UI.add_child(s_ui)
 		settings_ui_node = s_ui
-	_add_settings_button_to_ui()
 
-func _setup_pause_menu_ui():
 	if not has_node("UI/PauseMenuUI"):
 		var p_ui = PauseMenuUI.new()
 		p_ui.name = "PauseMenuUI"
 		$UI.add_child(p_ui)
 		pause_menu_ui_node = p_ui
 
-func _add_settings_button_to_ui():
-	if top_bar and not top_bar.has_node("SettingsBtn"):
-		var btn = Button.new()
-		btn.name = "SettingsBtn"
-		btn.text = "⚙ AUDIO [O]"
-		btn.custom_minimum_size = Vector2(100, 28)
-		btn.pressed.connect(func():
-			if settings_ui_node and settings_ui_node.has_method("toggle_settings"):
-				settings_ui_node.toggle_settings()
-		)
-		top_bar.add_child(btn)
-
-func _setup_research_ui():
 	if not has_node("UI/ResearchUI"):
 		var r_ui = ResearchUI.new()
 		r_ui.name = "ResearchUI"
 		$UI.add_child(r_ui)
 		research_ui_node = r_ui
 
-func _update_class_ui():
-	if CLASS_DATA.has(my_selected_class):
-		var class_info = CLASS_DATA[my_selected_class]
-		if class_label:
-			class_label.text = class_info["name"] + "\n" + class_info["role"]
-		_update_class_preview()
-		_style_class_buttons()
+# ==============================================================================
+# 2. RESILIENT MULTIPLAYER CONNECTION LIFECYCLE
+# ==============================================================================
+func _safe_cleanup_peer():
+	if multiplayer.multiplayer_peer:
+		multiplayer.multiplayer_peer.close()
+		multiplayer.multiplayer_peer = null
+	peer = null
 
-func _style_class_buttons() -> void:
-	var selected := Color(0.35, 0.90, 1.0, 1.0)
-	var idle := Color.WHITE
-	if techpriest_button:
-		techpriest_button.modulate = selected if my_selected_class == CharacterClass.ADMECH_TECHPRIEST else idle
-	if skitarii_button:
-		skitarii_button.modulate = selected if my_selected_class == CharacterClass.SKITARII_MARSHAL else idle
-
-func _update_class_preview() -> void:
-	if match_started:
+func _on_host_pressed():
+	_safe_cleanup_peer()
+	
+	var port = int(lobby_port_edit.text) if (lobby_port_edit and lobby_port_edit.text != "") else DEFAULT_PORT
+	peer = ENetMultiplayerPeer.new()
+	var error = peer.create_server(port)
+	if error != OK:
+		_set_session_text("Failed to host on Port %d. Error code: %d" % [port, error])
+		_safe_cleanup_peer()
 		return
-	if is_instance_valid(class_preview_node):
-		class_preview_node.free()
-		class_preview_node = null
-		
-	var preview_player = player_scene.instantiate()
-	class_preview_node = preview_player
-	
-	preview_player.name = "ClassPreview"
-	preview_player.process_mode = PROCESS_MODE_DISABLED
-	if preview_player.has_node("CollisionShape2D"):
-		preview_player.get_node("CollisionShape2D").disabled = true
-	
-	if preview_player.has_node("Camera2D"):
-		var cam = preview_player.get_node("Camera2D")
-		cam.enabled = false
-		cam.queue_free()
-	
-	if preview_player.has_method("set_player_class"):
-		var is_techpriest = (my_selected_class == CharacterClass.ADMECH_TECHPRIEST)
-		preview_player.set_player_class(preview_player.PlayerClass.MELEE if is_techpriest else preview_player.PlayerClass.RANGED)
-		
-	preview_player.position = Vector2(430, 310)
-	add_child(preview_player)
 
-func _clear_class_preview() -> void:
-	if is_instance_valid(class_preview_node):
-		class_preview_node.free()
-		class_preview_node = null
+	multiplayer.multiplayer_peer = peer
+	match_started = false
+	is_ready = false
+	player_classes.clear()
+	player_ready.clear()
+	
+	player_classes[1] = my_selected_class
+	player_ready[1] = false
 
-func _on_techpriest_selected():
-	my_selected_class = CharacterClass.ADMECH_TECHPRIEST
-	_update_class_ui()
+	_set_session_text("◆ SANCTUM ACTIVATED ◆ Hosting on Port %d." % port)
+	_update_connection_buttons(true)
+	_refresh_lobby_roster()
+	_broadcast_lobby_state()
+
+func _on_join_pressed():
+	_safe_cleanup_peer()
+
+	var ip = lobby_ip_edit.text.strip_edges() if (lobby_ip_edit and lobby_ip_edit.text != "") else DEFAULT_IP
+	var port = int(lobby_port_edit.text) if (lobby_port_edit and lobby_port_edit.text != "") else DEFAULT_PORT
+
+	peer = ENetMultiplayerPeer.new()
+	var err = peer.create_client(ip, port)
+	if err == OK:
+		multiplayer.multiplayer_peer = peer
+		_set_session_text("Transmitting Vox-Link to %s:%d..." % [ip, port])
+		_update_connection_buttons(true)
+	else:
+		_set_session_text("Failed to initiate connection to %s:%d" % [ip, port])
+		_safe_cleanup_peer()
+
+func _on_disconnect_pressed():
+	_safe_cleanup_peer()
+	player_classes.clear()
+	player_ready.clear()
+	is_ready = false
+	_set_session_text("Vox-Link disengaged. Standing by.")
+	_update_connection_buttons(false)
+	_refresh_lobby_roster()
+
+func _on_connected_to_server():
+	_set_session_text("◆ VOX-LINK SYNCHRONIZED ◆ Select class & Ready Up.")
 	_sync_lobby_loadout()
 
-func _on_skitarii_selected():
-	my_selected_class = CharacterClass.SKITARII_MARSHAL
+func _on_connection_failed():
+	_set_session_text("⚠️ CONNECTION FAILED: Target Sanctum unreachable.")
+	_on_disconnect_pressed()
+
+func _on_server_disconnected():
+	_set_session_text("⚠️ CARRIER LOST: Sanctum Host disconnected.")
+	_on_disconnect_pressed()
+	if match_started:
+		execute_rematch()
+
+func _on_peer_connected(id: int):
+	if not multiplayer.is_server(): return
+	
+	if not player_classes.has(id):
+		player_classes[id] = CharacterClass.SKITARII_MARSHAL
+		player_ready[id] = false
+		
+	if match_started:
+		spawn_player(id)
+		rpc_id(id, "sync_match_started")
+		rpc_id(id, "sync_resources", scrap_amount, requisition_amount)
+	else:
+		_broadcast_lobby_state()
+
+func _on_peer_disconnected(id: int):
+	player_classes.erase(id)
+	player_ready.erase(id)
+	active_paused_peers.erase(id)
+	
+	if multiplayer.is_server():
+		var should_pause = not active_paused_peers.is_empty()
+		rpc("sync_global_pause", should_pause)
+		if not match_started:
+			_broadcast_lobby_state()
+			
+	var p_node = get_node_or_null(str(id))
+	if p_node: p_node.queue_free()
+	_refresh_lobby_roster()
+
+# ==============================================================================
+# 3. LOBBY SELECTION, SYNC & EXPEDITION INITIATION
+# ==============================================================================
+func _select_class_local(chosen_class: CharacterClass):
+	my_selected_class = chosen_class
 	_update_class_ui()
 	_sync_lobby_loadout()
 
 func _on_ready_pressed():
-	if not _is_in_session():
-		_set_session_text("Host or join a session first.")
-		return
+	if not _is_in_session(): return
 	is_ready = not is_ready
-	_update_ready_button()
+	if lobby_ready_btn:
+		lobby_ready_btn.text = "UNREADY" if is_ready else "READY UP"
+		lobby_ready_btn.modulate = Color(0.4, 0.95, 0.5) if is_ready else Color.WHITE
 	_sync_lobby_loadout()
-
-func _update_ready_button() -> void:
-	if ready_button:
-		ready_button.text = "UNREADY" if is_ready else "READY UP"
-		ready_button.disabled = not _is_in_session()
-
-func _is_in_session() -> bool:
-	return multiplayer.has_multiplayer_peer() and multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED
 
 func _sync_lobby_loadout():
 	if not _is_in_session() or match_started:
 		_refresh_lobby_roster()
 		return
+
 	if multiplayer.is_server():
 		player_classes[1] = my_selected_class
 		player_ready[1] = is_ready
 		_broadcast_lobby_state()
-		_try_start_match()
 	else:
 		rpc_id(1, "report_lobby_loadout", int(my_selected_class), is_ready)
 
-func _show_lobby_ui():
-	match_started = false
-	is_ready = false
+@rpc("any_peer", "reliable")
+func report_lobby_loadout(chosen_class: int, ready: bool) -> void:
+	if not multiplayer.is_server() or match_started: return
+	var sender_id = multiplayer.get_remote_sender_id()
+	if sender_id == 0: sender_id = 1
 	
-	if lobby_panel: lobby_panel.show()
-	if host_button: host_button.show()
-	if join_button: join_button.show()
-	if ip_input: ip_input.show()
-	if techpriest_button: techpriest_button.show()
-	if skitarii_button: skitarii_button.show()
-	if ready_button: ready_button.show()
-	if class_label: class_label.show()
-	if roster_label: roster_label.show()
-	if session_label: session_label.show()
-	
-	if top_bar: top_bar.hide()
-	
-	_update_ready_button()
-	_update_class_ui()
-	_refresh_lobby_roster()
-
-func _hide_lobby_ui():
-	_clear_class_preview()
-	
-	if lobby_panel: lobby_panel.hide()
-	if host_button: host_button.hide()
-	if join_button: join_button.hide()
-	if ip_input: ip_input.hide()
-	if techpriest_button: techpriest_button.hide()
-	if skitarii_button: skitarii_button.hide()
-	if ready_button: ready_button.hide()
-	if class_label: class_label.hide()
-	if roster_label: roster_label.hide()
-	if session_label: session_label.hide()
-	
-	if top_bar: top_bar.show()
-
-func _set_session_text(message: String) -> void:
-	if session_label:
-		session_label.text = message
-
-func _refresh_lobby_roster() -> void:
-	if not roster_label:
-		return
-	if not _is_in_session():
-		roster_label.text = "No vox-link. Host a forge-fane or join an IP."
-		_set_session_text("Standing by.")
-		return
-
-	var lines: PackedStringArray = []
-	var ids: Array = player_classes.keys()
-	ids.sort()
-	for id in ids:
-		var class_id: int = int(player_classes[id])
-		var class_info = CLASS_DATA.get(class_id, {"name": "Unknown"})
-		var ready_mark = "READY" if player_ready.get(id, false) else "STANDBY"
-		var you = "  (you)" if _is_local_peer(int(id)) else ""
-		lines.append("%s  —  %s%s" % [class_info["name"], ready_mark, you])
-	roster_label.text = "\n".join(lines) if not lines.is_empty() else "Cadre assembling..."
-
-func _is_local_peer(id: int) -> bool:
-	if not _is_in_session():
-		return id == 1
-	return id == multiplayer.get_unique_id()
+	player_classes[sender_id] = chosen_class
+	player_ready[sender_id] = ready
+	_broadcast_lobby_state()
 
 func _broadcast_lobby_state() -> void:
-	if not multiplayer.is_server():
-		return
+	if not multiplayer.is_server(): return
 	var payload: Array = []
 	for id in player_classes.keys():
 		payload.append([int(id), int(player_classes[id]), player_ready.get(id, false)])
 	rpc("sync_lobby_state", payload, match_started)
 	_refresh_lobby_roster()
 
-@rpc("any_peer", "reliable")
-func report_lobby_loadout(chosen_class: int, ready: bool) -> void:
-	if not multiplayer.is_server() or match_started:
-		return
-	var sender_id = multiplayer.get_remote_sender_id()
-	if sender_id == 0:
-		sender_id = 1
-	player_classes[sender_id] = chosen_class
-	player_ready[sender_id] = ready
-	_broadcast_lobby_state()
-	_try_start_match()
-
 @rpc("authority", "call_local", "reliable")
 func sync_lobby_state(payload: Array, started: bool) -> void:
 	player_classes.clear()
 	player_ready.clear()
 	for entry in payload:
-		if typeof(entry) != TYPE_ARRAY or entry.size() < 3:
-			continue
-		var id: int = int(entry[0])
-		player_classes[id] = int(entry[1])
-		player_ready[id] = bool(entry[2])
+		if typeof(entry) == TYPE_ARRAY and entry.size() >= 3:
+			var id = int(entry[0])
+			player_classes[id] = int(entry[1])
+			player_ready[id] = bool(entry[2])
+			
 	_refresh_lobby_roster()
 	if started and not match_started:
 		_begin_match_local()
 
-func _try_start_match() -> void:
-	if not multiplayer.is_server() or match_started:
-		return
-	var ids := _session_peer_ids()
-	if ids.is_empty():
-		return
-		
-	for id in ids:
-		if not player_ready.get(id, false):
-			_set_session_text("Waiting on the cadre to Ready.")
-			return
-			
-	_begin_match()
-
-func _session_peer_ids() -> Array[int]:
-	var ids: Array[int] = [1]
-	if multiplayer.has_multiplayer_peer():
-		for peer_id in multiplayer.get_peers():
-			ids.append(int(peer_id))
-	return ids
-
 func _begin_match() -> void:
-	if not multiplayer.is_server() or match_started:
-		return
+	if not multiplayer.is_server() or match_started: return
 	match_started = true
 	_broadcast_lobby_state()
 	rpc("sync_match_started")
+	
+	# Spawn Players
 	for id in _session_peer_ids():
 		spawn_player(id)
+		
 	_spawn_map_scrap_deposits()
 	_spawn_ork_mega_camp()
 	start_next_wave()
@@ -497,99 +575,263 @@ func sync_match_started() -> void:
 func _begin_match_local() -> void:
 	match_started = true
 	_hide_lobby_ui()
-	if resource_label:
-		resource_label.text = "SCRAP  0    REQ  0"
-	if wave_info_label:
-		wave_info_label.text = "PERIMETER ARMED"
+	var hud = get_tree().get_first_node_in_group("ability_hud")
+	if hud and hud.has_method("show"): hud.show()
 
-func _on_host_pressed():
+# ==============================================================================
+# 4. ROSTER & UI HELPERS
+# ==============================================================================
+func _is_in_session() -> bool:
+	return multiplayer.has_multiplayer_peer() and multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED
+
+func _session_peer_ids() -> Array[int]:
+	var ids: Array[int] = [1]
 	if multiplayer.has_multiplayer_peer():
-		multiplayer.multiplayer_peer.close()
-		multiplayer.multiplayer_peer = null
-		
-	peer = ENetMultiplayerPeer.new()
-	var error = peer.create_server(PORT)
-	if error != OK: 
-		_set_session_text("Failed to host. Port %d may be in use." % PORT)
+		for p in multiplayer.get_peers():
+			ids.append(int(p))
+	return ids
+
+func _set_session_text(msg: String):
+	if lobby_session_label: lobby_session_label.text = msg
+
+func _update_connection_buttons(connected: bool):
+	if lobby_host_btn: lobby_host_btn.disabled = connected
+	if lobby_join_btn: lobby_join_btn.disabled = connected
+	if lobby_disconnect_btn: lobby_disconnect_btn.disabled = not connected
+	if lobby_ready_btn: lobby_ready_btn.disabled = not connected
+
+func _update_class_ui():
+	if CLASS_DATA.has(my_selected_class) and lobby_class_desc_label:
+		var info = CLASS_DATA[my_selected_class]
+		lobby_class_desc_label.text = "◆ %s ◆\n%s\n\n%s" % [info.name.to_upper(), info.role, info.desc]
+
+func _refresh_lobby_roster():
+	if not lobby_roster_label: return
+
+	if not _is_in_session():
+		lobby_roster_label.text = "No Vox-Link. Host or Join to assemble cadre."
+		if lobby_start_btn: lobby_start_btn.disabled = true
 		return
-	
-	multiplayer.multiplayer_peer = peer
-	match_started = false
-	is_ready = false
-	player_classes.clear()
-	player_ready.clear()
-	player_classes[1] = my_selected_class
-	player_ready[1] = false
-	_update_ready_button()
-	_set_session_text("Hosting on port %d — Ready when the cadre is set." % PORT)
-	_broadcast_lobby_state()
 
-func _on_join_pressed():
-	if multiplayer.has_multiplayer_peer():
-		multiplayer.multiplayer_peer.close()
-		multiplayer.multiplayer_peer = null
+	var lines: PackedStringArray = []
+	var ids: Array = player_classes.keys()
+	ids.sort()
+	var all_ready = true
+
+	for id in ids:
+		var c_id: int = int(player_classes[id])
+		var info = CLASS_DATA.get(c_id, {"name": "Acolyte"})
+		var rdy = player_ready.get(id, false)
+		if not rdy: all_ready = false
 		
-	var ip = ip_input.text if ip_input.text != "" else DEFAULT_IP
-	peer = ENetMultiplayerPeer.new()
-	if peer.create_client(ip, PORT) == OK:
-		multiplayer.multiplayer_peer = peer
-		_set_session_text("Connecting to %s..." % ip)
-		_update_ready_button()
-	else:
-		_set_session_text("Failed to reach %s." % ip)
+		var tag = " (You)" if (id == multiplayer.get_unique_id() or (id == 1 and not multiplayer.has_multiplayer_peer())) else ""
+		var status_str = "[READY]" if rdy else "[STANDBY]"
+		lines.append("%s %s %s%s" % [status_str, info.name, ("#%d" % id), tag])
 
+	lobby_roster_label.text = "\n".join(lines)
+	
+	if lobby_start_btn and multiplayer.is_server():
+		lobby_start_btn.disabled = not all_ready
+		lobby_start_btn.text = "INITIATE CRUSADE" if all_ready else "WAITING ON CADRE..."
+
+func _show_lobby_ui():
+	match_started = false
+	if lobby_root_control: lobby_root_control.show()
+
+func _hide_lobby_ui():
+	if lobby_root_control: lobby_root_control.hide()
+
+# ==============================================================================
+# 5. SPAWNER & ENTITY MANAGEMENT
+# ==============================================================================
 func spawn_player(peer_id: int):
 	if not multiplayer.is_server(): return
-	
 	for p in get_tree().get_nodes_in_group("players"):
-		if p.name == str(peer_id):
-			return
-	
+		if p.name == str(peer_id): return
+
 	var chosen_class = player_classes.get(peer_id, CharacterClass.SKITARII_MARSHAL)
 	var spawn_data = {
 		"type": "player",
 		"peer_id": peer_id,
 		"class": chosen_class
 	}
-	if spawner:
-		spawner.spawn(spawn_data)
+	if spawner: spawner.spawn(spawn_data)
 
-@rpc("any_peer", "call_local", "reliable")
-func select_class(chosen_class: int):
-	var sender_id = multiplayer.get_remote_sender_id()
-	if sender_id == 0: sender_id = 1
-	player_classes[sender_id] = chosen_class
-	if multiplayer.is_server() and match_started:
-		spawn_player(sender_id)
+func _custom_spawner(data) -> Node:
+	if typeof(data) == TYPE_ARRAY and data.size() > 0: data = data[0]
+	if typeof(data) != TYPE_DICTIONARY: return null
 
-# --- MULTIPLAYER PAUSE SYNCHRONIZATION ---
+	var obj_type = data.get("type", "")
+	match obj_type:
+		"player":
+			var player = player_scene.instantiate()
+			var peer_id = data["peer_id"]
+			player.name = str(peer_id)
+			var chosen_class = data.get("class", CharacterClass.ADMECH_TECHPRIEST)
+			if player.has_method("set_player_class"):
+				player.set_player_class(player.PlayerClass.MELEE if chosen_class == CharacterClass.ADMECH_TECHPRIEST else player.PlayerClass.RANGED)
+			
+			var base_node = get_tree().get_first_node_in_group("base")
+			var base_pos = base_node.global_position if base_node else Vector2(500, 500)
+			var offset_x = -30.0 if peer_id == 1 else 30.0
+			player.position = base_pos + Vector2(offset_x, 80.0)
+			return player
 
-@rpc("any_peer", "call_local", "reliable")
-func request_set_player_paused(is_paused: bool):
-	if not multiplayer.is_server(): return
-	var sender_id = multiplayer.get_remote_sender_id()
-	if sender_id == 0: sender_id = 1
+		"building":
+			var building = building_scene.instantiate()
+			building.name = str(data["name"])
+			building.position = data["position"]
+			if "building_type" in data:
+				building.building_type = data["building_type"]
+			return building
 
-	if is_paused:
-		active_paused_peers[sender_id] = true
-	else:
-		active_paused_peers.erase(sender_id)
+		"enemy":
+			var enemy = enemy_scene.instantiate()
+			enemy.name = str(data["name"])
+			enemy.position = data["position"]
+			if "enemy_type" in data: enemy.type = int(data["enemy_type"])
+			if "is_objective_guard" in data: enemy.is_objective_guard = data["is_objective_guard"]
+			if "guard_anchor" in data: enemy.guard_anchor = data["guard_anchor"]
+			if "counts_toward_wave" in data: enemy.counts_toward_wave = data["counts_toward_wave"]
+			return enemy
 
-	var should_pause = not active_paused_peers.is_empty()
-	rpc("sync_global_pause", should_pause)
+		"bullet":
+			var bullet = bullet_scene.instantiate()
+			bullet.name = str(data["name"])
+			bullet.position = data["position"]
+			bullet.direction = data["direction"]
+			bullet.rotation = data["direction"].angle()
+			if "damage" in data: bullet.damage = data["damage"]
+			if "is_enemy_bullet" in data: bullet.is_enemy_bullet = data["is_enemy_bullet"]
+			return bullet
 
-@rpc("call_local", "reliable")
-func sync_global_pause(is_paused: bool):
-	get_tree().paused = is_paused
-	get_tree().call_group("pause_menu", "update_global_pause_state", is_paused)
+		"kastelan_robot":
+			var robot_script = load("res://KastelanRobot.gd")
+			var robot = CharacterBody2D.new()
+			robot.set_script(robot_script)
+			robot.name = str(data["name"])
+			robot.global_position = data["position"]
+			robot.set_multiplayer_authority(1)
+			var owner_id = data["owner_id"]
+			var p_node = get_node_or_null(str(owner_id))
+			if p_node:
+				robot.player_owner = p_node
+				p_node.active_kastelan_robot = robot
+			return robot
 
-# --------------------------------------------------
-# ENHANCED WAVE MANAGEMENT & COMPOSITION
-# --------------------------------------------------
+		"scrap":
+			var scrap = scrap_scene.instantiate()
+			scrap.name = str(data["name"])
+			scrap.position = data["position"]
+			return scrap
+
+		"scrap_deposit":
+			var dep = StaticBody2D.new()
+			dep.set_script(load("res://ScrapDeposit.gd"))
+			dep.name = str(data["name"])
+			dep.position = data["position"]
+			return dep
+
+		"ork_citadel":
+			var cit = StaticBody2D.new()
+			cit.set_script(load("res://OrkCitadel.gd"))
+			cit.name = str(data["name"])
+			cit.position = data["position"]
+			return cit
+
+		"ork_scrap_heap":
+			var heap = StaticBody2D.new()
+			heap.set_script(load("res://OrkScrapHeap.gd"))
+			heap.name = str(data["name"])
+			heap.position = data["position"]
+			return heap
+
+		"waaagh_idol":
+			var idol = waaagh_idol_scene.instantiate()
+			idol.name = str(data["name"])
+			idol.position = data["position"]
+			return idol
+
+		"bodyguard":
+			var bodyguard_scene = preload("res://SkitariiBodyguard.tscn")
+			var bg = bodyguard_scene.instantiate()
+			bg.name = str(data["name"])
+			bg.global_position = data["position"]
+			bg.set_multiplayer_authority(1)
+			var owner_id = data["owner_id"]
+			var p_node = get_node_or_null(str(owner_id))
+			if p_node:
+				bg.player_owner = p_node
+				if "active_bodyguards" in p_node: p_node.active_bodyguards.append(bg)
+			return bg
+
+		"servo_skull":
+			var servoskull_scene = preload("res://ServoSkull.tscn")
+			var skull = servoskull_scene.instantiate()
+			skull.name = str(data["name"])
+			skull.global_position = data["position"]
+			skull.set_multiplayer_authority(1)
+			var owner_id = data["owner_id"]
+			var p_node = get_node_or_null(str(owner_id))
+			if p_node:
+				skull.set_owner_player(p_node)
+				if "active_servo_skulls" in p_node: p_node.active_servo_skulls.append(skull)
+			return skull
+
+	return null
+
+# ==============================================================================
+# 6. MAP GENERATION, WAVES & RESEARCH
+# ==============================================================================
+func _spawn_map_scrap_deposits():
+	if not multiplayer.is_server() or not spawner: return
+	var base_node = get_tree().get_first_node_in_group("base")
+	var base_pos = base_node.global_position if base_node else Vector2(500, 500)
+
+	for i in range(2):
+		var angle = (PI * 0.75) if i == 0 else (-PI * 0.25)
+		spawner.spawn({
+			"type": "scrap_deposit",
+			"name": "ScrapDeposit_Start_" + str(i + 1),
+			"position": (base_pos + Vector2.RIGHT.rotated(angle) * 240.0).snapped(Vector2(32, 32))
+		})
+
+	for i in range(5):
+		var angle = (float(i) * TAU / 5.0) + randf_range(-0.3, 0.3)
+		spawner.spawn({
+			"type": "scrap_deposit",
+			"name": "ScrapDeposit_Wild_" + str(i + 1),
+			"position": (base_pos + Vector2.RIGHT.rotated(angle) * randf_range(650.0, 1050.0)).snapped(Vector2(32, 32))
+		})
+
+func _spawn_ork_mega_camp():
+	if not multiplayer.is_server() or not spawner: return
+	var base_node = get_tree().get_first_node_in_group("base")
+	var base_pos = base_node.global_position if base_node else Vector2(500, 500)
+
+	var camp_pos = (base_pos + Vector2.RIGHT.rotated(randf_range(-PI, PI)) * 1450.0).snapped(Vector2(32, 32))
+	spawner.spawn({
+		"type": "ork_citadel",
+		"name": "OrkCitadel_Core",
+		"position": camp_pos
+	})
+
+	var dir_to_base = (base_pos - camp_pos).normalized()
+	var heap_positions = [
+		camp_pos + dir_to_base.rotated(2.2) * 110.0,
+		camp_pos + dir_to_base.rotated(-2.2) * 110.0,
+		camp_pos - (dir_to_base * 110.0)
+	]
+
+	for i in range(heap_positions.size()):
+		spawner.spawn({
+			"type": "ork_scrap_heap",
+			"name": "OrkScrapHeap_" + str(i + 1),
+			"position": heap_positions[i].snapped(Vector2(32, 32))
+		})
 
 func start_next_wave():
 	if not multiplayer.is_server(): return
-	
 	current_wave += 1
 	if current_wave > max_waves:
 		game_over(true)
@@ -607,94 +849,23 @@ func start_next_wave():
 		enemies_left_to_spawn += squad["units"].size()
 	total_wave_enemies_cached = enemies_left_to_spawn
 
-	# Start the 8-Second Auspex Warning Window
 	is_wave_preparing = true
 	wave_prep_timer = WAVE_PREP_DURATION
 	_broadcast_wave_hud()
 	
-	# Only alert with threat vectors if Tier 2 Auspex is unlocked!
-	if base_radar_level >= GameData.BaseRadarTier.TIER_2_AUSPEX:
+	if base_radar_level >= 2:
 		rpc("sync_incoming_threat_lanes", spawn_lane_angles)
 		rpc("trigger_wave_alert_sfx")
 	else:
 		rpc("sync_incoming_threat_lanes", [])
 
-@rpc("any_peer", "call_local", "reliable")
-func request_upgrade_base_radar():
-	if not multiplayer.is_server(): return
-	var next_tier = base_radar_level + 1
-	if next_tier > GameData.BaseRadarTier.TIER_3_NOOSPHERE: return
-	
-	var info = GameData.BASE_RADAR_UPGRADE_INFO[next_tier]
-	if scrap_amount >= info.scrap and requisition_amount >= info.req:
-		scrap_amount -= info.scrap
-		requisition_amount -= info.req
-		base_radar_level = next_tier
-		rpc("sync_resources", scrap_amount, requisition_amount)
-		rpc("sync_base_radar_tier", base_radar_level)
-		AudioManager.play_sfx("building_place", Vector2.ZERO, 3.0, 1.4)
-
-@rpc("call_local", "reliable")
-func sync_base_radar_tier(new_tier: int):
-	base_radar_level = new_tier
-	get_tree().call_group("base_upgrade_ui", "_refresh_display")
-
-@rpc("call_local", "reliable")
-func trigger_wave_alert_sfx():
-	AudioManager.play_sfx("klaxon_alert", Vector2.ZERO, 3.0, 1.0)
-
-func _spawn_ork_mega_camp():
-	if not multiplayer.is_server() or not spawner: return
-	
-	var base_node = get_tree().get_first_node_in_group("base")
-	var base_pos = base_node.global_position if base_node else Vector2(500, 500)
-
-	# 1. Spawn Citadel in a distant desert quadrant (1400px - 1600px away)
-	var camp_angle = randf_range(-PI, PI)
-	var camp_dist = randf_range(1400.0, 1600.0)
-	var camp_pos = (base_pos + Vector2.RIGHT.rotated(camp_angle) * camp_dist).snapped(Vector2(32, 32))
-
-	spawner.spawn({
-		"type": "ork_citadel",
-		"name": "OrkCitadel_Core",
-		"position": camp_pos
-	})
-
-	# 2. Arrange Scrap Heaps in a defensive horseshoe around the FLANKS and REAR
-	var dir_to_player = (base_pos - camp_pos).normalized()
-	var flank_left = camp_pos + dir_to_player.rotated(2.2) * 110.0
-	var flank_right = camp_pos + dir_to_player.rotated(-2.2) * 110.0
-	var fortress_rear = camp_pos - (dir_to_player * 110.0)
-	var heap_positions = [flank_left, flank_right, fortress_rear]
-
-	for i in range(heap_positions.size()):
-		spawner.spawn({
-			"type": "ork_scrap_heap",
-			"name": "OrkScrapHeap_" + str(i + 1),
-			"position": heap_positions[i].snapped(Vector2(32, 32))
-		})
-
-	# 3. Spawn Elite Warboss Guard at the Citadel
-	spawner.spawn({
-		"type": "enemy",
-		"name": "CitadelBoss_Nob",
-		"enemy_type": 4, # Nob
-		"position": camp_pos + (dir_to_player * 60.0),
-		"is_objective_guard": true,
-		"guard_anchor": camp_pos,
-		"counts_toward_wave": false
-	})
-
 func _spawn_flanker_raid():
 	if not spawner: return
 	var base_node = get_tree().get_first_node_in_group("base")
 	var base_pos = base_node.global_position if base_node else Vector2.ZERO
+	var edge_pos = base_pos + Vector2.RIGHT.rotated(randf() * TAU) * 1500.0
 	
-	var edge_angle = randf() * TAU
-	var edge_pos = base_pos + Vector2.RIGHT.rotated(edge_angle) * 1500.0
-	
-	var raid_types = [1, 1, 3]
-	for t in raid_types:
+	for t in [1, 1, 3]:
 		enemy_count += 1
 		spawner.spawn({
 			"type": "enemy",
@@ -705,66 +876,49 @@ func _spawn_flanker_raid():
 			"counts_toward_wave": false
 		})
 
-## Spawns wave units in the open forward muster grounds facing the player base
 func _spawn_tactical_squad(squad: Dictionary):
 	var units: Array = squad["units"]
 	var citadel = get_tree().get_first_node_in_group("ork_citadel")
 	var base_node = get_tree().get_first_node_in_group("base")
 	var base_pos = base_node.global_position if base_node else Vector2.ZERO
 	
-	var spawn_origin = Vector2(1400, 1400)
-	if is_instance_valid(citadel):
-		spawn_origin = citadel.global_position
-	else:
-		spawn_origin = base_pos + Vector2(1200, 0)
-
+	var spawn_origin = citadel.global_position if is_instance_valid(citadel) else (base_pos + Vector2(1200, 0))
 	var dir_to_base = (base_pos - spawn_origin).normalized()
-	var forward_cone_angle = dir_to_base.angle() + randf_range(-0.50, 0.50)
-	var spawn_dist = randf_range(140.0, 240.0)
-	var squad_center = spawn_origin + Vector2.RIGHT.rotated(forward_cone_angle) * spawn_dist
+	var squad_center = spawn_origin + Vector2.RIGHT.rotated(dir_to_base.angle() + randf_range(-0.4, 0.4)) * 180.0
 
 	for unit_type in units:
 		enemy_count += 1
-		var offset = Vector2.RIGHT.rotated(randf() * TAU) * randf_range(15.0, 55.0)
-		var spawn_pos = squad_center + offset
-		
-		var enemy_data = {
+		var spawn_pos = squad_center + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(15.0, 50.0)
+		spawner.spawn({
 			"type": "enemy",
 			"name": "Enemy_" + str(enemy_count),
 			"enemy_type": unit_type,
 			"position": spawn_pos,
 			"is_objective_guard": false,
 			"counts_toward_wave": true
-		}
-		
-		if spawner:
-			spawner.spawn(enemy_data)
-			active_enemies += 1
-			enemies_left_to_spawn = max(0, enemies_left_to_spawn - 1)
+		})
+		active_enemies += 1
+		enemies_left_to_spawn = max(0, enemies_left_to_spawn - 1)
 			
 	_broadcast_wave_hud()
 
 func _begin_wave_spawning():
 	is_wave_active = true
 	_broadcast_wave_hud()
-	
 	if wave_timer == null:
 		wave_timer = Timer.new()
 		wave_timer.timeout.connect(_spawn_squad_tick)
 		add_child(wave_timer)
 		
-	var speed_up = 0.8 if get_active_totem_count() >= 3 else 1.0
-	wave_timer.wait_time = 1.5 * speed_up
+	wave_timer.wait_time = 1.5
 	wave_timer.start()
 
 func _spawn_squad_tick():
 	if not wave_squad_queue.is_empty():
 		var squad = wave_squad_queue.pop_front()
 		_spawn_tactical_squad(squad)
-		
 		if not wave_squad_queue.is_empty():
-			var next_squad = wave_squad_queue.front()
-			wave_timer.wait_time = next_squad["delay"]
+			wave_timer.wait_time = wave_squad_queue.front()["delay"]
 			wave_timer.start()
 		else:
 			wave_timer.stop()
@@ -774,484 +928,82 @@ func _spawn_squad_tick():
 func notify_enemy_defeated():
 	if multiplayer.is_server():
 		active_enemies = max(0, active_enemies - 1)
-		
 		if enemies_left_to_spawn <= 0 and active_enemies == 0 and is_wave_active:
 			is_wave_active = false
 			rpc("sync_incoming_threat_lanes", [])
-			rpc("sync_wave_info", current_wave, "◆ PERIMETER SECURED ◆ Re-arm and fortify (%ds)..." % int(WAVE_BREAK_DURATION))
-			
 			var break_tween = create_tween()
 			break_tween.tween_interval(WAVE_BREAK_DURATION)
 			break_tween.tween_callback(start_next_wave)
 
 func _build_spawn_lanes(wave: int, player_count: int) -> Array[float]:
-	var lanes: Array[float] = []
-	var primary_angle = randf() * TAU
-	lanes.append(primary_angle)
-
-	if wave >= 4:
-		var flank_offset = randf_range(PI * 0.35, PI * 0.65) * (1.0 if randf() > 0.5 else -1.0)
-		lanes.append(primary_angle + flank_offset)
-
-	if wave >= 8:
-		var rear_angle = primary_angle + PI + randf_range(-0.4, 0.4)
-		lanes.append(rear_angle)
-
-	if wave >= 12 and player_count >= 2:
-		lanes.append(primary_angle + PI * 0.5 + randf_range(-0.3, 0.3))
-
+	var lanes: Array[float] = [randf() * TAU]
+	if wave >= 4: lanes.append(lanes[0] + randf_range(1.2, 2.0))
+	if wave >= 8: lanes.append(lanes[0] + PI + randf_range(-0.4, 0.4))
 	return lanes
-
-# ===========================================================================
-# WAAAGH MECHANICS
-# ===========================================================================
-func notify_totem_destroyed():
-	call_deferred("_broadcast_wave_hud")
-
-func get_active_totem_count() -> int:
-	return get_tree().get_nodes_in_group("waaagh_totems").size()
-
-func get_waaagh_speed_multiplier() -> float:
-	var count = get_active_totem_count()
-	return 1.0 + (count * 0.12)
-
-func get_waaagh_damage_multiplier() -> float:
-	var count = get_active_totem_count()
-	return 1.0 + (count * 0.10)
-
-func _broadcast_wave_hud():
-	if not multiplayer.is_server(): return
-	
-	var totems = get_active_totem_count()
-	var spd_buff = int(totems * 12)
-	var dmg_buff = int(totems * 10)
-	var title = WAVE_NARRATIVE_TITLES[clampi(current_wave - 1, 0, WAVE_NARRATIVE_TITLES.size() - 1)]
-
-	rpc("sync_wave_telemetry",
-		current_wave,
-		max_waves,
-		title,
-		is_wave_preparing,
-		wave_prep_timer,
-		(not is_wave_active and not is_wave_preparing),
-		0.0,
-		active_enemies + enemies_left_to_spawn,
-		total_wave_enemies_cached,
-		totems,
-		spd_buff,
-		dmg_buff
-	)
-
-@rpc("call_local", "reliable")
-func sync_wave_telemetry(wave: int, max_w: int, title_txt: String, preparing: bool, prep_left: float, on_break: bool, break_left: float, contacts_active: int, contacts_total: int, totems: int, spd_buff: int, dmg_buff: int):
-	current_wave = wave
-	if not is_instance_valid(wave_hud_node):
-		wave_hud_node = get_tree().get_first_node_in_group("wave_hud")
-	if wave_hud_node and wave_hud_node.has_method("update_telemetry"):
-		wave_hud_node.update_telemetry(wave, max_w, title_txt, preparing, prep_left, on_break, break_left, contacts_active, contacts_total, totems, spd_buff, dmg_buff)
-
-# ==============================================================================
-# SQUAD FORMATION GENERATOR
-# ==============================================================================
 
 func _build_wave_squads(wave: int, player_count: int) -> Array[Dictionary]:
 	var threat_budget = int(round((14.0 + pow(wave, 1.36) * 6.2) * (1.0 + 0.65 * (player_count - 1))))
 	var squads: Array[Dictionary] = []
-	var lane_counter = 0
-	
 	while threat_budget > 0:
-		var available_squads = _get_available_squad_templates(wave)
+		var templates = _get_available_squad_templates(wave)
 		var affordable: Array[Dictionary] = []
-		
-		for t in available_squads:
-			if t["cost"] <= threat_budget:
-				affordable.append(t)
-				
-		if affordable.is_empty():
-			squads.append({
-				"lane": lane_counter % max(1, spawn_lane_angles.size()),
-				"units": [0, 0, 0],
-				"delay": 3.0
-			})
-			break
-			
+		for t in templates:
+			if t["cost"] <= threat_budget: affordable.append(t)
+		if affordable.is_empty(): break
 		var chosen = affordable.pick_random()
-		squads.append({
-			"lane": lane_counter % max(1, spawn_lane_angles.size()),
-			"units": chosen["units"].duplicate(),
-			"delay": chosen["delay"]
-		})
-		
+		squads.append({"units": chosen["units"].duplicate(), "delay": chosen["delay"]})
 		threat_budget -= chosen["cost"]
-		lane_counter += 1
-		
 	return squads
 
 func _get_available_squad_templates(wave: int) -> Array[Dictionary]:
-	var templates: Array[Dictionary] = []
-	
-	templates.append({
-		"name": "gretchin_swarm",
-		"cost": 6,
-		"units": [0, 0, 0, 0, 0, 0],
-		"delay": 3.5
-	})
-	
-	if wave >= 2:
-		templates.append({
-			"name": "squig_pack",
-			"cost": 8,
-			"units": [1, 1, 1, 1],
-			"delay": 4.0
-		})
-		
-	if wave >= 3:
-		templates.append({
-			"name": "boyz_squad",
-			"cost": 12,
-			"units": [2, 2, 0, 0, 0, 0],
-			"delay": 4.5
-		})
-		
-	if wave >= 6:
-		templates.append({
-			"name": "stormboy_raiders",
-			"cost": 12,
-			"units": [3, 3, 3, 1],
-			"delay": 5.0
-		})
-		
-	if wave >= 8:
-		templates.append({
-			"name": "nob_warband",
-			"cost": 20,
-			"units": [4, 2, 2, 0, 0, 0, 0],
-			"delay": 6.0
-		})
-		
-	if wave >= 11:
-		templates.append({
-			"name": "armored_column",
-			"cost": 28,
-			"units": [4, 4, 3, 3, 2, 1, 1],
-			"delay": 7.0
-		})
-		
-	return templates
+	var t: Array[Dictionary] = [{"cost": 6, "units": [0, 0, 0, 0, 0], "delay": 3.5}]
+	if wave >= 2: t.append({"cost": 8, "units": [1, 1, 1, 1], "delay": 4.0})
+	if wave >= 3: t.append({"cost": 12, "units": [2, 2, 0, 0], "delay": 4.5})
+	if wave >= 6: t.append({"cost": 14, "units": [3, 3, 3, 1], "delay": 5.0})
+	if wave >= 8: t.append({"cost": 20, "units": [4, 2, 2, 0], "delay": 6.0})
+	return t
 
-# --------------------------------------------------
-# GAME OVER & REMATCH
-# --------------------------------------------------
-
-func spawn_waaagh_idol() -> void:
-	if not multiplayer.is_server():
-		return
+func spawn_waaagh_idol():
+	if not multiplayer.is_server() or not spawner: return
 	objective_count += 1
 	var base_node = get_tree().get_first_node_in_group("base")
-	var center_pos = base_node.global_position if base_node else Vector2(500, 500)
-	
-	var camp_pos = center_pos + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(720.0, 1020.0)
-	
-	if spawner:
+	var center = base_node.global_position if base_node else Vector2(500, 500)
+	var camp_pos = center + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(720.0, 1020.0)
+
+	spawner.spawn({"type": "waaagh_idol", "name": "WaaaghIdol_" + str(objective_count), "position": camp_pos})
+	for i in range(6):
 		spawner.spawn({
-			"type": "waaagh_idol",
-			"name": "WaaaghIdol_" + str(objective_count),
-			"position": camp_pos
+			"type": "enemy", "name": "IdolGuard_" + str(randi()), "enemy_type": 0 if i % 2 == 0 else 1,
+			"position": camp_pos + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(40.0, 100.0),
+			"is_objective_guard": true, "guard_anchor": camp_pos, "counts_toward_wave": false
 		})
-		
-		var total_guards = 6 + int(current_wave * 0.5)
-		for i in range(total_guards):
-			var guard_type = 0
-			if i % 3 == 0: guard_type = 1
-			elif i % 5 == 0 and current_wave >= 6: guard_type = 2
-			spawn_objective_defender(camp_pos, guard_type)
 
-func spawn_objective_defender(objective_pos: Vector2, enemy_type: int) -> void:
-	if not spawner:
-		return
-	enemy_count += 1
-	var guard_position = objective_pos + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(45.0, 115.0)
-	spawner.spawn({
-		"type": "enemy",
-		"name": "IdolGuard_" + str(enemy_count),
-		"enemy_type": enemy_type,
-		"position": guard_position,
-		"is_objective_guard": true,
-		"guard_anchor": objective_pos,
-		"counts_toward_wave": false
-	})
+func notify_totem_destroyed():
+	_broadcast_wave_hud()
 
-func game_over(is_victory: bool):
-	if multiplayer.is_server():
-		if wave_timer: wave_timer.stop()
-		rpc("sync_game_over", is_victory)
+func get_active_totem_count() -> int:
+	return get_tree().get_nodes_in_group("waaagh_totems").size()
 
-@rpc("call_local", "reliable")
-func sync_game_over(is_victory: bool):
-	if game_over_ui:
-		game_over_ui.show()
-		
-	if bg_drawing_node:
-		bg_drawing_node.is_victory_screen = is_victory
-		bg_drawing_node.queue_redraw()
-		
-		var theme_color = Color("#2b6cb0")
-		
-		if is_victory:
-			title_label.text = "PRAISE THE OMNISSAH — VICTORY"
-			title_label.add_theme_color_override("font_color", Color("#48bb78"))
-			subtitle_label.text = "The facility successfully withstood all " + str(max_waves) + " waves of the xeno onslaught."
-			theme_color = Color("#22543d")
-		else:
-			title_label.text = "CRITICAL SYSTEM FAILURE — DEFEAT"
-			title_label.add_theme_color_override("font_color", Color("#f56565"))
-			subtitle_label.text = "The core breach occurred on Wave " + str(current_wave) + ". The base has fallen."
-			theme_color = Color("#742a2a")
-			
-		if game_over_panel and game_over_panel.has_theme_stylebox("panel"):
-			var sb = game_over_panel.get_theme_stylebox("panel").duplicate()
-			if sb is StyleBoxFlat:
-				sb.bg_color = theme_color
-				game_over_panel.add_theme_stylebox_override("panel", sb)
-
-func _on_restart_pressed():
-	rpc_id(1, "request_rematch")
-
-@rpc("any_peer", "call_local", "reliable")
-func request_rematch():
+func _broadcast_wave_hud():
 	if not multiplayer.is_server(): return
-	rpc("execute_rematch")
+	var title = WAVE_NARRATIVE_TITLES[clampi(current_wave - 1, 0, WAVE_NARRATIVE_TITLES.size() - 1)]
+	rpc("sync_wave_telemetry",
+		current_wave, max_waves, title, is_wave_preparing, wave_prep_timer,
+		(not is_wave_active and not is_wave_preparing), 0.0,
+		active_enemies + enemies_left_to_spawn, total_wave_enemies_cached
+	)
 
 @rpc("call_local", "reliable")
-func execute_rematch():
-	if game_over_ui: 
-		game_over_ui.hide()
-	
-	current_wave = 0
-	active_enemies = 0
-	enemies_left_to_spawn = 0
-	is_wave_active = false
-	is_wave_preparing = false
-	wave_spawn_queue.clear()
-	spawn_lane_angles.clear()
-	spawn_serial = 0
-	scrap_amount = 0
-	requisition_amount = 0
-	building_count = 0
-	wave_squad_queue.clear()
-	
-	tech_shields_unlocked = false
-	tech_lasers_unlocked = false
-	tech_nanobots_unlocked = false
-	tech_magnet_unlocked = false
-	tech_electro_barricades_unlocked = false
-	tech_spikes_cover_unlocked = false
-	
-	if multiplayer.is_server():
-		if wave_timer: 
-			wave_timer.stop()
-			
-		for enemy in get_tree().get_nodes_in_group("enemies"): enemy.queue_free()
-		for player in get_tree().get_nodes_in_group("players"): player.queue_free()
-		for building in get_tree().get_nodes_in_group("buildings"): building.queue_free()
-		for objective in get_tree().get_nodes_in_group("objectives"): objective.queue_free()
-		for bg in get_tree().get_nodes_in_group("bodyguards"): bg.queue_free()
-		for skull in get_tree().get_nodes_in_group("ServoSkull"): skull.queue_free()
-		for scrap in get_tree().get_nodes_in_group("scrap"): scrap.queue_free()
-		for dep in get_tree().get_nodes_in_group("scrap_deposits"): dep.queue_free()
-		for cit in get_tree().get_nodes_in_group("ork_citadel"): cit.queue_free()
-		for heap in get_tree().get_nodes_in_group("ork_structures"): heap.queue_free()
-		
-		var base = get_tree().get_first_node_in_group("base")
-		if base and base.has_method("sync_base_health"):
-			base.rpc("sync_base_health", base.max_health)
-		
-		rpc("sync_resources", scrap_amount, requisition_amount)
-		rpc("sync_tech_tree", false, false, false, false, false, false)
-		rpc("sync_base_radar_tier", 0)
-		rpc("sync_incoming_threat_lanes", [])
-		request_navmesh_rebake()
+func sync_wave_telemetry(wave: int, max_w: int, title_txt: String, preparing: bool, prep_left: float, on_break: bool, break_left: float, contacts_active: int, contacts_total: int):
+	current_wave = wave
+	if not is_instance_valid(wave_hud_node):
+		wave_hud_node = get_tree().get_first_node_in_group("wave_hud")
+	if wave_hud_node and wave_hud_node.has_method("update_telemetry"):
+		wave_hud_node.update_telemetry(wave, max_w, title_txt, preparing, prep_left, on_break, break_left, contacts_active, contacts_total)
 
-	match_started = false
-	for peer_id in player_ready.keys():
-		player_ready[peer_id] = false
-	is_ready = false
-	
-	_show_lobby_ui()
-	_set_session_text("Match reset. Ready up when the cadre is set.")
-	
-	if multiplayer.is_server():
-		_broadcast_lobby_state()
-		
-@rpc("call_local", "reliable")
-func sync_incoming_threat_lanes(lane_angles: Array):
-	get_tree().call_group("navigation_pointers", "set_threat_lanes", lane_angles)
-
-# --------------------------------------------------
-# CUSTOM SPAWNER
-# --------------------------------------------------
-
-func _custom_spawner(data) -> Node:
-	if typeof(data) == TYPE_ARRAY and data.size() > 0:
-		data = data[0]
-	if typeof(data) == TYPE_INT:
-		var player = player_scene.instantiate()
-		player.name = str(data)
-		if player.has_method("set_player_class"):
-			player.set_player_class(player.PlayerClass.MELEE if data == 1 else player.PlayerClass.RANGED)
-		
-		var base_node = get_tree().get_first_node_in_group("base")
-		var base_pos = base_node.global_position if base_node else Vector2.ZERO
-		player.position = base_pos + Vector2(-30.0 if data == 1 else 30.0, 100.0)
-		return player
-	elif typeof(data) == TYPE_DICTIONARY:
-		var object_type = data.get("type", "")
-		match object_type:
-			"player":
-				var player = player_scene.instantiate()
-				var peer_id = data["peer_id"]
-				player.name = str(peer_id)
-				
-				var selected_class = data.get("class", CharacterClass.ADMECH_TECHPRIEST)
-				var is_techpriest = (selected_class == CharacterClass.ADMECH_TECHPRIEST)
-				
-				if player.has_method("set_player_class"):
-					player.set_player_class(player.PlayerClass.MELEE if is_techpriest else player.PlayerClass.RANGED)
-				var base_node = get_tree().get_first_node_in_group("base")
-				var base_pos = base_node.global_position if base_node else Vector2.ZERO
-				
-				var x_offset = -30.0 if peer_id == 1 else 30.0
-				
-				if player_classes.size() > 2:
-					var player_index = player_classes.keys().find(peer_id)
-					if player_index != -1:
-						x_offset = (player_index * 50.0) - 50.0
-				player.position = base_pos + Vector2(x_offset, 100.0)
-				return player
-			"scrap_deposit":
-				var dep = StaticBody2D.new()
-				dep.set_script(load("res://ScrapDeposit.gd"))
-				dep.name = str(data["name"])
-				dep.position = data["position"]
-				return dep
-			"ork_citadel":
-				var cit = StaticBody2D.new()
-				cit.set_script(load("res://OrkCitadel.gd"))
-				cit.name = str(data["name"])
-				cit.position = data["position"]
-				return cit
-			"ork_scrap_heap":
-				var heap = StaticBody2D.new()
-				heap.set_script(load("res://OrkScrapHeap.gd"))
-				heap.name = str(data["name"])
-				heap.position = data["position"]
-				return heap
-			"enemy":
-				var enemy = enemy_scene.instantiate()
-				enemy.name = str(data["name"])
-				enemy.position = data["position"]
-				if "enemy_type" in data:
-					enemy.type = int(data["enemy_type"])
-				if "is_objective_guard" in data:
-					enemy.is_objective_guard = data["is_objective_guard"]
-				if "guard_anchor" in data:
-					enemy.guard_anchor = data["guard_anchor"]
-				if "counts_toward_wave" in data:
-					enemy.counts_toward_wave = data["counts_toward_wave"]
-				return enemy
-				
-			"bodyguard":
-				var bodyguard_scene = preload("res://SkitariiBodyguard.tscn")
-				var bg = bodyguard_scene.instantiate()
-				bg.name = str(data["name"])
-				bg.global_position = data["position"]
-				bg.set_multiplayer_authority(1)
-				
-				var owner_id = data["owner_id"]
-				var player_node = get_node_or_null(str(owner_id))
-				if player_node:
-					bg.player_owner = player_node
-					if "active_bodyguards" in player_node:
-						player_node.active_bodyguards.append(bg)
-						
-				return bg
-			"bullet":
-				var bullet = bullet_scene.instantiate()
-				bullet.name = str(data["name"])
-				bullet.position = data["position"]
-				bullet.direction = data["direction"]
-				bullet.rotation = data["direction"].angle()
-				if "damage" in data and "damage" in bullet:
-					bullet.damage = data["damage"]
-				if "is_enemy_bullet" in data and "is_enemy_bullet" in bullet:
-					bullet.is_enemy_bullet = data["is_enemy_bullet"]
-				return bullet
-			"building":
-				var building = building_scene.instantiate()
-				building.name = str(data["name"])
-				building.position = data["position"]
-				if "building_type" in data and "building_type" in building:
-					building.building_type = data["building_type"]
-				return building
-			"scrap":
-				var scrap = scrap_scene.instantiate()
-				scrap.name = str(data["name"])
-				scrap.position = data["position"]
-				return scrap
-			"waaagh_idol":
-				var idol = waaagh_idol_scene.instantiate()
-				idol.name = str(data["name"])
-				idol.position = data["position"]
-				return idol
-			"servo_skull":
-				var servoskull_scene = preload("res://ServoSkull.tscn")
-				var skull = servoskull_scene.instantiate()
-				skull.name = str(data["name"])
-				skull.global_position = data["position"]
-				skull.set_multiplayer_authority(1)
-				
-				var owner_id = data["owner_id"]
-				var player_node = get_node_or_null(str(owner_id))
-				if player_node:
-					skull.set_owner_player(player_node)
-					if "active_servo_skulls" in player_node:
-						player_node.active_servo_skulls.append(skull)
-						
-				return skull
-
-	return null
-
-func _spawn_map_scrap_deposits():
-	if not multiplayer.is_server() or not spawner: return
-	
-	var base_node = get_tree().get_first_node_in_group("base")
-	var base_pos = base_node.global_position if base_node else Vector2(500, 500)
-
-	var start_angles = [PI * 0.75, -PI * 0.25]
-	for i in range(start_angles.size()):
-		var angle = start_angles[i]
-		var dist = 240.0 + (i * 40.0)
-		var dep_pos = (base_pos + Vector2.RIGHT.rotated(angle) * dist).snapped(Vector2(32, 32))
-		spawner.spawn({
-			"type": "scrap_deposit",
-			"name": "ScrapDeposit_Start_" + str(i + 1),
-			"position": dep_pos
-		})
-
-	for i in range(5):
-		var angle = (float(i) * TAU / 5.0) + randf_range(-0.3, 0.3)
-		var dist = randf_range(650.0, 1050.0)
-		var dep_pos = (base_pos + Vector2.RIGHT.rotated(angle) * dist).snapped(Vector2(32, 32))
-		spawner.spawn({
-			"type": "scrap_deposit",
-			"name": "ScrapDeposit_Wild_" + str(i + 1),
-			"position": dep_pos
-		})
-
-# --------------------------------------------------
-# RESOURCE, TECH & BUILDING MANAGEMENT
-# --------------------------------------------------
-
+# ==============================================================================
+# 7. ECONOMY, RESEARCH & NETWORKING RPCS
+# ==============================================================================
 func add_scrap(amount: int):
 	scrap_amount += amount
 	rpc("sync_resources", scrap_amount, requisition_amount)
@@ -1266,7 +1018,38 @@ func spend_requisition(amount: int) -> bool:
 		rpc("sync_resources", scrap_amount, requisition_amount)
 		return true
 	return false
+
+@rpc("call_local", "reliable")
+func sync_resources(scrap: int, requisition: int):
+	scrap_amount = scrap
+	requisition_amount = requisition
+
+@rpc("any_peer", "call_local", "reliable")
+func request_sanctum_research(tech_id: int):
+	if not multiplayer.is_server(): return
+	if tech_id < 0 or tech_id >= GameData.SANCTUM_TECH.size(): return
 	
+	var info = GameData.SANCTUM_TECH[tech_id]
+	if scrap_amount >= info.scrap and requisition_amount >= info.req:
+		scrap_amount -= info.scrap
+		requisition_amount -= info.req
+		
+		match tech_id:
+			0: base_radar_level = 1
+			1: tech_waaagh_reader_unlocked = true
+			2: base_radar_level = 2
+			3: base_radar_level = 3
+			
+		rpc("sync_resources", scrap_amount, requisition_amount)
+		rpc("sync_sanctum_tech", base_radar_level, tech_waaagh_reader_unlocked)
+		AudioManager.play_sfx("building_place", Vector2.ZERO, 3.0, 1.4)
+
+@rpc("call_local", "reliable")
+func sync_sanctum_tech(radar_lvl: int, waaagh_reader: bool):
+	base_radar_level = radar_lvl
+	tech_waaagh_reader_unlocked = waaagh_reader
+	get_tree().call_group("base_upgrade_ui", "_refresh_cards")
+
 func unlock_tech(tech_index: int):
 	match tech_index:
 		0: tech_shields_unlocked = true
@@ -1278,7 +1061,7 @@ func unlock_tech(tech_index: int):
 	rpc("sync_tech_tree", tech_shields_unlocked, tech_lasers_unlocked, tech_nanobots_unlocked, tech_magnet_unlocked, tech_electro_barricades_unlocked, tech_spikes_cover_unlocked)
 
 @rpc("call_local", "reliable")
-func sync_tech_tree(shields: bool, lasers: bool, nanobots: bool, magnet: bool = false, electro_walls: bool = false, spikes_cover: bool = false):
+func sync_tech_tree(shields: bool, lasers: bool, nanobots: bool, magnet: bool, electro_walls: bool, spikes_cover: bool):
 	tech_shields_unlocked = shields
 	tech_lasers_unlocked = lasers
 	tech_nanobots_unlocked = nanobots
@@ -1289,79 +1072,10 @@ func sync_tech_tree(shields: bool, lasers: bool, nanobots: bool, magnet: bool = 
 	get_tree().call_group("research_ui", "refresh_tech_cards")
 
 @rpc("any_peer", "call_local", "reliable")
-func request_upgrade_gate(building_name: String) -> void:
-	if not multiplayer.is_server(): return
-	var building = _find_building_by_name(building_name)
-	if is_instance_valid(building) and building.has_method("try_upgrade_to_gate"):
-		building.try_upgrade_to_gate()
-
-@rpc("any_peer", "call_local", "reliable")
-func request_specialize_turret(building_name: String, spec_id: int) -> void:
-	if not multiplayer.is_server(): return
-	var building = _find_building_by_name(building_name)
-	if is_instance_valid(building) and building.has_method("try_specialize_turret"):
-		building.try_specialize_turret(spec_id)
-
-@rpc("any_peer", "call_local", "reliable")
-func request_upgrade_turret(building_name: String) -> void:
-	if not multiplayer.is_server(): return
-	var sender_id = multiplayer.get_remote_sender_id()
-	if sender_id == 0: sender_id = 1
-	var player = get_node_or_null(str(sender_id)) as Node2D
-	var building = _find_building_by_name(building_name)
-
-	if not is_instance_valid(player) or not is_instance_valid(building):
-		return
-	if not ("building_type" in building and int(building.building_type) == 2):
-		return
-	if player.global_position.distance_to(building.global_position) > 120.0:
-		return
-	if building.has_method("try_upgrade_turret"):
-		building.try_upgrade_turret()
-
-@rpc("any_peer", "call_local", "reliable")
-func request_upgrade_distributor(building_name: String) -> void:
-	if not multiplayer.is_server(): return
-	var building = _find_building_by_name(building_name)
-	if is_instance_valid(building) and building.has_method("try_upgrade_distributor"):
-		building.try_upgrade_distributor()
-		
-@rpc("any_peer", "call_local", "reliable")
-func request_purchase_research(building_name: String, tech_index: int) -> void:
-	if not multiplayer.is_server(): return
-	var building = _find_building_by_name(building_name)
-	if is_instance_valid(building) and int(building.get("building_type")) == 6:
-		if building.has_method("try_purchase_research"):
-			building.try_purchase_research(tech_index)
-
-func _find_building_by_name(b_name: String) -> Node2D:
-	if has_node(b_name): return get_node(b_name) as Node2D
-	for b in get_tree().get_nodes_in_group("buildings"):
-		if is_instance_valid(b) and b.name == b_name: return b
-	return null
-
-@rpc("call_local", "reliable")
-func sync_resources(scrap: int, requisition: int):
-	scrap_amount = scrap
-	requisition_amount = requisition
-	if resource_label:
-		resource_label.text = "⚙ %d SCRAP   ⚡ %d REQ" % [scrap_amount, requisition_amount]
-		resource_label.add_theme_color_override("font_color", Color(0.95, 0.85, 0.5))
-
-@rpc("call_local", "reliable")
-func sync_wave_info(wave_number: int, message: String):
-	current_wave = wave_number
-	if wave_info_label:
-		wave_info_label.text = message
-
-@rpc("any_peer", "call_local", "reliable")
 func request_build_structure(build_pos: Vector2, building_type: int = 0):
-	if not multiplayer.is_server():
-		return
-		
+	if not multiplayer.is_server(): return
 	var info = GameData.STRUCTURE_INFO.get(building_type, null)
-	if not info:
-		return
+	if not info: return
 
 	var scrap_c = info["scrap"]
 	var req_c = info["req"]
@@ -1369,63 +1083,188 @@ func request_build_structure(build_pos: Vector2, building_type: int = 0):
 	if scrap_amount >= scrap_c and requisition_amount >= req_c:
 		scrap_amount -= scrap_c
 		requisition_amount -= req_c
-		
 		rpc("sync_resources", scrap_amount, requisition_amount)
 		
 		building_count += 1
-		var building_data = {
+		spawner.spawn({
 			"type": "building",
 			"name": "Building_" + str(building_count),
 			"position": build_pos,
 			"building_type": building_type
-		}
+		})
 		
-		if spawner:
-			spawner.spawn(building_data)
-			get_tree().call_group("buildings", "refresh_barricade_connections")
-			request_navmesh_rebake()
+		if building_type == 0:
+			Building.rebuild_all_barricade_connections(get_tree())
+		request_navmesh_rebake()
 
-func request_navmesh_rebake() -> void:
-	update_navmesh()
-
-func update_navmesh():
-	if not nav_region:
-		nav_region = get_node_or_null("NavigationRegion2D")
-		
+func request_navmesh_rebake():
 	if nav_region:
-		nav_region.call_deferred("bake_navigation_polygon", true)
+		nav_region.bake_navigation_polygon(true)
 
-# --------------------------------------------------
-# NETWORK SIGNALS
-# --------------------------------------------------
+# --- PAUSE SYNCHRONIZATION ---
+@rpc("any_peer", "call_local", "reliable")
+func request_set_player_paused(is_paused: bool):
+	if not multiplayer.is_server(): return
+	var sender_id = multiplayer.get_remote_sender_id()
+	if sender_id == 0: sender_id = 1
 
-func _on_peer_connected(id: int):
-	if not multiplayer.is_server():
-		return
-	if not player_classes.has(id):
-		player_classes[id] = CharacterClass.SKITARII_MARSHAL
-		player_ready[id] = false
-	if match_started:
-		spawn_player(id)
-		var current_msg = "WAVE " + str(current_wave) + "/" + str(max_waves) if is_wave_active else "PERIMETER ARMED"
-		rpc_id(id, "sync_wave_info", current_wave, current_msg)
-		rpc_id(id, "sync_resources", scrap_amount, requisition_amount)
-		rpc_id(id, "sync_match_started")
+	if is_paused: active_paused_peers[sender_id] = true
+	else: active_paused_peers.erase(sender_id)
+
+	var should_pause = not active_paused_peers.is_empty()
+	rpc("sync_global_pause", should_pause)
+
+@rpc("call_local", "reliable")
+func sync_global_pause(is_paused: bool):
+	get_tree().paused = is_paused
+	get_tree().call_group("pause_menu", "update_global_pause_state", is_paused)
+
+@rpc("call_local", "reliable")
+func trigger_wave_alert_sfx():
+	AudioManager.play_sfx("klaxon_alert", Vector2.ZERO, 3.0, 1.0)
+
+@rpc("call_local", "reliable")
+func sync_incoming_threat_lanes(lane_angles: Array):
+	get_tree().call_group("navigation_pointers", "set_threat_lanes", lane_angles)
+
+# ==============================================================================
+# GAME OVER & REMATCH
+# ==============================================================================
+func game_over(is_victory: bool):
+	if multiplayer.is_server() or not multiplayer.has_multiplayer_peer():
+		if wave_timer: wave_timer.stop()
+		rpc("sync_game_over", is_victory)
+
+@rpc("call_local", "reliable")
+func sync_game_over(is_victory: bool):
+	# 1. Hide in-game HUDs
+	var a_hud = get_tree().get_first_node_in_group("ability_hud")
+	if a_hud: a_hud.hide()
+	var w_hud = get_tree().get_first_node_in_group("wave_hud")
+	if w_hud: w_hud.hide()
+	var m_ui = get_tree().get_first_node_in_group("minimap_ui")
+	if m_ui: m_ui.hide()
+
+	# 2. Close Pause Menu if open
+	var p_ui = get_tree().get_first_node_in_group("pause_menu")
+	if p_ui: p_ui.hide()
+
+	# 3. Show Dedicated Game Over UI
+	_show_game_over_screen(is_victory)
+
+func _show_game_over_screen(is_victory: bool):
+	var go_ui = get_node_or_null("%GameOverUI")
+	if not go_ui:
+		# If unique name not found, search in UI layer
+		go_ui = $UI.get_node_or_null("GameOverUI")
+
+	if go_ui:
+		go_ui.show()
+
+		var title_lbl = go_ui.get_node_or_null("%TitleLabel")
+		var sub_lbl = go_ui.get_node_or_null("%SubtitleLabel")
+		var bg_draw = go_ui.get_node_or_null("%BackgroundDrawingNode")
+
+		if is_victory:
+			if title_lbl:
+				title_lbl.text = "◆ PRAISE THE OMNISSIAH — VICTORY ◆"
+				title_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
+			if sub_lbl:
+				sub_lbl.text = "The facility successfully withstood all %d waves of the xeno onslaught." % max_waves
+		else:
+			if title_lbl:
+				title_lbl.text = "◆ CRITICAL SYSTEM FAILURE — DEFEAT ◆"
+				title_lbl.add_theme_color_override("font_color", Color(0.92, 0.22, 0.18))
+			if sub_lbl:
+				sub_lbl.text = "Core breach occurred on Wave %d. The base has fallen." % current_wave
+
+		if bg_draw:
+			bg_draw.set("is_victory_screen", is_victory)
+			bg_draw.queue_redraw()
+
+		var restart_btn = go_ui.get_node_or_null("%RestartButton")
+		if restart_btn and not restart_btn.pressed.is_connected(_on_restart_pressed):
+			restart_btn.pressed.connect(_on_restart_pressed)
+
+func _on_restart_pressed():
+	if not multiplayer.has_multiplayer_peer():
+		execute_rematch()
+	elif multiplayer.is_server():
+		rpc("execute_rematch")
 	else:
-		_broadcast_lobby_state()
+		rpc_id(1, "request_rematch")
 
-func _on_connected_to_server():
-	_set_session_text("Linked. Select a class and Ready when the cadre is set.")
-	_update_ready_button()
-	_sync_lobby_loadout()
+@rpc("any_peer", "call_local", "reliable")
+func request_rematch():
+	if not multiplayer.is_server(): return
+	rpc("execute_rematch")
 
-func _on_peer_disconnected(id: int):
-	player_classes.erase(id)
-	player_ready.erase(id)
-	active_paused_peers.erase(id)
+@rpc("authority", "call_local", "reliable")
+func execute_rematch():
+	# 1. Unpause the game tree
+	get_tree().paused = false
+	active_paused_peers.clear()
+
+	# 2. Hide Game Over & Pause UIs
+	var go_ui = get_node_or_null("%GameOverUI")
+	if not go_ui and has_node("UI/GameOverUI"): go_ui = $UI/GameOverUI
+	if go_ui: go_ui.hide()
+
+	var p_ui = get_tree().get_first_node_in_group("pause_menu")
+	if p_ui: p_ui.hide()
+
+	var a_hud = get_tree().get_first_node_in_group("ability_hud")
+	if a_hud: a_hud.hide()
+
+	# 3. Reset Game State
+	current_wave = 0
+	active_enemies = 0
+	enemies_left_to_spawn = 0
+	is_wave_active = false
+	is_wave_preparing = false
+	scrap_amount = 40
+	requisition_amount = 10
+	building_count = 0
+	base_radar_level = 0
+	tech_waaagh_reader_unlocked = false
+	
+	tech_shields_unlocked = false
+	tech_lasers_unlocked = false
+	tech_nanobots_unlocked = false
+	tech_magnet_unlocked = false
+	tech_electro_barricades_unlocked = false
+	tech_spikes_cover_unlocked = false
+
+	# 4. Clean up all entities on Server / Host
+	if multiplayer.is_server() or not multiplayer.has_multiplayer_peer():
+		if wave_timer: wave_timer.stop()
+		for enemy in get_tree().get_nodes_in_group("enemies"): enemy.queue_free()
+		for player in get_tree().get_nodes_in_group("players"): player.queue_free()
+		for building in get_tree().get_nodes_in_group("buildings"): building.queue_free()
+		for objective in get_tree().get_nodes_in_group("objectives"): objective.queue_free()
+		for bg in get_tree().get_nodes_in_group("bodyguards"): bg.queue_free()
+		for skull in get_tree().get_nodes_in_group("ServoSkull"): skull.queue_free()
+		for scrap in get_tree().get_nodes_in_group("scrap"): scrap.queue_free()
+		for dep in get_tree().get_nodes_in_group("scrap_deposits"): dep.queue_free()
+		for cit in get_tree().get_nodes_in_group("ork_citadel"): cit.queue_free()
+		for heap in get_tree().get_nodes_in_group("ork_structures"): heap.queue_free()
+
+		var base = get_tree().get_first_node_in_group("base")
+		if base and base.has_method("sync_base_health"):
+			base.sync_base_health(base.max_health)
+			
+		rpc("sync_resources", scrap_amount, requisition_amount)
+		rpc("sync_sanctum_tech", 0, false)
+		rpc("sync_tech_tree", false, false, false, false, false, false)
+		request_navmesh_rebake()
+
+	# 5. Return to Lobby
+	match_started = false
+	is_ready = false
+	for peer_id in player_ready.keys():
+		player_ready[peer_id] = false
+
+	_show_lobby_ui()
+	_set_session_text("Cadre standing by. Select class and Ready Up.")
 	if multiplayer.is_server():
-		var should_pause = not active_paused_peers.is_empty()
-		rpc("sync_global_pause", should_pause)
-		if not match_started: _broadcast_lobby_state()
-	if has_node(str(id)):
-		get_node(str(id)).queue_free()
+		_broadcast_lobby_state()

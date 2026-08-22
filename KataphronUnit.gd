@@ -64,6 +64,7 @@ func _physics_process(delta: float) -> void:
 		if health_bar and health_bar.has_method("update_health"):
 			health_bar.update_health(current_health, max_health)
 
+	# 1. Engaging a Target
 	if is_instance_valid(current_attack_target):
 		var dist = global_position.distance_to(current_attack_target.global_position)
 		is_facing_left = (current_attack_target.global_position.x < global_position.x)
@@ -73,6 +74,7 @@ func _physics_process(delta: float) -> void:
 		else:
 			velocity = global_position.direction_to(current_attack_target.global_position) * movement_speed
 
+	# 2. Marching / Attack-Walking
 	elif is_rts_moving:
 		if is_attack_moving:
 			var threat = _find_best_target(attack_range + 30.0)
@@ -88,6 +90,7 @@ func _physics_process(delta: float) -> void:
 			is_attack_moving = false
 			velocity = Vector2.ZERO
 
+	# 3. Autonomous Guard & Sentry State
 	else:
 		velocity = velocity.move_toward(Vector2.ZERO, movement_speed * 6.0 * delta)
 		var threat = _find_best_target(attack_range if has_received_player_order else 220.0)
@@ -109,8 +112,20 @@ func _physics_process(delta: float) -> void:
 					velocity = global_position.direction_to(p.global_position) * movement_speed
 					is_facing_left = (velocity.x < -0.1)
 
+	# Soft Friendly Separation & Movement
+	velocity += _calculate_friendly_separation() * 45.0
 	move_and_slide()
-	rpc("sync_unit_state", global_position, is_facing_left, tread_anim)
+	if multiplayer.has_multiplayer_peer():
+		rpc("sync_unit_state", global_position, is_facing_left, tread_anim)
+
+func _calculate_friendly_separation() -> Vector2:
+	var push = Vector2.ZERO
+	for u in get_tree().get_nodes_in_group("friendlies"):
+		if is_instance_valid(u) and u != self:
+			var d = global_position.distance_to(u.global_position)
+			if d < 32.0 and d > 0.1:
+				push += (global_position - u.global_position).normalized() * (1.0 - (d / 32.0))
+	return push
 
 func _execute_attack(target: Node2D):
 	can_attack = false
@@ -137,6 +152,7 @@ func set_initial_rally(target_pos: Vector2) -> void:
 
 func rts_move_to(pos: Vector2, is_attack_move: bool = false) -> void:
 	has_received_player_order = true
+	rally_anchor = pos # Update new defensive station to destination
 	rts_target_pos = pos
 	is_rts_moving = true
 	is_attack_moving = is_attack_move

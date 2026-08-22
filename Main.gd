@@ -815,6 +815,33 @@ func request_queue_cohort_unit(building_name: String, unit_type_id: int):
 		target_building.try_queue_unit(unit_type_id)
 
 @rpc("any_peer", "call_local", "reliable")
+func request_upgrade_gate(building_name: String):
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
+	var b = _find_building_by_name(building_name)
+	if is_instance_valid(b) and b.has_method("try_upgrade_to_gate"):
+		b.try_upgrade_to_gate()
+
+@rpc("any_peer", "call_local", "reliable")
+func request_upgrade_turret(building_name: String):
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
+	var b = _find_building_by_name(building_name)
+	if is_instance_valid(b) and b.has_method("try_upgrade_turret"):
+		b.try_upgrade_turret()
+
+@rpc("any_peer", "call_local", "reliable")
+func request_upgrade_distributor(building_name: String):
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
+	var b = _find_building_by_name(building_name)
+	if is_instance_valid(b) and b.has_method("try_upgrade_distributor"):
+		b.try_upgrade_distributor()
+
+func _find_building_by_name(b_name: String) -> Node2D:
+	for b in get_tree().get_nodes_in_group("buildings"):
+		if is_instance_valid(b) and b.name == b_name:
+			return b
+	return get_node_or_null(b_name)
+
+@rpc("any_peer", "call_local", "reliable")
 func request_set_rally_point(building_name: String, rally_pos: Vector2):
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
 	var target_building = null
@@ -1070,6 +1097,13 @@ func _broadcast_wave_hud():
 			active_enemies + enemies_left_to_spawn, total_wave_enemies_cached
 		)
 
+@rpc("any_peer", "call_local", "reliable")
+func request_specialize_turret(building_name: String, spec_id: int):
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
+	var b = _find_building_by_name(building_name)
+	if is_instance_valid(b) and b.has_method("try_specialize_turret"):
+		b.try_specialize_turret(spec_id)
+
 @rpc("call_local", "reliable")
 func sync_wave_telemetry(wave: int, max_w: int, title_txt: String, preparing: bool, prep_left: float, on_break: bool, break_left: float, contacts_active: int, contacts_total: int):
 	current_wave = wave
@@ -1100,6 +1134,13 @@ func spend_requisition(amount: int) -> bool:
 func sync_resources(scrap: int, requisition: int):
 	scrap_amount = scrap
 	requisition_amount = requisition
+
+@rpc("any_peer", "call_local", "reliable")
+func request_purchase_research(building_name: String, tech_id: int):
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
+	var b = _find_building_by_name(building_name)
+	if is_instance_valid(b) and b.has_method("try_purchase_research"):
+		b.try_purchase_research(tech_id)
 
 @rpc("any_peer", "call_local", "reliable")
 func request_sanctum_research(tech_id: int):

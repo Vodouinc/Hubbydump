@@ -3,6 +3,8 @@ class_name AbilityHUD
 
 var local_player: Node2D = null
 var update_accumulator: float = 0.0
+var context_banner: PanelContainer = null
+var context_label: Label = null
 const UPDATE_INTERVAL: float = 0.06
 
 # Theme Colors
@@ -63,6 +65,7 @@ func _build_hud_layout():
 		c.queue_free()
 
 	_build_top_left_resource_monitor()
+	_build_context_interaction_banner() # <-- Add this line
 
 	tooltip_card = TooltipCard.new()
 	tooltip_card.name = "TooltipCard"
@@ -160,6 +163,39 @@ func _build_hud_layout():
 		slot.mouse_exited.connect(_on_slot_unhovered)
 		augment_hbox.add_child(slot)
 		augment_buttons.append(slot)
+
+func _build_context_interaction_banner():
+	context_banner = PanelContainer.new()
+	context_banner.name = "ContextInteractionBanner"
+	context_banner.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	context_banner.offset_left = -340
+	context_banner.offset_right = 340
+	context_banner.offset_top = -118
+	context_banner.offset_bottom = -88
+	context_banner.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	context_banner.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	context_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0.04, 0.05, 0.08, 0.95)
+	sb.border_color = Color(0.20, 0.88, 1.0)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(4)
+	sb.content_margin_left = 14
+	sb.content_margin_right = 14
+	sb.content_margin_top = 4
+	sb.content_margin_bottom = 4
+	context_banner.add_theme_stylebox_override("panel", sb)
+	add_child(context_banner)
+
+	context_label = Label.new()
+	context_label.name = "ContextLabel"
+	context_label.text = ""
+	context_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	context_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	context_label.add_theme_font_size_override("font_size", 10)
+	context_banner.add_child(context_label)
+	context_banner.hide()
 
 # Dedicated Top-Left Resource Auspex Monitor
 func _build_top_left_resource_monitor():
@@ -422,6 +458,74 @@ func refresh_hud_display():
 
 	if not hovered_slot_data.is_empty() and tooltip_card and tooltip_card.visible:
 		tooltip_card.set_data(hovered_slot_data, cur_scrap, cur_req)
+
+	_update_context_banner_display(is_techpriest, cur_scrap, cur_req)
+
+func _update_context_banner_display(is_techpriest: bool, cur_scrap: int, cur_req: int):
+	if not is_instance_valid(context_banner) or not is_techpriest:
+		if is_instance_valid(context_banner): context_banner.hide()
+		return
+
+	var b = local_player.hovered_interact_building if "hovered_interact_building" in local_player else null
+	if not is_instance_valid(b) or local_player.get("is_building_mode"):
+		context_banner.hide()
+		return
+
+	var prompt_text = ""
+	var can_afford = true
+
+	if b.is_in_group("base"):
+		prompt_text = "◆ MAIN SANCTUM: PRESS [E] TO ACCESS AUSPEX PROTOCOLS ◆"
+	else:
+		var b_type = int(b.building_type) if "building_type" in b else -1
+		match b_type:
+			0: # Barricade -> Gate
+				if b.get("is_gate"):
+					prompt_text = "◆ MOTORIZED GATE: PROXIMITY SENSOR OPERATIONAL ◆"
+				else:
+					can_afford = (cur_scrap >= 10 and cur_req >= 5)
+					prompt_text = "◆ BARRICADE: PRESS [E] TO UPGRADE TO MOTORIZED GATE (⚙ 10 SCRAP   ⚡ 5 REQ) ◆"
+
+			1: # Generator
+				prompt_text = "◆ PLASMA DYNAMO: GENERATING +2 REQUISITION / CYCLE ◆"
+
+			2: # Turret
+				var lvl = b.turret_upgrade_level if "turret_upgrade_level" in b else 0
+				var spec = b.turret_spec if "turret_spec" in b else 0
+				if lvl < 3:
+					var cost = GameData.TURRET_UPGRADE_COSTS[lvl]
+					can_afford = (cur_req >= cost)
+					prompt_text = "◆ COGNIS BATTERY (TIER %d): PRESS [E] TO UPGRADE (⚡ %d REQ) ◆" % [lvl + 1, cost]
+				elif spec == 0:
+					can_afford = (cur_req >= GameData.TURRET_SPEC_REQ_COST)
+					prompt_text = "◆ COGNIS BATTERY (MAX): PRESS [E] TO SANCTIFY WEAPON PROTOCOL (⚡ 35 REQ) ◆"
+				else:
+					var spec_info = GameData.TURRET_SPEC_INFO.get(spec, {})
+					prompt_text = "◆ %s: SPECIALIZATION ACTIVE ◆" % spec_info.get("name", "COGNIS BATTERY").to_upper()
+
+			3: # Smelter
+				prompt_text = "◆ PROMETHEUM SMELTER: EXTRACTING +5 SCRAP / CYCLE ◆"
+
+			4: # Distributor -> Antenna
+				can_afford = (cur_req >= 15)
+				prompt_text = "◆ ELECTRO-RELAY: PRESS [E] TO UPGRADE TO ANTENNA MAST (⚡ 15 REQ) ◆"
+
+			5: # Antenna
+				prompt_text = "◆ NOOSPHERE MAST: BROADCASTING MOTIVE FORCE GRID (240px) ◆"
+
+			6: # Tech Shrine
+				prompt_text = "◆ TECH SHRINE: PRESS [E] TO ACCESS NOOSPHERE RESEARCH ARCHIVES ◆"
+
+			7: # Cybernetica Forge
+				prompt_text = "◆ LEGIO CYBERNETICA: PRESS [E] TO ACCESS COHORT FABRICATION TERMINAL ◆"
+
+	if prompt_text.is_empty():
+		context_banner.hide()
+		return
+
+	context_label.text = prompt_text
+	context_label.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0) if can_afford else Color(0.92, 0.22, 0.18))
+	context_banner.show()
 
 func _populate_slot(slot: CompactSlot, data: Dictionary, cur_scrap: int, cur_req: int):
 	if data.is_empty():

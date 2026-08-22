@@ -88,6 +88,12 @@ func _ready():
 		health_bar.setup(current_health, max_health)
 	update_ui()
 
+	# Auto-set Cybernetica Forge rally point to Main Base Sanctum
+	if building_type == Type.CYBERNETICA_FORGE and rally_point_world == Vector2.ZERO:
+		var base_node = get_tree().get_first_node_in_group("base")
+		if is_instance_valid(base_node):
+			rally_point_world = base_node.global_position + Vector2(0, 60)
+
 	if turret_timer and not turret_timer.timeout.is_connected(_on_turret_timer_timeout):
 		turret_timer.timeout.connect(_on_turret_timer_timeout)
 	if gen_timer and not gen_timer.timeout.is_connected(_on_gen_timer_timeout):
@@ -223,11 +229,14 @@ func _spawn_manufactured_unit(unit_type_id: int):
 			main_node.add_child(unit_node)
 
 	if is_instance_valid(unit_node):
-		var target_loc = rally_point_world if rally_point_world != Vector2.ZERO else (global_position + Vector2(0, 60))
+		var base_node = get_tree().get_first_node_in_group("base")
+		var fallback_target = base_node.global_position + Vector2(0, 60) if is_instance_valid(base_node) else (global_position + Vector2(0, 60))
+		var target_loc = rally_point_world if rally_point_world != Vector2.ZERO else fallback_target
+
 		if unit_node.has_method("set_initial_rally"):
 			unit_node.set_initial_rally(target_loc)
 		elif unit_node.has_method("rts_move_to"):
-			unit_node.rts_move_to(target_loc, true) # true = attack-move
+			unit_node.rts_move_to(target_loc, true)
 
 func try_queue_unit(unit_id: int) -> bool:
 	if building_type != Type.CYBERNETICA_FORGE: return false
@@ -665,8 +674,8 @@ func sync_turret_rotation(rot: float):
 
 func _find_closest_enemy() -> Node2D:
 	var enemies = get_tree().get_nodes_in_group("enemies")
-	var closest_target = null
-	var closest_dist = GameData.TURRET_RANGE_BY_LEVEL[turret_upgrade_level]
+	var closest_target: Node2D = null
+	var closest_dist: float = GameData.TURRET_RANGE_BY_LEVEL[turret_upgrade_level]
 	for enemy in enemies:
 		if is_instance_valid(enemy):
 			var dist = global_position.distance_to(enemy.global_position)

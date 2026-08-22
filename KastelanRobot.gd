@@ -107,6 +107,7 @@ func _physics_process(delta: float) -> void:
 	rpc("sync_transform", global_position, is_facing_left, int(active_protocol))
 
 func _process_escort_behavior(delta: float, is_conqueror: bool) -> void:
+	# 1. Moving to ordered RTS destination
 	if is_rts_moving:
 		var dist_to_rts = global_position.distance_to(rts_target_pos)
 		if dist_to_rts > 15.0:
@@ -115,28 +116,74 @@ func _process_escort_behavior(delta: float, is_conqueror: bool) -> void:
 		else:
 			is_rts_moving = false
 			velocity = Vector2.ZERO
+			# Lock position as a sentry anchor if manually ordered
+			if has_received_player_order:
+				anchor_position = global_position
+				active_protocol = Protocol.ANCHOR_SIEGE
 		
-		var nearby = _find_nearest_enemy(240.0)
+		velocity += _calculate_friendly_separation() * 50.0
+		var nearby = _find_best_target(240.0)
 		if is_instance_valid(nearby):
 			_engage_enemy(nearby, is_conqueror)
 		return
-	# Lead the Marshal by 40px in front to act as mobile ballistic cover
+
+	# 2. If given a manual order, hold ground and shoot threats
+	if has_received_player_order:
+		velocity = velocity.move_toward(Vector2.ZERO, movement_speed * 4.0 * delta)
+		var nearby_enemy = _find_best_target(320.0)
+		if is_instance_valid(nearby_enemy):
+			_engage_enemy(nearby_enemy, is_conqueror)
+		return
+
+	# 3. Autonomous Follow Player (Only if no manual player order was given)
 	var player_facing = Vector2.RIGHT
-	if player_owner.get("visual_sprite"):
+	if is_instance_valid(player_owner) and player_owner.get("visual_sprite"):
 		player_facing = Vector2.RIGHT.rotated(player_owner.visual_sprite.global_rotation)
 
-	var lead_target = player_owner.global_position + (player_facing * 42.0)
+	var flank_offset = player_facing.orthogonal() * (55.0 if get_instance_id() % 2 == 0 else -55.0)
+	var lead_target = player_owner.global_position + flank_offset - (player_facing * 10.0) if is_instance_valid(player_owner) else global_position
 	var dist = global_position.distance_to(lead_target)
 
-	if dist > 20.0:
+	if dist > 25.0:
 		velocity = global_position.direction_to(lead_target) * movement_speed
+		is_facing_left = (velocity.x < -0.1)
 	else:
 		velocity = velocity.move_toward(Vector2.ZERO, movement_speed * 4.0 * delta)
 
-	# Defensively engage nearby threats
-	var nearby_enemy = _find_nearest_enemy(240.0)
-	if is_instance_valid(nearby_enemy):
-		_engage_enemy(nearby_enemy, is_conqueror)
+	velocity += _calculate_friendly_separation() * 60.0
+
+	var enemy_threat = _find_best_target(240.0)
+	if is_instance_valid(enemy_threat):
+		_engage_enemy(enemy_threat, is_conqueror)
+
+func _calculate_friendly_separation() -> Vector2:
+	var push = Vector2.ZERO
+	for u in get_tree().get_nodes_in_group("friendlies"):
+		if is_instance_valid(u) and u != self:
+			var d = global_position.distance_to(u.global_position)
+			if d < 36.0 and d > 0.1:
+				push += (global_position - u.global_position).normalized() * (1.0 - (d / 36.0))
+	return push
+
+func _find_best_target(max_d: float) -> Node2D:
+	var enemies = get_tree().get_nodes_in_group("enemies")
+	var best_target: Node2D = null
+	var min_d = max_d
+
+	for e in enemies:
+		if is_instance_valid(e) and not e.is_queued_for_deletion():
+			if e.get("has_telemetry_mark"):
+				var d = global_position.distance_to(e.global_position)
+				if d <= max_d * 1.35:
+					return e
+
+	for e in enemies:
+		if is_instance_valid(e) and not e.is_queued_for_deletion():
+			var d = global_position.distance_to(e.global_position)
+			if d < min_d:
+				min_d = d
+				best_target = e
+	return best_target
 
 func set_initial_rally(target_pos: Vector2) -> void:
 	rally_anchor = target_pos

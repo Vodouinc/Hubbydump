@@ -1,8 +1,6 @@
 extends Control
 class_name ResearchUI
 
-const GameData = preload("res://GameData.gd")
-
 var panel_container: PanelContainer = null
 var cards_grid: GridContainer = null
 var active_shrine_node: Node2D = null
@@ -53,7 +51,6 @@ func _build_ui_layout():
 	title.add_theme_font_size_override("font_size", 16)
 	vbox.add_child(title)
 
-	# 3-Column Grid for all 6 Tech Upgrades
 	var grid = GridContainer.new()
 	grid.name = "CardsGrid"
 	grid.columns = 3
@@ -81,6 +78,13 @@ func open_terminal(shrine_node: Node2D):
 func close_terminal():
 	hide()
 	active_shrine_node = null
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not visible: return
+	if event is InputEventKey and event.pressed:
+		if event.keycode in [KEY_ESCAPE, KEY_E]:
+			close_terminal()
+			get_viewport().set_input_as_handled()
 
 func _process(_delta: float):
 	if visible:
@@ -185,6 +189,11 @@ func _create_tech_card(tech: Dictionary, is_unlocked: bool, current_req: int) ->
 	return card
 
 func _on_research_pressed(tech_id: int):
-	var main_node = get_tree().get_first_node_in_group("main")
-	if main_node and is_instance_valid(active_shrine_node):
-		main_node.rpc_id(1, "request_purchase_research", active_shrine_node.name, tech_id)
+	if is_instance_valid(active_shrine_node):
+		var main_node = get_tree().get_first_node_in_group("main")
+		if (not multiplayer.has_multiplayer_peer()) or multiplayer.is_server():
+			if active_shrine_node.has_method("try_purchase_research"):
+				active_shrine_node.try_purchase_research(tech_id)
+		else:
+			if main_node:
+				main_node.rpc_id(1, "request_purchase_research", active_shrine_node.name, tech_id)

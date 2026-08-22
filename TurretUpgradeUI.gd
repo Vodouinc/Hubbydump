@@ -1,8 +1,6 @@
 extends Control
 class_name TurretUpgradeUI
 
-const GameData = preload("res://GameData.gd")
-
 var panel_container: PanelContainer = null
 var cards_container: HBoxContainer = null
 var target_turret: Node2D = null
@@ -158,10 +156,15 @@ func _create_spec_card(spec_id: int, info: Dictionary, cur_req: int) -> PanelCon
 	return card
 
 func _select_spec(spec_id: int):
-	var main_node = get_tree().get_first_node_in_group("main")
-	if main_node and is_instance_valid(target_turret):
-		main_node.rpc_id(1, "request_specialize_turret", target_turret.name, spec_id)
-		close_modal()
+	if is_instance_valid(target_turret):
+		var main_node = get_tree().get_first_node_in_group("main")
+		if (not multiplayer.has_multiplayer_peer()) or multiplayer.is_server():
+			if target_turret.has_method("try_specialize_turret"):
+				target_turret.try_specialize_turret(spec_id)
+		else:
+			if main_node:
+				main_node.rpc_id(1, "request_specialize_turret", target_turret.name, spec_id)
+	close_modal()
 
 func _get_local_player() -> Node2D:
 	for p in get_tree().get_nodes_in_group("players"):

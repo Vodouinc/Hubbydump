@@ -9,6 +9,10 @@ var pop_label: Label = null
 var rally_label: Label = null
 var active_forge_node: Node2D = null
 
+var cached_scrap: int = -1
+var cached_req: int = -1
+var cached_pop: int = -1
+
 func _ready():
 	add_to_group("cybernetica_ui")
 	theme = AdmechTheme.make()
@@ -125,18 +129,27 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 
 func _process(_delta: float):
-	if visible and is_instance_valid(active_forge_node):
-		var main_node = get_tree().get_first_node_in_group("main")
-		var cur_scrap = main_node.scrap_amount if main_node and "scrap_amount" in main_node else 0
-		var cur_req = main_node.requisition_amount if main_node and "requisition_amount" in main_node else 0
-		var current_pop = main_node.get_cohort_population() if main_node and main_node.has_method("get_cohort_population") else 0
+	if not visible or not is_instance_valid(active_forge_node): return
 
-		if res_summary_label:
-			res_summary_label.text = "⚙ SCRAP: %d   ⚡ REQUISITION: %d" % [cur_scrap, cur_req]
-		if pop_label:
-			pop_label.text = "🤖 COHORT: %d / %d" % [current_pop, GameData.BASE_COHORT_CAP]
+	var main_node = get_tree().get_first_node_in_group("main")
+	var cur_scrap = main_node.scrap_amount if main_node and "scrap_amount" in main_node else 0
+	var cur_req = main_node.requisition_amount if main_node and "requisition_amount" in main_node else 0
+	var cur_pop = main_node.get_cohort_population() if main_node and main_node.has_method("get_cohort_population") else 0
 
-		_refresh_queue_display()
+	# Real-time resource header updates
+	if res_summary_label:
+		res_summary_label.text = "⚙ SCRAP: %d   ⚡ REQUISITION: %d" % [cur_scrap, cur_req]
+	if pop_label:
+		pop_label.text = "🤖 COHORT: %d / %d" % [cur_pop, GameData.BASE_COHORT_CAP]
+
+	# Auto-refresh card buttons as resources/pop change
+	if cur_scrap != cached_scrap or cur_req != cached_req or cur_pop != cached_pop:
+		cached_scrap = cur_scrap
+		cached_req = cur_req
+		cached_pop = cur_pop
+		_refresh_display()
+
+	_refresh_queue_display()
 
 func _refresh_display():
 	if not visible or not is_instance_valid(active_forge_node): return
@@ -219,12 +232,14 @@ func _create_unit_card(data: Dictionary, cur_scrap: int, cur_req: int, cur_pop: 
 func _on_fabricate_pressed(unit_type_id: int):
 	if is_instance_valid(active_forge_node):
 		var main_node = get_tree().get_first_node_in_group("main")
-		if main_node:
-			if multiplayer.has_multiplayer_peer():
+		if (not multiplayer.has_multiplayer_peer()) or multiplayer.is_server():
+			# Execute directly on Host/Singleplayer
+			if active_forge_node.has_method("try_queue_unit"):
+				active_forge_node.try_queue_unit(unit_type_id)
+		else:
+			# Send RPC from Client to Server
+			if main_node:
 				main_node.rpc_id(1, "request_queue_cohort_unit", active_forge_node.name, unit_type_id)
-			else:
-				if active_forge_node.has_method("try_queue_unit"):
-					active_forge_node.try_queue_unit(unit_type_id)
 		_refresh_display()
 
 func _refresh_queue_display():

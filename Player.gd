@@ -44,10 +44,11 @@ const GRID_SIZE: float = 32.0
 const WALL_LINK_RANGE: float = 95.0
 var preview_barricade_links: Array[Node2D] = []
 
+# RTS Controller Engine
 var rts_selected_units: Array[Node2D] = []
 var is_box_selecting: bool = false
-var box_select_start_screen: Vector2 = Vector2.ZERO
-var box_select_current_screen: Vector2 = Vector2.ZERO
+var box_select_start_world: Vector2 = Vector2.ZERO
+var box_select_current_world: Vector2 = Vector2.ZERO
 var is_attack_move_queued: bool = false
 var control_groups: Dictionary = {}
 
@@ -168,15 +169,27 @@ func _process_techpriest_movement(delta: float) -> void:
 	if direction != Vector2.ZERO:
 		direction = direction.normalized()
 		var corner_nudge = _calculate_corner_nudge(direction)
-		direction = (direction + corner_nudge).normalized()
-		velocity = direction * speed
+		velocity = (direction + corner_nudge).normalized() * speed
 	else:
 		velocity = velocity.move_toward(Vector2.ZERO, speed * 12.0 * delta)
 
+	# Add gentle separation from friendly units so they don't block
+	velocity += _calculate_friendly_separation() * 60.0
 	move_and_slide()
 
 func _process_marshal_rts_movement(delta: float) -> void:
-	if rts_is_moving:
+	var wasd_dir = Vector2.ZERO
+	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT): wasd_dir.x -= 1
+	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): wasd_dir.x += 1
+	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP): wasd_dir.y -= 1
+	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN): wasd_dir.y += 1
+
+	if wasd_dir != Vector2.ZERO:
+		rts_is_moving = false
+		wasd_dir = wasd_dir.normalized()
+		var corner_nudge = _calculate_corner_nudge(wasd_dir)
+		velocity = (wasd_dir + corner_nudge).normalized() * speed
+	elif rts_is_moving:
 		var dist = global_position.distance_to(rts_target_move_pos)
 		if dist > 12.0:
 			var dir = global_position.direction_to(rts_target_move_pos)
@@ -188,6 +201,7 @@ func _process_marshal_rts_movement(delta: float) -> void:
 	else:
 		velocity = velocity.move_toward(Vector2.ZERO, speed * 12.0 * delta)
 
+	velocity += _calculate_friendly_separation() * 60.0
 	move_and_slide()
 
 	if _is_local_authority():
@@ -202,6 +216,15 @@ func _process_marshal_combat(_delta: float) -> void:
 		var nearby_enemy = _find_nearest_enemy_in_range(340.0)
 		if is_instance_valid(nearby_enemy) and can_attack:
 			rpc("perform_attack", nearby_enemy.global_position)
+
+func _calculate_friendly_separation() -> Vector2:
+	var push = Vector2.ZERO
+	for u in get_tree().get_nodes_in_group("friendlies"):
+		if is_instance_valid(u) and u != self:
+			var d = global_position.distance_to(u.global_position)
+			if d < 32.0 and d > 0.1:
+				push += (global_position - u.global_position).normalized() * (1.0 - (d / 32.0))
+	return push
 
 func _calculate_corner_nudge(move_dir: Vector2) -> Vector2:
 	var space_state = get_world_2d().direct_space_state
@@ -400,35 +423,51 @@ func request_interact_nearby_structure() -> void:
 			return
 
 		var main_node = get_tree().get_first_node_in_group("main")
-		if main_node:
-			var b_type = int(closest.building_type)
-			if b_type == 0:
-				main_node.rpc_id(1, "request_upgrade_gate", closest.name)
-			elif b_type == 2:
+		var b_type = int(closest.building_type) if "building_type" in closest else -1
+
+		match b_type:
+			0: # Barricade -> Gate Upgrade (10 Scrap, 5 Req)
+				if multiplayer.has_multiplayer_peer():
+					if main_node: main_node.rpc_id(1, "request_upgrade_gate", closest.name)
+				elif closest.has_method("try_upgrade_to_gate"):
+					closest.try_upgrade_to_gate()
+
+			2: # Turret Upgrade (Tiers 1, 2, 3 -> Specialization Modal on Tier 4)
 				var lvl = closest.turret_upgrade_level if "turret_upgrade_level" in closest else 0
 				var spec = closest.turret_spec if "turret_spec" in closest else 0
-				if lvl < 3: main_node.rpc_id(1, "request_upgrade_turret", closest.name)
-				elif spec == GameData.TurretSpec.NONE and t_ui: t_ui.open_modal(closest)
-			elif b_type == 4: main_node.rpc_id(1, "request_upgrade_distributor", closest.name)
-			elif b_type == 6 and r_ui: r_ui.open_terminal(closest)
-			elif b_type == 7 and c_ui: c_ui.open_terminal(closest)
+				if lvl < 3:
+					if multiplayer.has_multiplayer_peer():
+						if main_node: main_node.rpc_id(1, "request_upgrade_turret", closest.name)
+					elif closest.has_method("try_upgrade_turret"):
+						closest.try_upgrade_turret()
+				elif spec == GameData.TurretSpec.NONE and t_ui:
+					t_ui.open_modal(closest)
+
+			4: # Distributor -> Noosphere Antenna Upgrade (15 Req)
+				if multiplayer.has_multiplayer_peer():
+					if main_node: main_node.rpc_id(1, "request_upgrade_distributor", closest.name)
+				elif closest.has_method("try_upgrade_distributor"):
+					closest.try_upgrade_distributor()
+
+			6: # Tech Shrine -> Research Terminal
+				if r_ui: r_ui.open_terminal(closest)
+
+			7: # Cybernetica Forge -> Recruitment Terminal
+				if c_ui: c_ui.open_terminal(closest)
 
 func _get_closest_interactable_structure() -> Node2D:
 	var closest: Node2D = null
-	var closest_dist := INTERACTION_RANGE
+	var closest_dist := 110.0 # Generous proximity detection
 
 	var base_node = get_tree().get_first_node_in_group("base")
 	if is_instance_valid(base_node):
 		var dist_to_base = global_position.distance_to(base_node.global_position)
-		if dist_to_base <= 65.0:
+		if dist_to_base <= 90.0:
 			closest_dist = dist_to_base
 			closest = base_node
 
 	for building in get_tree().get_nodes_in_group("buildings"):
 		if not is_instance_valid(building) or not ("building_type" in building): continue
-		var b_type = int(building.building_type)
-		if b_type == 0 and building.get("is_gate"): continue
-		if not (b_type in [0, 2, 4, 6, 7]): continue
 		var dist = global_position.distance_to(building.global_position)
 		if dist < closest_dist:
 			closest_dist = dist
@@ -437,6 +476,9 @@ func _get_closest_interactable_structure() -> Node2D:
 	return closest
 
 func _process(delta: float):
+	if _is_local_authority():
+		hovered_interact_building = _get_closest_interactable_structure()
+
 	if orbital_strike_cooldown > 0.0:
 		orbital_strike_cooldown = maxf(0.0, orbital_strike_cooldown - delta)
 
@@ -480,20 +522,30 @@ func _process(delta: float):
 func _process_rts_camera_panning(delta: float):
 	if not is_instance_valid(camera): return
 
+	# 1. Do not pan if the game window is tabbed out or unfocused
+	var is_window_focused = get_window().has_focus() if get_window() else true
+	if not is_window_focused:
+		is_mmb_dragging = false
+		return
+
 	var cam_move = Vector2.ZERO
 	var vp_size = get_viewport_rect().size
 	var m_pos = get_viewport().get_mouse_position()
 
-	if m_pos.x <= EDGE_SCROLL_MARGIN: cam_move.x -= 1
-	if m_pos.x >= vp_size.x - EDGE_SCROLL_MARGIN: cam_move.x += 1
-	if m_pos.y <= EDGE_SCROLL_MARGIN: cam_move.y -= 1
-	if m_pos.y >= vp_size.y - EDGE_SCROLL_MARGIN: cam_move.y += 1
+	# 2. Only edge-scroll if the mouse is inside the game window bounds
+	if Rect2(Vector2.ZERO, vp_size).has_point(m_pos):
+		if m_pos.x <= EDGE_SCROLL_MARGIN: cam_move.x -= 1
+		if m_pos.x >= vp_size.x - EDGE_SCROLL_MARGIN: cam_move.x += 1
+		if m_pos.y <= EDGE_SCROLL_MARGIN: cam_move.y -= 1
+		if m_pos.y >= vp_size.y - EDGE_SCROLL_MARGIN: cam_move.y += 1
 
+	# Keyboard Arrow Key panning
 	if Input.is_key_pressed(KEY_UP): cam_move.y -= 1
 	if Input.is_key_pressed(KEY_DOWN): cam_move.y += 1
 	if Input.is_key_pressed(KEY_LEFT): cam_move.x -= 1
 	if Input.is_key_pressed(KEY_RIGHT): cam_move.x += 1
 
+	# Middle-Mouse Drag or Edge/Arrow Pan
 	if is_mmb_dragging:
 		var mouse_delta = get_viewport().get_mouse_position() - mmb_drag_start_mouse
 		camera.global_position = mmb_drag_start_cam - mouse_delta
@@ -532,19 +584,20 @@ func _handle_rts_commander_input(event: InputEvent):
 		get_viewport().set_input_as_handled()
 		return
 
+	# Left Click Box Selection
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			is_box_selecting = true
-			box_select_start_screen = mouse_screen
-			box_select_current_screen = mouse_screen
+			box_select_start_world = mouse_world
+			box_select_current_world = mouse_world
 		else:
 			if is_box_selecting:
 				is_box_selecting = false
-				box_select_current_screen = mouse_screen
+				box_select_current_world = mouse_world
 				if is_attack_move_queued:
 					is_attack_move_queued = false
 					_issue_order_to_selection(mouse_world, true)
-				elif not _check_remote_building_click(mouse_world) and box_select_start_screen.distance_to(box_select_current_screen) < 8.0:
+				elif not _check_remote_building_click(mouse_world) and box_select_start_world.distance_to(box_select_current_world) < 12.0:
 					_select_single_unit_under_cursor(mouse_world, Input.is_key_pressed(KEY_SHIFT))
 				else:
 					_execute_box_selection(Input.is_key_pressed(KEY_SHIFT))
@@ -553,10 +606,11 @@ func _handle_rts_commander_input(event: InputEvent):
 		return
 
 	if event is InputEventMouseMotion and is_box_selecting:
-		box_select_current_screen = mouse_screen
+		box_select_current_world = mouse_world
 		queue_redraw()
 		return
 
+	# Right Click RTS Order Dispatch
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 		is_attack_move_queued = false
 		var target_enemy = _find_enemy_under_cursor(mouse_world)
@@ -639,22 +693,23 @@ func _handle_techpriest_arpg_input(event: InputEvent):
 		elif event.keycode in [KEY_6, KEY_KP_6]: toggle_build_mode(6); get_viewport().set_input_as_handled()
 		elif event.keycode in [KEY_7, KEY_KP_7]: toggle_build_mode(7); get_viewport().set_input_as_handled()
 
+# ==============================================================================
+# WORLD-SPACE BOX SELECTION
+# ==============================================================================
 func _execute_box_selection(add_to_selection: bool):
 	if not add_to_selection: _clear_rts_selection()
 
-	var p1 = box_select_start_screen
-	var p2 = box_select_current_screen
+	var p1 = box_select_start_world
+	var p2 = box_select_current_world
 	var rect_min = Vector2(minf(p1.x, p2.x), minf(p1.y, p2.y))
 	var rect_max = Vector2(maxf(p1.x, p2.x), maxf(p1.y, p2.y))
-	var screen_rect = Rect2(rect_min, rect_max - rect_min)
+	var world_rect = Rect2(rect_min, rect_max - rect_min)
 
 	for unit in get_tree().get_nodes_in_group("controllable_units"):
-		if is_instance_valid(unit):
-			var u_screen = unit.get_global_transform_with_canvas().origin
-			if screen_rect.has_point(u_screen):
-				_add_unit_to_selection(unit)
+		if is_instance_valid(unit) and world_rect.has_point(unit.global_position):
+			_add_unit_to_selection(unit)
 
-	if rts_selected_units.is_empty() and screen_rect.has_point(get_global_transform_with_canvas().origin):
+	if rts_selected_units.is_empty() and world_rect.has_point(global_position):
 		_add_unit_to_selection(self)
 
 func _select_single_unit_under_cursor(world_pos: Vector2, add_to_selection: bool):
@@ -677,14 +732,58 @@ func _clear_rts_selection():
 			elif "is_rts_selected" in unit: unit.is_rts_selected = false
 	rts_selected_units.clear()
 
+# ==============================================================================
+# NETWORKED RTS COMMAND ROUTING (CLIENT -> SERVER)
+# ==============================================================================
 func _issue_order_to_selection(target_pos: Vector2, is_attack_move: bool):
-	if rts_selected_units.is_empty(): _add_unit_to_selection(self)
+	if rts_selected_units.is_empty(): 
+		_add_unit_to_selection(self)
 
 	var count = rts_selected_units.size()
+	var unit_names: Array[String] = []
+
 	for i in range(count):
 		var unit = rts_selected_units[i]
 		if not is_instance_valid(unit): continue
-		
+		unit_names.append(unit.name)
+
+		var offset = Vector2.ZERO
+		if count > 1:
+			var angle = (float(i) / float(count)) * TAU
+			offset = Vector2(cos(angle), sin(angle)) * 32.0
+		var slot_pos = target_pos + offset
+
+		# Apply immediately to local player hero if selected
+		if unit == self:
+			rts_target_move_pos = slot_pos
+			rts_is_moving = true
+			rts_is_attack_moving = is_attack_move
+			rts_attack_target_node = null
+		elif not multiplayer.has_multiplayer_peer() or multiplayer.is_server():
+			if unit.has_method("rts_move_to"):
+				unit.rts_move_to(slot_pos, is_attack_move)
+
+	# Send RPC to server for network peers
+	if multiplayer.has_multiplayer_peer():
+		rpc_id(1, "request_rts_move_order", unit_names, target_pos, is_attack_move)
+
+	AudioManager.play_sfx("building_place", target_pos, -4.0, 1.6)
+
+@rpc("any_peer", "call_local", "reliable")
+func request_rts_move_order(unit_names: Array, target_pos: Vector2, is_attack_move: bool):
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
+
+	var count = unit_names.size()
+	for i in range(count):
+		var u_name = str(unit_names[i])
+		var unit: Node2D = null
+		for candidate in get_tree().get_nodes_in_group("controllable_units"):
+			if is_instance_valid(candidate) and candidate.name == u_name:
+				unit = candidate
+				break
+
+		if not is_instance_valid(unit): continue
+
 		var offset = Vector2.ZERO
 		if count > 1:
 			var angle = (float(i) / float(count)) * TAU
@@ -693,39 +792,88 @@ func _issue_order_to_selection(target_pos: Vector2, is_attack_move: bool):
 		var slot_pos = target_pos + offset
 		if unit.has_method("rts_move_to"):
 			unit.rts_move_to(slot_pos, is_attack_move)
-		elif unit == self:
-			rts_target_move_pos = slot_pos
-			rts_is_moving = true
-			rts_is_attack_moving = is_attack_move
-			rts_attack_target_node = null
-
-	AudioManager.play_sfx("building_place", target_pos, -4.0, 1.6)
+		elif unit is CharacterBody2D and "rts_target_move_pos" in unit:
+			unit.rts_target_move_pos = slot_pos
+			unit.rts_is_moving = true
+			unit.rts_is_attack_moving = is_attack_move
+			unit.rts_attack_target_node = null
 
 func _issue_attack_order_to_selection(target_enemy: Node2D):
-	for unit in rts_selected_units:
-		if is_instance_valid(unit):
-			if unit.has_method("rts_attack_target"):
-				unit.rts_attack_target(target_enemy)
-			elif unit == self:
-				rts_attack_target_node = target_enemy
-				rts_is_moving = false
+	var unit_names: Array[String] = []
+	for u in rts_selected_units:
+		if is_instance_valid(u): unit_names.append(u.name)
+
+	if multiplayer.has_multiplayer_peer():
+		rpc_id(1, "request_rts_attack_order", unit_names, target_enemy.name)
+	else:
+		request_rts_attack_order(unit_names, target_enemy.name)
 
 	AudioManager.play_sfx("volkite_beam", target_enemy.global_position, -2.0, 1.5)
 
+@rpc("any_peer", "call_local", "reliable")
+func request_rts_attack_order(unit_names: Array, target_name: String):
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
+
+	var target_node: Node2D = null
+	for e in get_tree().get_nodes_in_group("enemies"):
+		if is_instance_valid(e) and e.name == target_name:
+			target_node = e
+			break
+
+	if not is_instance_valid(target_node): return
+
+	for u_name in unit_names:
+		for candidate in get_tree().get_nodes_in_group("controllable_units"):
+			if is_instance_valid(candidate) and candidate.name == str(u_name):
+				if candidate.has_method("rts_attack_target"):
+					candidate.rts_attack_target(target_node)
+				elif "rts_attack_target_node" in candidate:
+					candidate.rts_attack_target_node = target_node
+					candidate.rts_is_moving = false
+				break
+
 func _issue_stop_to_selection():
-	for unit in rts_selected_units:
-		if is_instance_valid(unit):
-			if unit.has_method("rts_stop"): unit.rts_stop()
-			elif unit == self:
-				rts_is_moving = false
-				rts_attack_target_node = null
+	var unit_names: Array[String] = []
+	for u in rts_selected_units:
+		if is_instance_valid(u): unit_names.append(u.name)
+
+	if multiplayer.has_multiplayer_peer():
+		rpc_id(1, "request_rts_stop_order", unit_names)
+	else:
+		request_rts_stop_order(unit_names)
+
+@rpc("any_peer", "call_local", "reliable")
+func request_rts_stop_order(unit_names: Array):
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
+	for u_name in unit_names:
+		for candidate in get_tree().get_nodes_in_group("controllable_units"):
+			if is_instance_valid(candidate) and candidate.name == str(u_name):
+				if candidate.has_method("rts_stop"): candidate.rts_stop()
+				elif "rts_is_moving" in candidate:
+					candidate.rts_is_moving = false
+					candidate.rts_attack_target_node = null
+				break
 
 func _issue_hold_to_selection():
-	for unit in rts_selected_units:
-		if is_instance_valid(unit):
-			if unit.has_method("rts_hold"): unit.rts_hold()
-			elif unit == self:
-				rts_is_moving = false
+	var unit_names: Array[String] = []
+	for u in rts_selected_units:
+		if is_instance_valid(u): unit_names.append(u.name)
+
+	if multiplayer.has_multiplayer_peer():
+		rpc_id(1, "request_rts_hold_order", unit_names)
+	else:
+		request_rts_hold_order(unit_names)
+
+@rpc("any_peer", "call_local", "reliable")
+func request_rts_hold_order(unit_names: Array):
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
+	for u_name in unit_names:
+		for candidate in get_tree().get_nodes_in_group("controllable_units"):
+			if is_instance_valid(candidate) and candidate.name == str(u_name):
+				if candidate.has_method("rts_hold"): candidate.rts_hold()
+				elif "rts_is_moving" in candidate:
+					candidate.rts_is_moving = false
+				break
 
 func _save_control_group(group_num: int):
 	control_groups[group_num] = rts_selected_units.duplicate()
@@ -810,8 +958,8 @@ func _draw():
 
 func _draw_rts_selection_box():
 	if not is_box_selecting: return
-	var p1 = to_local(get_canvas_transform().affine_inverse() * box_select_start_screen)
-	var p2 = to_local(get_canvas_transform().affine_inverse() * box_select_current_screen)
+	var p1 = to_local(box_select_start_world)
+	var p2 = to_local(box_select_current_world)
 	var rect_min = Vector2(minf(p1.x, p2.x), minf(p1.y, p2.y))
 	var rect_max = Vector2(maxf(p1.x, p2.x), maxf(p1.y, p2.y))
 	var select_rect = Rect2(rect_min, rect_max - rect_min)
@@ -847,13 +995,15 @@ func _find_enemy_under_cursor(world_pos: Vector2) -> Node2D:
 
 func _find_nearest_enemy_in_range(range_limit: float) -> Node2D:
 	var enemies = get_tree().get_nodes_in_group("enemies")
-	var closest: Node2D = null
-	var min_d = range_limit
+	var closest_target: Node2D = null
+	var min_d: float = range_limit
 	for e in enemies:
 		if is_instance_valid(e):
 			var d = global_position.distance_to(e.global_position)
-			if d < min_d: min_d = d; closest = e
-	return closest
+			if d < min_d:
+				min_d = d
+				closest_target = e
+	return closest_target
 
 @rpc("any_peer", "call_local", "reliable")
 func perform_attack(target_pos: Vector2):
@@ -1051,4 +1201,39 @@ func _setup_tooltip_overlay() -> void:
 		add_child(tooltip_overlay)
 
 class TooltipOverlayRenderer extends Node2D:
-	pass
+	func _process(_delta: float) -> void:
+		queue_redraw()
+
+	func _draw() -> void:
+		var p = get_parent()
+		if not is_instance_valid(p) or p.current_class != 0: return # Tech-Priest only
+		if p.is_building_mode: return
+		if not is_instance_valid(p.hovered_interact_building): return
+
+		var b = p.hovered_interact_building
+		var local_b_pos = b.global_position - p.global_position
+
+		# 1. Subtle In-World Ground Projection Ring beneath the building
+		var pulse = 0.7 + sin(Time.get_ticks_msec() * 0.007) * 0.3
+		var ring_col = Color(0.20, 0.88, 1.0, 0.65 * pulse)
+		var ring_r = 28.0
+		if b.is_in_group("base"): ring_r = 55.0
+		elif "building_type" in b and int(b.building_type) in [1, 3, 6, 7]: ring_r = 38.0
+
+		draw_arc(local_b_pos, ring_r, 0.0, TAU, 32, ring_col, 1.2)
+		draw_circle(local_b_pos, ring_r, Color(0.20, 0.88, 1.0, 0.06 * pulse))
+
+		# Corner Tactical Brackets
+		for i in range(4):
+			var a = (float(i) * TAU / 4.0) + (Time.get_ticks_msec() * 0.001)
+			var pt = local_b_pos + Vector2(cos(a), sin(a)) * ring_r
+			draw_circle(pt, 2.0, ring_col)
+
+		# 2. Compact Floating [E] Keycap Icon above building (Zero text clutter)
+		var icon_pos = local_b_pos + Vector2(0, -ring_r - 12.0)
+		var key_rect = Rect2(icon_pos - Vector2(10, 10), Vector2(20, 20))
+		draw_rect(key_rect, Color(0.04, 0.05, 0.08, 0.92), true)
+		draw_rect(key_rect, ring_col, false, 1.2)
+
+		var font = ThemeDB.fallback_font
+		draw_string(font, key_rect.position + Vector2(0, 14), "E", HORIZONTAL_ALIGNMENT_CENTER, 20, 10, ring_col)

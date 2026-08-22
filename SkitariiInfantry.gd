@@ -103,7 +103,6 @@ func _physics_process(delta: float) -> void:
 	else:
 		velocity = velocity.move_toward(Vector2.ZERO, movement_speed * 6.0 * delta)
 		
-		# Look for Auspex targets or nearby threats
 		var threat = _find_best_target(attack_range if has_received_player_order else 220.0)
 		if is_instance_valid(threat):
 			is_facing_left = (threat.global_position.x < global_position.x)
@@ -112,7 +111,6 @@ func _physics_process(delta: float) -> void:
 			elif not has_received_player_order:
 				velocity = global_position.direction_to(threat.global_position) * movement_speed
 		
-		# Sentry leash back to rally anchor or escort Tech-Priest
 		elif not has_received_player_order:
 			if rally_anchor != Vector2.ZERO:
 				var dist_to_anchor = global_position.distance_to(rally_anchor)
@@ -125,8 +123,20 @@ func _physics_process(delta: float) -> void:
 					velocity = global_position.direction_to(p.global_position) * movement_speed
 					is_facing_left = (velocity.x < -0.1)
 
+	# Soft Friendly Separation & Movement
+	velocity += _calculate_friendly_separation() * 45.0
 	move_and_slide()
-	rpc("sync_unit_state", global_position, is_facing_left)
+	if multiplayer.has_multiplayer_peer():
+		rpc("sync_unit_state", global_position, is_facing_left)
+
+func _calculate_friendly_separation() -> Vector2:
+	var push = Vector2.ZERO
+	for u in get_tree().get_nodes_in_group("friendlies"):
+		if is_instance_valid(u) and u != self:
+			var d = global_position.distance_to(u.global_position)
+			if d < 28.0 and d > 0.1:
+				push += (global_position - u.global_position).normalized() * (1.0 - (d / 28.0))
+	return push
 
 func _pulse_radiation_field():
 	for e in get_tree().get_nodes_in_group("enemies"):
@@ -168,6 +178,7 @@ func set_initial_rally(target_pos: Vector2) -> void:
 
 func rts_move_to(pos: Vector2, is_attack_move: bool = false) -> void:
 	has_received_player_order = true
+	rally_anchor = pos # Update new defensive station to destination
 	rts_target_pos = pos
 	is_rts_moving = true
 	is_attack_moving = is_attack_move
@@ -196,15 +207,13 @@ func _find_best_target(max_d: float) -> Node2D:
 	var best_target: Node2D = null
 	var min_d = max_d
 
-	# 1. Highest Priority: Auspex Telemetry Marked target (Plasma Caliver paint)
 	for e in enemies:
 		if is_instance_valid(e) and not e.is_queued_for_deletion():
 			if e.get("has_telemetry_mark"):
 				var d = global_position.distance_to(e.global_position)
-				if d <= max_d * 1.35: # wider acquisition for marked targets
+				if d <= max_d * 1.35:
 					return e
 
-	# 2. Standard closest threat
 	for e in enemies:
 		if is_instance_valid(e) and not e.is_queued_for_deletion():
 			var d = global_position.distance_to(e.global_position)

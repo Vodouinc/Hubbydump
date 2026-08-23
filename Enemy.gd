@@ -717,6 +717,22 @@ func _handle_death() -> void:
 			"value": scrap_value
 		})
 
+		# --- MARSHAL TELEMETRY REQUISITION HARVEST ---
+		# Check if killed with Auspex Paint OR near a Skitarii Marshal
+		var near_marshal = false
+		for p in get_tree().get_nodes_in_group("players"):
+			if is_instance_valid(p) and p.get("current_class") == 1:
+				if global_position.distance_to(p.global_position) <= 300.0:
+					near_marshal = true
+					break
+
+		if has_telemetry_mark or near_marshal:
+			var req_reward = 3 if type == EnemyType.NOB else 1
+			if main_node.has_method("add_requisition"):
+				main_node.add_requisition(req_reward)
+				rpc("spawn_telemetry_req_popup", req_reward, global_position + Vector2(0, -22))
+		# ---------------------------------------------
+
 		if type == EnemyType.ORK_BOY and randf() <= 0.25:
 			_lob_stikkbomb(global_position + Vector2.RIGHT.rotated(randf() * TAU) * 20.0)
 
@@ -724,6 +740,17 @@ func _handle_death() -> void:
 			main_node.notify_enemy_defeated()
 
 	queue_free()
+
+@rpc("call_local", "unreliable")
+func spawn_telemetry_req_popup(amount: int, spawn_pos: Vector2) -> void:
+	var label = Label.new()
+	label.script = load("res://DamageNumber.gd")
+	label.global_position = spawn_pos
+	get_parent().add_child(label)
+	label.text = "+%d REQ ⚡" % amount
+	label.label_settings = LabelSettings.new()
+	label.label_settings.font_color = Color(0.20, 0.88, 1.00) # Glowing Cyan
+	label.label_settings.font_size = 13
 
 func update_ui() -> void:
 	if health_bar and health_bar.has_method("update_health"):

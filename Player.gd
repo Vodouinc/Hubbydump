@@ -109,7 +109,7 @@ func _ready():
 		z_index = 88 # Render hero and selection box above shadows and atmospheric dust
 		
 		# Prevent Godot from culling the selection box when Marshal is off-screen
-		RenderingServer.canvas_item_set_custom_rect(get_canvas_item(), true, Rect2(-100000, -100000, 200000, 200000))
+		RenderingServer.canvas_item_set_custom_rect(get_canvas_item(), true, Rect2(-2000, -2000, 4000, 4000))
 
 		DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_CONFINED)
 
@@ -130,12 +130,10 @@ func _ready():
 		if camera:
 			camera.enabled = false
 
-func set_player_class(new_class):
-	current_class = new_class
-	if not is_node_ready():
-		await ready
-
+func set_player_class(new_class: int):
+	current_class = new_class as PlayerClass
 	apply_class_stats()
+	
 	if camera and _is_local_authority():
 		if current_class == PlayerClass.RANGED:
 			camera.top_level = true
@@ -145,19 +143,25 @@ func set_player_class(new_class):
 			camera.position = Vector2.ZERO
 
 func apply_class_stats():
-	var active_data = tech_priest_data if current_class == PlayerClass.MELEE else skitarii_marshal_data
+	var is_techpriest = (current_class == PlayerClass.MELEE)
+	var active_data = tech_priest_data if is_techpriest else skitarii_marshal_data
+	
 	if active_data:
 		speed = active_data.movement_speed
 		max_health = active_data.max_health
 		attack_cooldown = active_data.attack_cooldown
 		bullet_damage = active_data.base_damage
 		attack_anim_duration = active_data.attack_anim_duration
-		if visual_sprite:
-			visual_sprite.unit_type = active_data.unit_type_id
 	else:
-		speed = 250.0 if current_class == PlayerClass.MELEE else 340.0
-		max_health = 150 if current_class == PlayerClass.MELEE else 90
+		speed = 250.0 if is_techpriest else 340.0
+		max_health = 150 if is_techpriest else 90
 		bullet_damage = 25
+
+	# Explicitly assign unit_type so VisualSprite draws the correct model
+	if visual_sprite:
+		visual_sprite.unit_type = 0 if is_techpriest else 1
+		if visual_sprite.has_method("queue_redraw"):
+			visual_sprite.queue_redraw()
 
 	if shadow_node and shadow_node.has_method("update_shadow_size"):
 		shadow_node.update_shadow_size()
@@ -939,20 +943,35 @@ func _handle_rts_commander_input(event: InputEvent):
 		elif event.keycode == KEY_H:
 			_issue_hold_to_selection()
 			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_R:
-			rpc_id(1, "request_orbital_strike", mouse_world)
-			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_C:
-			if bodyguard_level < GameData.MAX_BODYGUARDS:
-				rpc_id(1, "request_upgrade_bodyguards")
-			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_Z:
-			if damage_upgrade_level < GameData.MAX_DAMAGE_UPGRADES:
-				rpc_id(1, "request_upgrade_damage")
+			if multiplayer.has_multiplayer_peer():
+				rpc_id(1, "request_recruit_bodyguard", 0)
+			else:
+				request_recruit_bodyguard(0)
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_X:
-			if speed_upgrade_level < GameData.MAX_SPEED_UPGRADES:
-				rpc_id(1, "request_upgrade_speed")
+			if multiplayer.has_multiplayer_peer():
+				rpc_id(1, "request_recruit_bodyguard", 1)
+			else:
+				request_recruit_bodyguard(1)
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_C:
+			if multiplayer.has_multiplayer_peer():
+				rpc_id(1, "request_recruit_bodyguard", 2)
+			else:
+				request_recruit_bodyguard(2)
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_V:
+			if multiplayer.has_multiplayer_peer():
+				rpc_id(1, "request_field_requisition_uplink")
+			else:
+				request_field_requisition_uplink()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_R:
+			if multiplayer.has_multiplayer_peer():
+				rpc_id(1, "request_orbital_strike", mouse_world)
+			else:
+				request_orbital_strike(mouse_world)
 			get_viewport().set_input_as_handled()
 		elif event.keycode >= KEY_1 and event.keycode <= KEY_9:
 			var group_num = event.keycode - KEY_0
@@ -973,6 +992,21 @@ func _toggle_doctrina_imperative() -> void:
 	if hud and hud.has_method("refresh_hud_display"):
 		hud.refresh_hud_display()
 	queue_redraw()
+
+func _notification(what: int) -> void:
+	match what:
+		NOTIFICATION_APPLICATION_FOCUS_OUT:
+			# Instantly release cursor confinement to prevent AMD driver lockup
+			DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_VISIBLE)
+			is_box_selecting = false
+			is_mmb_dragging = false
+			
+		NOTIFICATION_APPLICATION_FOCUS_IN:
+			# Re-confine only if in an active match as Commander
+			if not is_dead and _is_local_authority():
+				var main_node = get_tree().get_first_node_in_group("main")
+				if main_node and main_node.get("match_started"):
+					DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_CONFINED)
 
 func _designate_priority_target(enemy: Node2D):
 	if enemy.has_method("apply_telemetry_mark"):
@@ -1014,7 +1048,10 @@ func _handle_techpriest_arpg_input(event: InputEvent):
 			request_interact_nearby_structure()
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_C:
-			rpc_id(1, "request_spawn_servo_skull")
+			if multiplayer.has_multiplayer_peer():
+				rpc_id(1, "request_spawn_servo_skull")
+			else:
+				request_spawn_servo_skull()
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_B or event.keycode == KEY_TAB:
 			toggle_build_mode(selected_building_type)
@@ -1224,6 +1261,61 @@ func request_rts_hold_order(unit_names: Array):
 				elif "rts_is_moving" in candidate:
 					candidate.rts_is_moving = false
 				break
+# ==============================================================================
+# 1. RECRUIT BODYGUARD (MARSHAL: Z, X, C)
+# ==============================================================================
+@rpc("any_peer", "call_local", "reliable")
+func request_recruit_bodyguard(role_id: int):
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+		return
+
+	# Clean up any destroyed bodyguards from the list
+	active_bodyguards = active_bodyguards.filter(func(b): return is_instance_valid(b))
+
+	if active_bodyguards.size() >= GameData.MAX_BODYGUARDS:
+		return
+
+	var role_info = GameData.BODYGUARD_ROSTER.get(role_id, {})
+	if role_info.is_empty(): return
+
+	var scrap_cost = role_info.get("scrap", 0)
+	var req_cost = role_info.get("req", 0)
+
+	var main_node = get_parent()
+	if not (main_node and "scrap_amount" in main_node and "requisition_amount" in main_node):
+		main_node = get_tree().get_first_node_in_group("main")
+	if not main_node: return
+
+	# Verify resources
+	if main_node.scrap_amount < scrap_cost or main_node.requisition_amount < req_cost:
+		return
+
+	main_node.scrap_amount -= scrap_cost
+	main_node.requisition_amount -= req_cost
+
+	if multiplayer.has_multiplayer_peer():
+		main_node.rpc("sync_resources", main_node.scrap_amount, main_node.requisition_amount)
+
+	var spawn_pos = global_position + Vector2.RIGHT.rotated(randf() * TAU) * 35.0
+	var bg_data = {
+		"type": "bodyguard",
+		"name": "Bodyguard_" + str(name) + "_" + str(randi()),
+		"position": spawn_pos,
+		"guard_role": role_id,
+		"owner_id": int(name) if name.is_valid_int() else 1
+	}
+
+	# ONLY use MultiplayerSpawner if online; otherwise spawn locally via _custom_spawner
+	if main_node.spawner and multiplayer.has_multiplayer_peer():
+		main_node.spawner.spawn(bg_data)
+	else:
+		var bg_node = main_node._custom_spawner(bg_data)
+		if is_instance_valid(bg_node):
+			main_node.add_child(bg_node)
+
+	var hud = get_tree().get_first_node_in_group("ability_hud")
+	if hud and hud.has_method("refresh_hud_display"):
+		hud.refresh_hud_display()
 
 func _save_control_group(group_num: int):
 	control_groups[group_num] = rts_selected_units.duplicate()
@@ -1387,6 +1479,38 @@ func check_lingering_melee_hits():
 					AudioManager.play_sfx("hit", b.global_position, 1.0, 0.95)
 
 @rpc("any_peer", "call_local", "reliable")
+func request_field_requisition_uplink():
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+		return
+
+	var main_node = get_parent()
+	if not (main_node and "scrap_amount" in main_node and "requisition_amount" in main_node):
+		main_node = get_tree().get_first_node_in_group("main")
+
+	var scrap_cost = 15
+	var req_yield = 8
+
+	if main_node and main_node.scrap_amount >= scrap_cost:
+		main_node.scrap_amount -= scrap_cost
+		main_node.requisition_amount += req_yield
+		if multiplayer.has_multiplayer_peer():
+			main_node.rpc("sync_resources", main_node.scrap_amount, main_node.requisition_amount)
+		
+		rpc("execute_supply_drop_fx", global_position)
+		AudioManager.play_sfx("building_place", global_position, 1.0, 1.5)
+
+@rpc("call_local", "unreliable")
+func execute_supply_drop_fx(pos: Vector2):
+	var label = Label.new()
+	label.script = load("res://DamageNumber.gd")
+	label.global_position = pos + Vector2(0, -35)
+	get_parent().add_child(label)
+	label.text = "⚡ +8 REQUISITION (TRANSMITTED) ⚡"
+	label.label_settings = LabelSettings.new()
+	label.label_settings.font_color = Color(0.35, 0.95, 0.45)
+	label.label_settings.font_size = 14
+
+@rpc("any_peer", "call_local", "reliable")
 func request_orbital_strike(target_pos: Vector2):
 	if not multiplayer.is_server(): return
 	var main_node = get_parent()
@@ -1442,25 +1566,47 @@ func request_upgrade_bodyguards():
 func sync_bodyguard_level(new_level: int):
 	bodyguard_level = new_level
 
+# ==============================================================================
+# 2. FABRICATE SERVO-SKULL (TECH-PRIEST: C)
+# ==============================================================================
 @rpc("any_peer", "call_local", "reliable")
 func request_spawn_servo_skull():
-	if current_class != PlayerClass.MELEE or not multiplayer.is_server(): return
+	if current_class != PlayerClass.MELEE: return
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
+
 	active_servo_skulls = active_servo_skulls.filter(func(s): return is_instance_valid(s))
 	if active_servo_skulls.size() >= GameData.MAX_SERVO_SKULLS: return
 
 	var main_node = get_parent()
-	if not main_node or not ("scrap_amount" in main_node and "requisition_amount" in main_node): return
+	if not (main_node and "scrap_amount" in main_node and "requisition_amount" in main_node):
+		main_node = get_tree().get_first_node_in_group("main")
+	if not main_node: return
 
 	if main_node.scrap_amount >= GameData.SERVO_SKULL_SCRAP_COST and main_node.requisition_amount >= GameData.SERVO_SKULL_REQ_COST:
 		main_node.scrap_amount -= GameData.SERVO_SKULL_SCRAP_COST
 		main_node.requisition_amount -= GameData.SERVO_SKULL_REQ_COST
-		main_node.rpc("sync_resources", main_node.scrap_amount, main_node.requisition_amount)
+		if multiplayer.has_multiplayer_peer():
+			main_node.rpc("sync_resources", main_node.scrap_amount, main_node.requisition_amount)
 
-		if "spawner" in main_node and main_node.spawner:
-			main_node.spawner.spawn({
-				"type": "servo_skull", "name": "ServoSkull_" + str(name) + "_" + str(randi()),
-				"position": global_position + Vector2(30, -30), "owner_id": name.to_int()
-			})
+		var skull_data = {
+			"type": "servo_skull",
+			"name": "ServoSkull_" + str(name) + "_" + str(randi()),
+			"position": global_position + Vector2(30, -30),
+			"owner_id": int(name) if name.is_valid_int() else 1
+		}
+
+		# ONLY use MultiplayerSpawner if online; otherwise spawn locally via _custom_spawner
+		if main_node.spawner and multiplayer.has_multiplayer_peer():
+			main_node.spawner.spawn(skull_data)
+		else:
+			var skull_node = main_node._custom_spawner(skull_data)
+			if is_instance_valid(skull_node):
+				main_node.add_child(skull_node)
+
+		var hud = get_tree().get_first_node_in_group("ability_hud")
+		if hud and hud.has_method("refresh_hud_display"):
+			hud.refresh_hud_display()
+
 
 @rpc("any_peer", "call_local", "reliable")
 func request_upgrade_damage():

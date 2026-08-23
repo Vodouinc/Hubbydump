@@ -29,6 +29,8 @@ var current_window_mode: int = DisplayServer.WINDOW_MODE_WINDOWED
 var is_vsync_enabled: bool = true
 var current_max_fps: int = 0
 
+var is_opened_from_title: bool = false
+
 func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	add_to_group("pause_menu")
@@ -37,9 +39,39 @@ func _ready():
 	_load_video_settings()
 	_build_ui_layout()
 
+func open_settings_from_title():
+	is_opened_from_title = true
+	_switch_view(View.VIDEO)
+	panel_container.show()
+	ally_pause_banner.hide()
+	show()
+	DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_VISIBLE)
+
+# Update the back button callbacks inside _build_ui_layout():
+func _on_settings_back_pressed():
+	if is_opened_from_title:
+		is_opened_from_title = false
+		panel_container.hide()
+		hide()
+		var main_node = get_tree().get_first_node_in_group("main")
+		if main_node and main_node.has_method("_show_title_screen"):
+			main_node._show_title_screen()
+	else:
+		_switch_view(View.MAIN)
+
 # ==============================================================================
-# 1. INPUT HANDLING (SINGLE SOURCE OF TRUTH FOR PAUSE TOGGLE)
+# 1. APPLICATION FOCUS & INPUT HANDLING (CRASH PREVENTION)
 # ==============================================================================
+func _notification(what: int) -> void:
+	match what:
+		NOTIFICATION_APPLICATION_FOCUS_OUT:
+			# Instantly release cursor confinement to prevent AMD driver lockups on Alt-Tab
+			DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_VISIBLE)
+		NOTIFICATION_APPLICATION_FOCUS_IN:
+			# Restore confinement only if actively playing in-game and menu is closed
+			if not visible and not get_tree().paused:
+				_restore_gameplay_cursor_mode()
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
 		toggle_my_pause_menu()
@@ -203,7 +235,7 @@ func _switch_view(view: View):
 		_refresh_audio_sliders()
 
 # ==============================================================================
-# 3. PAUSE & UNPAUSE LOGIC (OFFLINE & NETWORK RESILIENT)
+# 3. PAUSE & UNPAUSE LOGIC
 # ==============================================================================
 func toggle_my_pause_menu():
 	if visible and panel_container.visible:
@@ -219,21 +251,31 @@ func show_my_pause_menu():
 	panel_container.show()
 	ally_pause_banner.hide()
 	show()
-	# Release mouse cursor so player can click menu buttons freely
 	DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_VISIBLE)
 	_sync_pause_state_with_main(true)
 
 func hide_my_pause_menu():
 	panel_container.hide()
 	hide()
-	# Re-confine mouse cursor for gameplay edge-panning
-	DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_CONFINED)
+	_restore_gameplay_cursor_mode()
 	_sync_pause_state_with_main(false)
+
+func _restore_gameplay_cursor_mode():
+	var local_player = null
+	for p in get_tree().get_nodes_in_group("players"):
+		if is_instance_valid(p) and ((not multiplayer.has_multiplayer_peer()) or p.is_multiplayer_authority()):
+			local_player = p
+			break
+
+	# Only confine cursor for Skitarii Marshal (RTS edge-panning)
+	if is_instance_valid(local_player) and local_player.get("current_class") == 1:
+		DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_CONFINED)
+	else:
+		DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_VISIBLE)
 
 func _sync_pause_state_with_main(is_paused: bool):
 	var main_node = get_tree().get_first_node_in_group("main")
 	if not multiplayer.has_multiplayer_peer():
-		# Offline / Singleplayer mode: directly pause/unpause scene tree
 		get_tree().paused = is_paused
 		update_global_pause_state(is_paused)
 	elif multiplayer.is_server():
@@ -258,12 +300,11 @@ func update_global_pause_state(is_paused_globally: bool):
 			ally_pause_banner.hide()
 
 func _on_exit_to_lobby():
-	# 1. Unpause locally and hide pause menu
 	get_tree().paused = false
 	panel_container.hide()
 	hide()
+	DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_VISIBLE)
 	
-	# 2. Trigger rematch / return to lobby on Main
 	var main_node = get_tree().get_first_node_in_group("main")
 	if main_node:
 		if not multiplayer.has_multiplayer_peer():
@@ -274,15 +315,14 @@ func _on_exit_to_lobby():
 			main_node.rpc_id(1, "request_rematch")
 
 # ==============================================================================
-# 4. VIDEO SETTINGS LOGIC
+# 4. CRASH-PROOF VIDEO SETTINGS LOGIC
 # ==============================================================================
 func _cycle_window_mode():
+	# Strictly cycle between WINDOWED and BORDERLESS FULLSCREEN (Avoid Exclusive Fullscreen)
 	match current_window_mode:
 		DisplayServer.WINDOW_MODE_WINDOWED:
-			current_window_mode = DisplayServer.WINDOW_MODE_FULLSCREEN
+			current_window_mode = DisplayServer.WINDOW_MODE_FULLSCREEN # Borderless Windowed
 		DisplayServer.WINDOW_MODE_FULLSCREEN:
-			current_window_mode = DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN
-		DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
 			current_window_mode = DisplayServer.WINDOW_MODE_WINDOWED
 		_:
 			current_window_mode = DisplayServer.WINDOW_MODE_WINDOWED
@@ -321,7 +361,6 @@ func _get_window_mode_name() -> String:
 	match current_window_mode:
 		DisplayServer.WINDOW_MODE_WINDOWED: return "WINDOWED"
 		DisplayServer.WINDOW_MODE_FULLSCREEN: return "BORDERLESS"
-		DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN: return "FULLSCREEN"
 	return "WINDOWED"
 
 func _get_fps_name() -> String:
@@ -340,6 +379,10 @@ func _load_video_settings():
 		current_window_mode = cfg.get_value("video", "window_mode", DisplayServer.WINDOW_MODE_WINDOWED)
 		is_vsync_enabled = cfg.get_value("video", "vsync", true)
 		current_max_fps = cfg.get_value("video", "max_fps", 0)
+
+	# Sanitize any saved Exclusive Fullscreen down to Borderless
+	if current_window_mode == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
+		current_window_mode = DisplayServer.WINDOW_MODE_FULLSCREEN
 
 	DisplayServer.window_set_mode(current_window_mode)
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED if is_vsync_enabled else DisplayServer.VSYNC_DISABLED)

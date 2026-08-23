@@ -241,7 +241,58 @@ const ORBITAL_REQ_COST: int = 50
 const ORBITAL_COOLDOWN_MAX: float = 45.0
 
 const BODYGUARD_REQ_COST: int = 5
-const MAX_BODYGUARDS: int = 2
+const MAX_BODYGUARDS: int = 4
+
+enum GuardRole {
+	RANGER_SNIPER = 0,
+	SICARIAN_MELEE = 1,
+	VANGUARD_RAD_TROOPER = 2
+}
+
+const BODYGUARD_ROSTER: Dictionary = {
+	GuardRole.RANGER_SNIPER: {
+		"id": GuardRole.RANGER_SNIPER,
+		"name": "Skitarii Ranger",
+		"sub": "Galvanic Sniper Cadre",
+		"icon": "🎯",
+		"scrap": 15,
+		"req": 5,
+		"hp": 110,
+		"speed": 290.0,
+		"damage": 55,
+		"range": 580.0,
+		"desc": "Long-range marksman wielding a Galvanic Arquebus. Snipes high-value threats from safety; deploys bipod when holding ground.",
+		"flavor": "\"Their targeting telemetry is sanctified in holy oil; they never miss the xeno spark.\""
+	},
+	GuardRole.SICARIAN_MELEE: {
+		"id": GuardRole.SICARIAN_MELEE,
+		"name": "Sicarian Ruststalker",
+		"sub": "Cybernetic Assassin",
+		"icon": "⚔️",
+		"scrap": 20,
+		"req": 10,
+		"hp": 175,
+		"speed": 410.0,
+		"damage": 45,
+		"range": 240.0,
+		"desc": "High-velocity cybernetic assassin on digitigrade bionic stilts. Charges into melee and cleaves swarms with vibrating transonic blades.",
+		"flavor": "\"A blur of blades and screaming soundwaves that cleave organic flesh at a molecular level.\""
+	},
+	GuardRole.VANGUARD_RAD_TROOPER: {
+		"id": GuardRole.VANGUARD_RAD_TROOPER,
+		"name": "Skitarii Vanguard",
+		"sub": "Rad-Shock Infantry",
+		"icon": "☣️",
+		"scrap": 10,
+		"req": 5,
+		"hp": 130,
+		"speed": 330.0,
+		"damage": 22,
+		"range": 380.0,
+		"desc": "Frontline shock trooper with a rapid-fire Radium Carbine. Emits a passive rad-fallout aura that decays enemy armor and slows runners.",
+		"flavor": "\"Their bodies burn with sacred rad-fallout, withering any heretic who draws near.\""
+	}
+}
 
 const DAMAGE_UPGRADE_REQ_COST: int = 10
 const MAX_DAMAGE_UPGRADES: int = 3

@@ -2,8 +2,8 @@ extends Node2D
 
 const GameData = preload("res://GameData.gd")
 
-const DEFAULT_PORT = 7000
-const DEFAULT_IP = "127.0.0.1"
+const DEFAULT_PORT: int = 7000
+const DEFAULT_IP: String = "127.0.0.1"
 
 enum CharacterClass {
 	ADMECH_TECHPRIEST = 0,
@@ -13,15 +13,23 @@ enum CharacterClass {
 const CLASS_DATA = {
 	CharacterClass.ADMECH_TECHPRIEST: {
 		"name": "Tech-Priest Enginseer",
-		"faction": "Adeptus Mechanicus",
-		"role": "Melee & Fortification",
-		"desc": "Master of the Machine Cult. Wields the heavy Omnissian Power-Axe, secondary Plasma Caliver, and constructs defense grids."
+		"faction": "Adeptus Mechanicus • Cult Mechanicus",
+		"role": "Fortification Magos & Heavy Melee Cleave",
+		"unit_type_id": 0,
+		"arsenal": "• Primary: Omnissian Power-Axe (Heavy Cleave & Armor Shred)\n• Secondary: Plasma Caliver (Auspex Target Lock & Telemetry)\n• Cybernetics: Autonomous Scrap-Harvesting Servo-Skulls\n• Fortifications: Barricades, Plasma Dynamos, Cognis Turrets, Foundries",
+		"stats": "🛡️ HP: 150   |   ⚡ SPD: 250   |   ⚙️ ROLE: Base-Builder & Frontline Tank",
+		"desc": "Master of the Machine Cult. Constructs interconnected Noospheric defense grids, energizes Aegis refractor shields, and purges heresy with heavy energised axe-strikes.",
+		"flavor": "\"There is no truth in flesh, only betrayal. There is no strength in flesh, only weakness. There is no constancy in flesh, only decay. There is no certainty in flesh but death.\"\n— The Hymn of Reforging"
 	},
 	CharacterClass.SKITARII_MARSHAL: {
 		"name": "Skitarii Marshal",
-		"faction": "Adeptus Mechanicus",
-		"role": "Tactical Commander & Ranged",
-		"desc": "Frontline cohort officer. Wields rapid Radium Carbines, shifts Doctrina Imperatives, and designates priority targets for bodyguards."
+		"faction": "Adeptus Mechanicus • Skitarii Legion",
+		"role": "Frontline Commander & Tactical RTS Officer",
+		"unit_type_id": 1,
+		"arsenal": "• Primary: Radium Serpenta Carbine (Rapid Cellular Fallout)\n• Directives: Doctrina Imperative Auras (Conqueror DPS / Protector Armor)\n• Command: Priority Target Designation & Real-Time Cohort Control\n• Retinue: Galvanic Rangers, Sicarian Assassins, Vanguard Shock Troopers\n• Orbital: 220-DMG Fleet Telemetry Lance Strike",
+		"stats": "🛡️ HP: 90    |   ⚡ SPD: 340   |   🚩 ROLE: RTS Cohort Commander & Fleet Caller",
+		"desc": "Supreme battlefield cohort commander. Shifts sacred Doctrina canticles, coordinates squad movements, gathers combat telemetry for Requisition bounties, and calls down orbital bombardments.",
+		"flavor": "\"The Omnissiah guides our feet as He guides our guns. Let the binary canticle sing across the battlefield, and let our cohorts march unbroken through the fallout.\"\n— Marshal Directive 0101"
 	}
 }
 
@@ -34,8 +42,6 @@ var scrap_scene = preload("res://Scrap.tscn")
 var building_scene = preload("res://Building.tscn")
 var waaagh_idol_scene = preload("res://WaaaghIdol.tscn")
 
-var class_preview_node: Node2D = null
-
 var peer: ENetMultiplayerPeer = null
 var enemy_count: int = 0
 var bullet_count: int = 0
@@ -45,7 +51,6 @@ var scrap_amount: int = 40
 var requisition_amount: int = 10
 
 var tech_targeting_uplink_unlocked: bool = false
-
 var base_radar_level: int = 0
 var tech_waaagh_reader_unlocked: bool = false
 var wave_hud_node: Control = null
@@ -82,12 +87,10 @@ var enemies_left_to_spawn: int = 0
 var active_enemies: int = 0
 var is_wave_active: bool = false
 var wave_timer: Timer
-var wave_spawn_queue: Array[int] = []
+var wave_squad_queue: Array[Dictionary] = []
 var wave_player_count: int = 1
 var spawn_lane_angles: Array[float] = []
-var spawn_serial: int = 0
 var objective_count: int = 0
-var wave_squad_queue: Array[Dictionary] = []
 
 var tech_shields_unlocked: bool = false
 var tech_lasers_unlocked: bool = false
@@ -101,7 +104,11 @@ var active_paused_peers: Dictionary = {}
 var settings_ui_node: Control = null
 var research_ui_node: Control = null
 
+# --- UI CONTROLS ---
+var title_root_control: Control = null
+var singleplayer_root_control: Control = null
 var lobby_root_control: Control = null
+
 var lobby_session_label: Label = null
 var lobby_roster_label: Label = null
 var lobby_class_desc_label: Label = null
@@ -113,15 +120,45 @@ var lobby_join_btn: Button = null
 var lobby_disconnect_btn: Button = null
 var lobby_start_btn: Button = null
 
+# Singleplayer UI Nodes
+var sp_class_name_lbl: Label = null
+var sp_role_lbl: Label = null
+var sp_stats_lbl: Label = null
+var sp_arsenal_lbl: Label = null
+var sp_desc_lbl: Label = null
+var sp_flavor_lbl: Label = null
+var sp_sprite_preview: Node2D = null
+
 var wave_prep_timer: float = 0.0
 var is_wave_preparing: bool = false
 const WAVE_PREP_DURATION: float = 8.0
 const WAVE_BREAK_DURATION: float = 14.0
 
+# --- LAN & UPNP NETWORKING ---
+const LAN_BROADCAST_PORT: int = 7001
+const LAN_BROADCAST_INTERVAL: float = 1.5
+
+var lan_udp_peer: PacketPeerUDP = null
+var lan_broadcast_timer: float = 0.0
+var lan_found_hosts: Dictionary = {}
+
+var upnp_thread: Thread = null
+var public_ip_cached: String = ""
+var is_upnp_active: bool = false
+var host_vox_code: String = ""
+
+var vox_code_edit: LineEdit = null
+var copy_vox_btn: Button = null
+var lan_list_container: VBoxContainer = null
+var upnp_status_lbl: Label = null
+
 @onready var ui_layer: CanvasLayer = get_node_or_null("UI")
 @onready var spawner: MultiplayerSpawner = get_node_or_null("MultiplayerSpawner")
 @onready var nav_region: NavigationRegion2D = get_node_or_null("NavigationRegion2D")
 
+# ==============================================================================
+# LIFECYCLE & PROCESS
+# ==============================================================================
 func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	add_to_group("main")
@@ -136,8 +173,11 @@ func _ready():
 		spawner.spawn_function = _custom_spawner
 
 	_setup_core_sub_uis()
+	_build_title_menu_ui()
+	_build_singleplayer_menu_ui()
 	_build_procedural_lobby_ui()
-	_show_lobby_ui()
+	
+	_show_title_screen()
 
 func _process(delta: float) -> void:
 	if (not multiplayer.has_multiplayer_peer()) or multiplayer.is_server():
@@ -154,140 +194,17 @@ func _process(delta: float) -> void:
 				flanker_raid_timer = randf_range(28.0, 42.0)
 				_spawn_flanker_raid()
 
-func _build_procedural_lobby_ui():
-	if not ui_layer: return
+	_process_lan_discovery(delta)
 
-	lobby_root_control = Control.new()
-	lobby_root_control.name = "LobbyUI"
-	lobby_root_control.set_anchors_preset(Control.PRESET_FULL_RECT)
-	lobby_root_control.theme = AdmechTheme.make()
-	ui_layer.add_child(lobby_root_control)
-
-	var backdrop = ColorRect.new()
-	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
-	backdrop.color = Color(0.03, 0.04, 0.06, 0.92)
-	backdrop.mouse_filter = Control.MOUSE_FILTER_PASS
-	lobby_root_control.add_child(backdrop)
-
-	var center = CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	lobby_root_control.add_child(center)
-
-	var main_panel = PanelContainer.new()
-	main_panel.custom_minimum_size = Vector2(880, 520)
-	center.add_child(main_panel)
-
-	var root_vbox = VBoxContainer.new()
-	root_vbox.add_theme_constant_override("separation", 10)
-	main_panel.add_child(root_vbox)
-
-	var title = Label.new()
-	title.text = "◆ OMNISSIAN VOX-LINK CONGREGATION CHAMBER ◆"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
-	title.add_theme_font_size_override("font_size", 16)
-	root_vbox.add_child(title)
-
-	lobby_session_label = Label.new()
-	lobby_session_label.text = "Standing by. Host a sanctum forge or link via Vox IP."
-	lobby_session_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lobby_session_label.add_theme_color_override("font_color", Color(0.95, 0.75, 0.20))
-	lobby_session_label.add_theme_font_size_override("font_size", 11)
-	root_vbox.add_child(lobby_session_label)
-
-	var sep = ColorRect.new()
-	sep.custom_minimum_size = Vector2(0, 1)
-	sep.color = Color(0.25, 0.28, 0.35, 0.6)
-	root_vbox.add_child(sep)
-
-	var body_hbox = HBoxContainer.new()
-	body_hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body_hbox.add_theme_constant_override("separation", 14)
-	root_vbox.add_child(body_hbox)
-
-	var col1 = _create_lobby_sub_card("1. VOX-LINK PROTOCOLS", body_hbox)
-	
-	var ip_lbl = Label.new()
-	ip_lbl.text = "Target Sanctum IP:"
-	ip_lbl.add_theme_font_size_override("font_size", 10)
-	col1.add_child(ip_lbl)
-
-	lobby_ip_edit = LineEdit.new()
-	lobby_ip_edit.text = DEFAULT_IP
-	lobby_ip_edit.placeholder_text = "e.g. 127.0.0.1"
-	col1.add_child(lobby_ip_edit)
-
-	var port_lbl = Label.new()
-	port_lbl.text = "Vox Port:"
-	port_lbl.add_theme_font_size_override("font_size", 10)
-	col1.add_child(port_lbl)
-
-	lobby_port_edit = LineEdit.new()
-	lobby_port_edit.text = str(DEFAULT_PORT)
-	col1.add_child(lobby_port_edit)
-
-	lobby_host_btn = Button.new()
-	lobby_host_btn.text = "ACTIVATE SANCTUM (Host)"
-	lobby_host_btn.pressed.connect(_on_host_pressed)
-	col1.add_child(lobby_host_btn)
-
-	lobby_join_btn = Button.new()
-	lobby_join_btn.text = "ESTABLISH LINK (Join)"
-	lobby_join_btn.pressed.connect(_on_join_pressed)
-	col1.add_child(lobby_join_btn)
-
-	lobby_disconnect_btn = Button.new()
-	lobby_disconnect_btn.text = "DISENGAGE LINK"
-	lobby_disconnect_btn.disabled = true
-	lobby_disconnect_btn.pressed.connect(_on_disconnect_pressed)
-	col1.add_child(lobby_disconnect_btn)
-
-	var col2 = _create_lobby_sub_card("2. CADRE DESIGNATION", body_hbox)
-
-	var class_btn_hbox = HBoxContainer.new()
-	class_btn_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	class_btn_hbox.add_theme_constant_override("separation", 6)
-	col2.add_child(class_btn_hbox)
-
-	var tp_btn = Button.new()
-	tp_btn.text = "TECH-PRIEST"
-	tp_btn.pressed.connect(func(): _select_class_local(CharacterClass.ADMECH_TECHPRIEST))
-	class_btn_hbox.add_child(tp_btn)
-
-	var sk_btn = Button.new()
-	sk_btn.text = "MARSHAL"
-	sk_btn.pressed.connect(func(): _select_class_local(CharacterClass.SKITARII_MARSHAL))
-	class_btn_hbox.add_child(sk_btn)
-
-	lobby_class_desc_label = Label.new()
-	lobby_class_desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	lobby_class_desc_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	lobby_class_desc_label.add_theme_font_size_override("font_size", 10)
-	lobby_class_desc_label.add_theme_color_override("font_color", Color(0.85, 0.88, 0.94))
-	col2.add_child(lobby_class_desc_label)
-
-	lobby_ready_btn = Button.new()
-	lobby_ready_btn.text = "READY UP"
-	lobby_ready_btn.disabled = true
-	lobby_ready_btn.pressed.connect(_on_ready_pressed)
-	col2.add_child(lobby_ready_btn)
-
-	var col3 = _create_lobby_sub_card("3. CADRE MANIFEST", body_hbox)
-
-	lobby_roster_label = Label.new()
-	lobby_roster_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	lobby_roster_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	lobby_roster_label.add_theme_font_size_override("font_size", 11)
-	col3.add_child(lobby_roster_label)
-
-	lobby_start_btn = Button.new()
-	lobby_start_btn.text = "INITIATE CRUSADE (Host)"
-	lobby_start_btn.disabled = true
-	lobby_start_btn.pressed.connect(_begin_match)
-	col3.add_child(lobby_start_btn)
-
-	_update_class_ui()
-	_refresh_lobby_roster()
+# ==============================================================================
+# 1. UI HELPERS & NAVIGATION
+# ==============================================================================
+func _create_menu_action_btn(txt: String, callable: Callable) -> Button:
+	var btn = Button.new()
+	btn.text = txt
+	btn.custom_minimum_size = Vector2(360, 38)
+	btn.pressed.connect(callable)
+	return btn
 
 func _create_lobby_sub_card(card_title: String, parent_hbox: Container) -> VBoxContainer:
 	var pc = PanelContainer.new()
@@ -321,6 +238,37 @@ func _create_lobby_sub_card(card_title: String, parent_hbox: Container) -> VBoxC
 	vbox.add_child(sep)
 
 	return vbox
+
+func _show_title_screen():
+	match_started = false
+	DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_VISIBLE)
+	if title_root_control: title_root_control.show()
+	if singleplayer_root_control: singleplayer_root_control.hide()
+	if lobby_root_control: lobby_root_control.hide()
+
+func _show_singleplayer_menu():
+	if title_root_control: title_root_control.hide()
+	if singleplayer_root_control: singleplayer_root_control.show()
+	if lobby_root_control: lobby_root_control.hide()
+
+func _show_multiplayer_menu():
+	if title_root_control: title_root_control.hide()
+	if singleplayer_root_control: singleplayer_root_control.hide()
+	if lobby_root_control: lobby_root_control.show()
+
+func _hide_all_menus():
+	if title_root_control: title_root_control.hide()
+	if singleplayer_root_control: singleplayer_root_control.hide()
+	if lobby_root_control: lobby_root_control.hide()
+
+func _open_settings_from_title():
+	if pause_menu_ui_node and pause_menu_ui_node.has_method("open_settings_from_title"):
+		if title_root_control: title_root_control.hide()
+		pause_menu_ui_node.open_settings_from_title()
+	elif pause_menu_ui_node and pause_menu_ui_node.has_method("show_my_pause_menu"):
+		pause_menu_ui_node.show_my_pause_menu()
+		if pause_menu_ui_node.has_method("_switch_view"):
+			pause_menu_ui_node._switch_view(1)
 
 func _setup_core_sub_uis():
 	if not has_node("UI/WaveHUD"):
@@ -372,18 +320,628 @@ func _setup_core_sub_uis():
 		$UI.add_child(r_ui)
 		research_ui_node = r_ui
 
+# ==============================================================================
+# 2. TITLE UI BUILDER
+# ==============================================================================
+func _build_title_menu_ui():
+	if not ui_layer: return
+
+	title_root_control = Control.new()
+	title_root_control.name = "TitleUI"
+	title_root_control.set_anchors_preset(Control.PRESET_FULL_RECT)
+	title_root_control.theme = AdmechTheme.make()
+	ui_layer.add_child(title_root_control)
+
+	var backdrop = ColorRect.new()
+	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
+	backdrop.color = Color(0.02, 0.03, 0.05, 0.95)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_PASS
+	title_root_control.add_child(backdrop)
+
+	var center = CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	title_root_control.add_child(center)
+
+	var main_panel = PanelContainer.new()
+	main_panel.custom_minimum_size = Vector2(560, 460)
+	center.add_child(main_panel)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 14)
+	main_panel.add_child(vbox)
+
+	var header = Label.new()
+	header.text = "◆ ADEPTUS MECHANICUS ◆"
+	header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	header.add_theme_color_override("font_color", Color(0.82, 0.62, 0.24))
+	header.add_theme_font_size_override("font_size", 14)
+	vbox.add_child(header)
+
+	var sub_title = Label.new()
+	sub_title.text = "FORGE SANCTUM DEFENSE PROTOCOL"
+	sub_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub_title.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
+	sub_title.add_theme_font_size_override("font_size", 18)
+	vbox.add_child(sub_title)
+
+	var sep = ColorRect.new()
+	sep.custom_minimum_size = Vector2(0, 1)
+	sep.color = Color(0.25, 0.28, 0.35, 0.6)
+	vbox.add_child(sep)
+
+	var menu_desc = Label.new()
+	menu_desc.text = "The Omnissiah's forge facility is besieged by xenos greenskins.\nSelect deployment directive:"
+	menu_desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	menu_desc.add_theme_font_size_override("font_size", 10)
+	menu_desc.add_theme_color_override("font_color", Color(0.75, 0.78, 0.82))
+	vbox.add_child(menu_desc)
+
+	var btn_vbox = VBoxContainer.new()
+	btn_vbox.add_theme_constant_override("separation", 10)
+	btn_vbox.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	vbox.add_child(btn_vbox)
+
+	var sp_btn = _create_menu_action_btn("SOLO CRUSADE (Single-Player)", func(): _show_singleplayer_menu())
+	var mp_btn = _create_menu_action_btn("MULTIPLAYER VOX-LINK (Co-Op Lobby)", func(): _show_multiplayer_menu())
+	var opt_btn = _create_menu_action_btn("OCULAR & AUDIO SETTINGS", func(): _open_settings_from_title())
+	var exit_btn = _create_menu_action_btn("SHUT DOWN COGITATOR", func(): get_tree().quit())
+
+	btn_vbox.add_child(sp_btn)
+	btn_vbox.add_child(mp_btn)
+	btn_vbox.add_child(opt_btn)
+	btn_vbox.add_child(exit_btn)
+
+	var footer = Label.new()
+	footer.text = "\"From the Motive Force we draw life. To the Omnissiah we return all.\""
+	footer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	footer.add_theme_color_override("font_color", Color(0.55, 0.50, 0.40))
+	footer.add_theme_font_size_override("font_size", 9)
+	vbox.add_child(footer)
+
+# ==============================================================================
+# 3. SINGLEPLAYER DOSSIER UI BUILDER
+# ==============================================================================
+func _build_singleplayer_menu_ui():
+	if not ui_layer: return
+
+	singleplayer_root_control = Control.new()
+	singleplayer_root_control.name = "SinglePlayerUI"
+	singleplayer_root_control.set_anchors_preset(Control.PRESET_FULL_RECT)
+	singleplayer_root_control.theme = AdmechTheme.make()
+	ui_layer.add_child(singleplayer_root_control)
+
+	var backdrop = ColorRect.new()
+	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
+	backdrop.color = Color(0.02, 0.03, 0.05, 0.95)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_PASS
+	singleplayer_root_control.add_child(backdrop)
+
+	var center = CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	singleplayer_root_control.add_child(center)
+
+	var main_panel = PanelContainer.new()
+	main_panel.custom_minimum_size = Vector2(940, 560)
+	center.add_child(main_panel)
+
+	var root_vbox = VBoxContainer.new()
+	root_vbox.add_theme_constant_override("separation", 10)
+	main_panel.add_child(root_vbox)
+
+	var title = Label.new()
+	title.text = "◆ SOLO DEPLOYMENT: SELECT CADRE COMMANDER ◆"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
+	title.add_theme_font_size_override("font_size", 16)
+	root_vbox.add_child(title)
+
+	var body_hbox = HBoxContainer.new()
+	body_hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body_hbox.add_theme_constant_override("separation", 16)
+	root_vbox.add_child(body_hbox)
+
+	# Left Column
+	var left_card = _create_lobby_sub_card("DESIGNATION", body_hbox)
+	left_card.custom_minimum_size = Vector2(280, 0)
+
+	var tp_choice_btn = Button.new()
+	tp_choice_btn.text = "TECH-PRIEST ENGINSEER"
+	tp_choice_btn.custom_minimum_size = Vector2(0, 36)
+	tp_choice_btn.pressed.connect(func(): _select_sp_class(CharacterClass.ADMECH_TECHPRIEST))
+	left_card.add_child(tp_choice_btn)
+
+	var sk_choice_btn = Button.new()
+	sk_choice_btn.text = "SKITARII MARSHAL"
+	sk_choice_btn.custom_minimum_size = Vector2(0, 36)
+	sk_choice_btn.pressed.connect(func(): _select_sp_class(CharacterClass.SKITARII_MARSHAL))
+	left_card.add_child(sk_choice_btn)
+
+	var preview_panel = PanelContainer.new()
+	preview_panel.custom_minimum_size = Vector2(250, 220)
+	preview_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0.04, 0.05, 0.08, 0.95)
+	sb.border_color = Color(0.82, 0.62, 0.24)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(4)
+	preview_panel.add_theme_stylebox_override("panel", sb)
+	left_card.add_child(preview_panel)
+
+	var sub_viewport_container = SubViewportContainer.new()
+	sub_viewport_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	sub_viewport_container.stretch = true
+	preview_panel.add_child(sub_viewport_container)
+
+	var sub_viewport = SubViewport.new()
+	sub_viewport.size = Vector2i(250, 220)
+	sub_viewport.transparent_bg = true
+	sub_viewport_container.add_child(sub_viewport)
+
+	var preview_pivot = Node2D.new()
+	preview_pivot.name = "PreviewPivot"
+	preview_pivot.position = Vector2(125, 120)
+	preview_pivot.scale = Vector2(3.5, 3.5)
+	sub_viewport.add_child(preview_pivot)
+
+	var pedestal = ClassPreviewPedestal.new()
+	preview_pivot.add_child(pedestal)
+
+	sp_sprite_preview = UnitSprite.new()
+	sp_sprite_preview.name = "HeroPreviewSprite"
+	sp_sprite_preview.position = Vector2.ZERO
+	preview_pivot.add_child(sp_sprite_preview)
+
+	# Right Column
+	var right_card = _create_lobby_sub_card("HOLY DOSSIER & COMBAT TELEMETRY", body_hbox)
+	right_card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	sp_class_name_lbl = Label.new()
+	sp_class_name_lbl.text = "TECH-PRIEST ENGINSEER"
+	sp_class_name_lbl.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
+	sp_class_name_lbl.add_theme_font_size_override("font_size", 14)
+	right_card.add_child(sp_class_name_lbl)
+
+	sp_role_lbl = Label.new()
+	sp_role_lbl.text = "Fortification Magos & Heavy Melee Cleave"
+	sp_role_lbl.add_theme_color_override("font_color", Color(0.82, 0.62, 0.24))
+	sp_role_lbl.add_theme_font_size_override("font_size", 10)
+	right_card.add_child(sp_role_lbl)
+
+	sp_stats_lbl = Label.new()
+	sp_stats_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
+	sp_stats_lbl.add_theme_font_size_override("font_size", 10)
+	right_card.add_child(sp_stats_lbl)
+
+	var sep_r = ColorRect.new()
+	sep_r.custom_minimum_size = Vector2(0, 1)
+	sep_r.color = Color(0.25, 0.28, 0.35, 0.6)
+	right_card.add_child(sep_r)
+
+	sp_desc_lbl = Label.new()
+	sp_desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sp_desc_lbl.add_theme_font_size_override("font_size", 10)
+	sp_desc_lbl.add_theme_color_override("font_color", Color(0.88, 0.90, 0.94))
+	right_card.add_child(sp_desc_lbl)
+
+	sp_arsenal_lbl = Label.new()
+	sp_arsenal_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sp_arsenal_lbl.add_theme_font_size_override("font_size", 9)
+	sp_arsenal_lbl.add_theme_color_override("font_color", Color(0.70, 0.85, 0.95))
+	right_card.add_child(sp_arsenal_lbl)
+
+	sp_flavor_lbl = Label.new()
+	sp_flavor_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sp_flavor_lbl.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	sp_flavor_lbl.add_theme_font_size_override("font_size", 9)
+	sp_flavor_lbl.add_theme_color_override("font_color", Color(0.65, 0.58, 0.45))
+	right_card.add_child(sp_flavor_lbl)
+
+	# Bottom Bar
+	var bottom_hbox = HBoxContainer.new()
+	bottom_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	bottom_hbox.add_theme_constant_override("separation", 24)
+	root_vbox.add_child(bottom_hbox)
+
+	var back_btn = Button.new()
+	back_btn.text = "← RETURN TO MAIN MENU"
+	back_btn.custom_minimum_size = Vector2(220, 36)
+	back_btn.pressed.connect(_show_title_screen)
+	bottom_hbox.add_child(back_btn)
+
+	var launch_sp_btn = Button.new()
+	launch_sp_btn.text = "⚡ DEPLOY TO FORGE WORLD (Start Game) ⚡"
+	launch_sp_btn.custom_minimum_size = Vector2(340, 36)
+	launch_sp_btn.pressed.connect(_start_singleplayer_game)
+	bottom_hbox.add_child(launch_sp_btn)
+
+	_select_sp_class(CharacterClass.ADMECH_TECHPRIEST)
+
+func _select_sp_class(c_class: CharacterClass):
+	my_selected_class = c_class
+	var data = CLASS_DATA[c_class]
+
+	if sp_class_name_lbl: sp_class_name_lbl.text = "◆ " + data.name.to_upper() + " ◆"
+	if sp_role_lbl: sp_role_lbl.text = data.faction + "\n" + data.role
+	if sp_stats_lbl: sp_stats_lbl.text = data.stats
+	if sp_desc_lbl: sp_desc_lbl.text = data.desc
+	if sp_arsenal_lbl: sp_arsenal_lbl.text = data.arsenal
+	if sp_flavor_lbl: sp_flavor_lbl.text = data.flavor
+
+	if sp_sprite_preview:
+		sp_sprite_preview.unit_type = data.unit_type_id as UnitSprite.UnitType
+		sp_sprite_preview.update_facing(sp_sprite_preview.global_position + Vector2(20, 35))
+		sp_sprite_preview.queue_redraw()
+
+func _start_singleplayer_game():
+	_safe_cleanup_peer()
+	player_classes.clear()
+	player_ready.clear()
+
+	player_classes[1] = my_selected_class
+	player_ready[1] = true
+
+	_hide_all_menus()
+	_begin_match()
+
+# ==============================================================================
+# 4. MULTIPLAYER LOBBY UI BUILDER
+# ==============================================================================
+func _build_procedural_lobby_ui():
+	if not ui_layer: return
+
+	lobby_root_control = Control.new()
+	lobby_root_control.name = "LobbyUI"
+	lobby_root_control.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lobby_root_control.theme = AdmechTheme.make()
+	ui_layer.add_child(lobby_root_control)
+
+	var backdrop = ColorRect.new()
+	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
+	backdrop.color = Color(0.03, 0.04, 0.06, 0.95)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_PASS
+	lobby_root_control.add_child(backdrop)
+
+	var center = CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lobby_root_control.add_child(center)
+
+	var main_panel = PanelContainer.new()
+	main_panel.custom_minimum_size = Vector2(940, 540)
+	center.add_child(main_panel)
+
+	var root_vbox = VBoxContainer.new()
+	root_vbox.add_theme_constant_override("separation", 10)
+	main_panel.add_child(root_vbox)
+
+	var title = Label.new()
+	title.text = "◆ OMNISSIAN VOX-LINK CONGREGATION CHAMBER ◆"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
+	title.add_theme_font_size_override("font_size", 16)
+	root_vbox.add_child(title)
+
+	lobby_session_label = Label.new()
+	lobby_session_label.text = "Standing by. Host a sanctum forge or link via Vox Code."
+	lobby_session_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lobby_session_label.add_theme_color_override("font_color", Color(0.95, 0.75, 0.20))
+	lobby_session_label.add_theme_font_size_override("font_size", 11)
+	root_vbox.add_child(lobby_session_label)
+
+	var sep = ColorRect.new()
+	sep.custom_minimum_size = Vector2(0, 1)
+	sep.color = Color(0.25, 0.28, 0.35, 0.6)
+	root_vbox.add_child(sep)
+
+	var body_hbox = HBoxContainer.new()
+	body_hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body_hbox.add_theme_constant_override("separation", 14)
+	root_vbox.add_child(body_hbox)
+
+	# Column 1
+	var col1 = _create_lobby_sub_card("1. CONNECTION PROTOCOLS", body_hbox)
+	col1.custom_minimum_size = Vector2(300, 0)
+
+	lobby_host_btn = Button.new()
+	lobby_host_btn.text = "⚡ HOST SANCTUM (Create Server)"
+	lobby_host_btn.custom_minimum_size = Vector2(0, 32)
+	lobby_host_btn.pressed.connect(_on_host_pressed)
+	col1.add_child(lobby_host_btn)
+
+	upnp_status_lbl = Label.new()
+	upnp_status_lbl.text = "UPnP: Standby"
+	upnp_status_lbl.add_theme_font_size_override("font_size", 9)
+	upnp_status_lbl.add_theme_color_override("font_color", Color(0.6, 0.65, 0.7))
+	col1.add_child(upnp_status_lbl)
+
+	var vox_lbl = Label.new()
+	vox_lbl.text = "Vox Transmission Code (Share with friends):"
+	vox_lbl.add_theme_font_size_override("font_size", 9)
+	col1.add_child(vox_lbl)
+
+	var code_hbox = HBoxContainer.new()
+	col1.add_child(code_hbox)
+
+	vox_code_edit = LineEdit.new()
+	vox_code_edit.placeholder_text = "Paste VOX-XXXX code..."
+	vox_code_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	code_hbox.add_child(vox_code_edit)
+
+	copy_vox_btn = Button.new()
+	copy_vox_btn.text = "📋 COPY"
+	copy_vox_btn.disabled = true
+	copy_vox_btn.pressed.connect(func():
+		if not host_vox_code.is_empty():
+			DisplayServer.clipboard_set(host_vox_code)
+			copy_vox_btn.text = "COPIED!"
+			get_tree().create_timer(1.5).timeout.connect(func(): if copy_vox_btn: copy_vox_btn.text = "📋 COPY")
+	)
+	code_hbox.add_child(copy_vox_btn)
+
+	var paste_btn = Button.new()
+	paste_btn.text = "PASTE"
+	paste_btn.pressed.connect(func():
+		if vox_code_edit: vox_code_edit.text = DisplayServer.clipboard_get()
+	)
+	code_hbox.add_child(paste_btn)
+
+	lobby_join_btn = Button.new()
+	lobby_join_btn.text = "ESTABLISH VOX-LINK (Join)"
+	lobby_join_btn.pressed.connect(_on_join_pressed)
+	col1.add_child(lobby_join_btn)
+
+	var lan_header = Label.new()
+	lan_header.text = "◆ LOCAL SANCTUMS DETECTED (LAN) ◆"
+	lan_header.add_theme_font_size_override("font_size", 9)
+	lan_header.add_theme_color_override("font_color", Color(0.82, 0.62, 0.24))
+	col1.add_child(lan_header)
+
+	var lan_scroll = ScrollContainer.new()
+	lan_scroll.custom_minimum_size = Vector2(0, 60)
+	lan_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	col1.add_child(lan_scroll)
+
+	lan_list_container = VBoxContainer.new()
+	lan_list_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lan_scroll.add_child(lan_list_container)
+
+	lobby_disconnect_btn = Button.new()
+	lobby_disconnect_btn.text = "DISENGAGE LINK"
+	lobby_disconnect_btn.disabled = true
+	lobby_disconnect_btn.pressed.connect(_on_disconnect_pressed)
+	col1.add_child(lobby_disconnect_btn)
+
+	# Column 2
+	var col2 = _create_lobby_sub_card("2. CADRE DESIGNATION", body_hbox)
+
+	var class_btn_hbox = HBoxContainer.new()
+	class_btn_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	class_btn_hbox.add_theme_constant_override("separation", 6)
+	col2.add_child(class_btn_hbox)
+
+	var tp_btn = Button.new()
+	tp_btn.text = "TECH-PRIEST"
+	tp_btn.pressed.connect(func(): _select_class_local(CharacterClass.ADMECH_TECHPRIEST))
+	class_btn_hbox.add_child(tp_btn)
+
+	var sk_btn = Button.new()
+	sk_btn.text = "MARSHAL"
+	sk_btn.pressed.connect(func(): _select_class_local(CharacterClass.SKITARII_MARSHAL))
+	class_btn_hbox.add_child(sk_btn)
+
+	lobby_class_desc_label = Label.new()
+	lobby_class_desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lobby_class_desc_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	lobby_class_desc_label.add_theme_font_size_override("font_size", 10)
+	lobby_class_desc_label.add_theme_color_override("font_color", Color(0.85, 0.88, 0.94))
+	col2.add_child(lobby_class_desc_label)
+
+	lobby_ready_btn = Button.new()
+	lobby_ready_btn.text = "READY UP"
+	lobby_ready_btn.disabled = true
+	lobby_ready_btn.pressed.connect(_on_ready_pressed)
+	col2.add_child(lobby_ready_btn)
+
+	# Column 3
+	var col3 = _create_lobby_sub_card("3. CADRE MANIFEST", body_hbox)
+
+	lobby_roster_label = Label.new()
+	lobby_roster_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lobby_roster_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	lobby_roster_label.add_theme_font_size_override("font_size", 11)
+	col3.add_child(lobby_roster_label)
+
+	lobby_start_btn = Button.new()
+	lobby_start_btn.text = "INITIATE CRUSADE (Host)"
+	lobby_start_btn.disabled = true
+	lobby_start_btn.pressed.connect(_begin_match)
+	col3.add_child(lobby_start_btn)
+
+	lobby_ip_edit = LineEdit.new()
+	lobby_ip_edit.text = DEFAULT_IP
+	lobby_ip_edit.visible = false
+	col1.add_child(lobby_ip_edit)
+
+	lobby_port_edit = LineEdit.new()
+	lobby_port_edit.text = str(DEFAULT_PORT)
+	lobby_port_edit.visible = false
+	col1.add_child(lobby_port_edit)
+
+	var bottom_bar = HBoxContainer.new()
+	bottom_bar.alignment = BoxContainer.ALIGNMENT_CENTER
+	root_vbox.add_child(bottom_bar)
+
+	var return_btn = Button.new()
+	return_btn.text = "← RETURN TO MAIN MENU"
+	return_btn.custom_minimum_size = Vector2(240, 32)
+	return_btn.pressed.connect(func():
+		_on_disconnect_pressed()
+		_show_title_screen()
+	)
+	bottom_bar.add_child(return_btn)
+
+	_update_class_ui()
+	_refresh_lobby_roster()
+	_init_lan_listener()
+
+# ==============================================================================
+# 5. NETWORKING (UPnP, LAN, WEBSOCKETS/ENET)
+# ==============================================================================
+func _discover_public_ip_and_upnp(port: int):
+	var http = HTTPRequest.new()
+	add_child(http)
+	http.request_completed.connect(func(_res, code, _headers, body):
+		if code == 200:
+			public_ip_cached = body.get_string_from_utf8().strip_edges()
+			_update_host_vox_code(port)
+		http.queue_free()
+	)
+	http.request("https://api.ipify.org")
+
+	upnp_thread = Thread.new()
+	upnp_thread.start(_run_upnp_task.bind(port))
+
+func _run_upnp_task(port: int):
+	var upnp = UPNP.new()
+	var discover_res = upnp.discover()
+	
+	if discover_res == UPNP.UPNP_RESULT_SUCCESS and upnp.get_gateway() and upnp.get_gateway().is_valid_gateway():
+		var map_res = upnp.add_port_mapping(port, port, "Godot_AdMech_Game", "UDP")
+		is_upnp_active = (map_res == UPNP.UPNP_RESULT_SUCCESS)
+	else:
+		is_upnp_active = false
+
+	call_deferred("_on_upnp_completed")
+
+func _on_upnp_completed():
+	if upnp_thread and upnp_thread.is_started():
+		upnp_thread.wait_to_finish()
+
+	if upnp_status_lbl:
+		if is_upnp_active:
+			upnp_status_lbl.text = "⚡ UPnP: PORT FORWARDED (ONLINE READY)"
+			upnp_status_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
+		else:
+			upnp_status_lbl.text = "⚠️ UPnP: UNAVAILABLE (LAN / Manual Forwarding)"
+			upnp_status_lbl.add_theme_color_override("font_color", Color(0.95, 0.75, 0.20))
+
+func _update_host_vox_code(port: int):
+	if public_ip_cached.is_empty():
+		public_ip_cached = "127.0.0.1"
+	
+	var raw_str = "%s:%d" % [public_ip_cached, port]
+	host_vox_code = "VOX-" + Marshalls.utf8_to_base64(raw_str).replace("=", "")
+	
+	if vox_code_edit:
+		vox_code_edit.text = host_vox_code
+	if copy_vox_btn:
+		copy_vox_btn.disabled = false
+
+func _decode_vox_code(code: String) -> Dictionary:
+	var clean = code.strip_edges()
+	if clean.begins_with("VOX-"):
+		clean = clean.substr(4)
+	
+	while clean.length() % 4 != 0:
+		clean += "="
+	
+	var decoded = Marshalls.base64_to_utf8(clean)
+	var parts = decoded.split(":")
+	if parts.size() >= 2:
+		return {"ip": parts[0], "port": int(parts[1])}
+	
+	if clean.contains("."):
+		return {"ip": clean, "port": DEFAULT_PORT}
+	
+	return {}
+
+func _init_lan_listener():
+	_cleanup_lan_socket()
+	lan_udp_peer = PacketPeerUDP.new()
+	lan_udp_peer.set_broadcast_enabled(true)
+	lan_udp_peer.bind(LAN_BROADCAST_PORT)
+
+func _process_lan_discovery(delta: float):
+	if is_instance_valid(peer) and multiplayer.is_server():
+		lan_broadcast_timer += delta
+		if lan_broadcast_timer >= LAN_BROADCAST_INTERVAL:
+			lan_broadcast_timer = 0.0
+			var msg = JSON.stringify({
+				"name": "Sanctum #" + str(multiplayer.get_unique_id()),
+				"port": int(lobby_port_edit.text) if lobby_port_edit else DEFAULT_PORT,
+				"players": player_classes.size()
+			})
+			if not lan_udp_peer:
+				lan_udp_peer = PacketPeerUDP.new()
+				lan_udp_peer.set_broadcast_enabled(true)
+			lan_udp_peer.set_dest_address("255.255.255.255", LAN_BROADCAST_PORT)
+			lan_udp_peer.put_packet(msg.to_utf8_buffer())
+
+	if not match_started and is_instance_valid(lan_udp_peer) and lan_udp_peer.is_bound():
+		while lan_udp_peer.get_available_packet_count() > 0:
+			var sender_ip = lan_udp_peer.get_packet_ip()
+			var raw_packet = lan_udp_peer.get_packet().get_string_from_utf8()
+			var parsed = JSON.parse_string(raw_packet)
+			if parsed is Dictionary:
+				var key = "%s:%d" % [sender_ip, int(parsed.get("port", DEFAULT_PORT))]
+				lan_found_hosts[key] = {
+					"ip": sender_ip,
+					"port": int(parsed.get("port", DEFAULT_PORT)),
+					"name": parsed.get("name", "Local Sanctum"),
+					"players": parsed.get("players", 1),
+					"last_seen": Time.get_ticks_msec()
+				}
+				_refresh_lan_ui_list()
+
+func _refresh_lan_ui_list():
+	if not is_instance_valid(lan_list_container): return
+
+	for c in lan_list_container.get_children():
+		c.queue_free()
+
+	var now = Time.get_ticks_msec()
+	for key in lan_found_hosts.keys():
+		var info = lan_found_hosts[key]
+		if now - info.last_seen > 4000:
+			lan_found_hosts.erase(key)
+			continue
+
+		var row = HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+
+		var lbl = Label.new()
+		lbl.text = "⚡ %s (%d Cadre)" % [info.name, info.players]
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl.add_theme_font_size_override("font_size", 9)
+		lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
+		row.add_child(lbl)
+
+		var join_btn = Button.new()
+		join_btn.text = "JOIN"
+		join_btn.custom_minimum_size = Vector2(50, 20)
+		join_btn.pressed.connect(func(): _join_game_direct(info.ip, info.port))
+		row.add_child(join_btn)
+
+		lan_list_container.add_child(row)
+
+func _cleanup_lan_socket():
+	if lan_udp_peer:
+		lan_udp_peer.close()
+		lan_udp_peer = null
+
 func _safe_cleanup_peer():
 	if multiplayer.multiplayer_peer:
 		multiplayer.multiplayer_peer.close()
 		multiplayer.multiplayer_peer = null
 	peer = null
+	if upnp_thread and upnp_thread.is_started():
+		upnp_thread.wait_to_finish()
 
 func _on_host_pressed():
 	_safe_cleanup_peer()
 	
 	var port = int(lobby_port_edit.text) if (lobby_port_edit and lobby_port_edit.text != "") else DEFAULT_PORT
 	peer = ENetMultiplayerPeer.new()
-	var error = peer.create_server(port)
+	var error = peer.create_server(port, 4)
 	if error != OK:
 		_set_session_text("Failed to host on Port %d. Error code: %d" % [port, error])
 		_safe_cleanup_peer()
@@ -398,16 +956,31 @@ func _on_host_pressed():
 	player_classes[1] = my_selected_class
 	player_ready[1] = false
 
-	_set_session_text("◆ SANCTUM ACTIVATED ◆ Hosting on Port %d." % port)
+	_set_session_text("◆ SANCTUM ACTIVE ◆ Copy Vox Code or broadcast to LAN.")
 	_update_connection_buttons(true)
 	_refresh_lobby_roster()
 	_broadcast_lobby_state()
 
-func _on_join_pressed():
-	_safe_cleanup_peer()
+	_discover_public_ip_and_upnp(port)
 
-	var ip = lobby_ip_edit.text.strip_edges() if (lobby_ip_edit and lobby_ip_edit.text != "") else DEFAULT_IP
-	var port = int(lobby_port_edit.text) if (lobby_port_edit and lobby_port_edit.text != "") else DEFAULT_PORT
+func _on_join_pressed():
+	var code_input = vox_code_edit.text.strip_edges() if vox_code_edit else ""
+	var target_ip = DEFAULT_IP
+	var target_port = DEFAULT_PORT
+
+	if not code_input.is_empty():
+		var decoded = _decode_vox_code(code_input)
+		if not decoded.is_empty():
+			target_ip = decoded.ip
+			target_port = decoded.port
+	else:
+		target_ip = lobby_ip_edit.text.strip_edges() if (lobby_ip_edit and lobby_ip_edit.text != "") else DEFAULT_IP
+		target_port = int(lobby_port_edit.text) if (lobby_port_edit and lobby_port_edit.text != "") else DEFAULT_PORT
+
+	_join_game_direct(target_ip, target_port)
+
+func _join_game_direct(ip: String, port: int):
+	_safe_cleanup_peer()
 
 	peer = ENetMultiplayerPeer.new()
 	var err = peer.create_client(ip, port)
@@ -421,12 +994,16 @@ func _on_join_pressed():
 
 func _on_disconnect_pressed():
 	_safe_cleanup_peer()
+	_cleanup_lan_socket()
 	player_classes.clear()
 	player_ready.clear()
 	is_ready = false
+	host_vox_code = ""
+	if vox_code_edit: vox_code_edit.text = ""
 	_set_session_text("Vox-Link disengaged. Standing by.")
 	_update_connection_buttons(false)
 	_refresh_lobby_roster()
+	_init_lan_listener()
 
 func _on_connected_to_server():
 	_set_session_text("◆ VOX-LINK SYNCHRONIZED ◆ Select class & Ready Up.")
@@ -551,7 +1128,7 @@ func sync_match_started() -> void:
 func _begin_match_local() -> void:
 	match_started = true
 	DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_CONFINED)
-	_hide_lobby_ui()
+	_hide_all_menus()
 	var hud = get_tree().get_first_node_in_group("ability_hud")
 	if hud and hud.has_method("show"): hud.show()
 
@@ -608,31 +1185,29 @@ func _refresh_lobby_roster():
 		lobby_start_btn.disabled = not all_ready
 		lobby_start_btn.text = "INITIATE CRUSADE" if all_ready else "WAITING ON CADRE..."
 
-func _show_lobby_ui():
-	match_started = false
-	DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_VISIBLE)
-	if lobby_root_control: lobby_root_control.show()
-
-func _hide_lobby_ui():
-	if lobby_root_control: lobby_root_control.hide()
+# ==============================================================================
+# 6. SPAWNER & ENTITY ROUTING
+# ==============================================================================
+func spawn_entity(data: Dictionary) -> Node:
+	if spawner and multiplayer.has_multiplayer_peer():
+		return spawner.spawn(data)
+	else:
+		var node = _custom_spawner(data)
+		if is_instance_valid(node):
+			add_child(node)
+		return node
 
 func spawn_player(peer_id: int):
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
 	for p in get_tree().get_nodes_in_group("players"):
 		if p.name == str(peer_id): return
 
-	var chosen_class = player_classes.get(peer_id, CharacterClass.SKITARII_MARSHAL)
-	var spawn_data = {
+	var chosen_class = player_classes.get(peer_id, my_selected_class)
+	spawn_entity({
 		"type": "player",
 		"peer_id": peer_id,
 		"class": chosen_class
-	}
-	if spawner:
-		spawner.spawn(spawn_data)
-	else:
-		var p_node = _custom_spawner(spawn_data)
-		if is_instance_valid(p_node):
-			add_child(p_node)
+	})
 
 func _custom_spawner(data) -> Node:
 	if typeof(data) == TYPE_ARRAY and data.size() > 0: data = data[0]
@@ -645,8 +1220,10 @@ func _custom_spawner(data) -> Node:
 			var peer_id = data["peer_id"]
 			player.name = str(peer_id)
 			var chosen_class = data.get("class", CharacterClass.ADMECH_TECHPRIEST)
+			
+			player.current_class = 0 if chosen_class == CharacterClass.ADMECH_TECHPRIEST else 1
 			if player.has_method("set_player_class"):
-				player.set_player_class(player.PlayerClass.MELEE if chosen_class == CharacterClass.ADMECH_TECHPRIEST else player.PlayerClass.RANGED)
+				player.set_player_class(player.current_class)
 			
 			var base_node = get_tree().get_first_node_in_group("base")
 			var base_pos = base_node.global_position if base_node else Vector2(500, 500)
@@ -659,7 +1236,7 @@ func _custom_spawner(data) -> Node:
 			var inf = CharacterBody2D.new()
 			inf.set_script(inf_script)
 			inf.name = str(data["name"])
-			inf.position = data["position"] # Fixed: uses position, not global_position
+			inf.position = data["position"]
 			inf.unit_type = data.get("unit_type", GameData.CohortUnitType.VANGUARD)
 			inf.set_multiplayer_authority(1)
 			return inf
@@ -669,7 +1246,7 @@ func _custom_spawner(data) -> Node:
 			var kata = CharacterBody2D.new()
 			kata.set_script(kata_script)
 			kata.name = str(data["name"])
-			kata.position = data["position"] # Fixed: uses position, not global_position
+			kata.position = data["position"]
 			kata.set_multiplayer_authority(1)
 			return kata
 
@@ -698,6 +1275,7 @@ func _custom_spawner(data) -> Node:
 			bullet.direction = data["direction"]
 			bullet.rotation = data["direction"].angle()
 			if "damage" in data: bullet.damage = data["damage"]
+			if "bullet_type" in data: bullet.bullet_type = int(data["bullet_type"])
 			if "is_enemy_bullet" in data: bullet.is_enemy_bullet = data["is_enemy_bullet"]
 			if "is_plasma_caliver" in data: bullet.is_plasma_caliver = data["is_plasma_caliver"]
 			return bullet
@@ -707,10 +1285,12 @@ func _custom_spawner(data) -> Node:
 			var robot = CharacterBody2D.new()
 			robot.set_script(robot_script)
 			robot.name = str(data["name"])
-			robot.position = data["position"] # Fixed: uses position
+			robot.position = data["position"]
 			robot.set_multiplayer_authority(1)
 			var owner_id = data["owner_id"]
 			var p_node = get_node_or_null(str(owner_id))
+			if not p_node:
+				p_node = get_tree().get_first_node_in_group("players")
 			if p_node:
 				robot.player_owner = p_node
 				p_node.active_kastelan_robot = robot
@@ -754,12 +1334,17 @@ func _custom_spawner(data) -> Node:
 			var bg = bodyguard_scene.instantiate()
 			bg.name = str(data["name"])
 			bg.position = data["position"]
+			if "guard_role" in data:
+				bg.guard_role = int(data["guard_role"])
 			bg.set_multiplayer_authority(1)
 			var owner_id = data["owner_id"]
 			var p_node = get_node_or_null(str(owner_id))
+			if not p_node:
+				p_node = get_tree().get_first_node_in_group("players")
 			if p_node:
 				bg.player_owner = p_node
-				if "active_bodyguards" in p_node: p_node.active_bodyguards.append(bg)
+				if "active_bodyguards" in p_node:
+					p_node.active_bodyguards.append(bg)
 			return bg
 
 		"servo_skull":
@@ -770,9 +1355,15 @@ func _custom_spawner(data) -> Node:
 			skull.set_multiplayer_authority(1)
 			var owner_id = data["owner_id"]
 			var p_node = get_node_or_null(str(owner_id))
+			if not p_node:
+				p_node = get_tree().get_first_node_in_group("players")
 			if p_node:
-				skull.set_owner_player(p_node)
-				if "active_servo_skulls" in p_node: p_node.active_servo_skulls.append(skull)
+				if skull.has_method("set_owner_player"):
+					skull.set_owner_player(p_node)
+				elif "player_owner" in skull:
+					skull.player_owner = p_node
+				if "active_servo_skulls" in p_node:
+					p_node.active_servo_skulls.append(skull)
 			return skull
 
 	return null
@@ -792,14 +1383,7 @@ func notify_cohort_unit_lost():
 @rpc("any_peer", "call_local", "reliable")
 func request_queue_cohort_unit(building_name: String, unit_type_id: int):
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
-	var target_building = null
-	for b in get_tree().get_nodes_in_group("buildings"):
-		if is_instance_valid(b) and b.name == building_name:
-			target_building = b
-			break
-	if not target_building:
-		target_building = get_node_or_null(building_name)
-
+	var target_building = _find_building_by_name(building_name)
 	if is_instance_valid(target_building) and target_building.has_method("try_queue_unit"):
 		target_building.try_queue_unit(unit_type_id)
 
@@ -833,14 +1417,7 @@ func _find_building_by_name(b_name: String) -> Node2D:
 @rpc("any_peer", "call_local", "reliable")
 func request_set_rally_point(building_name: String, rally_pos: Vector2):
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
-	var target_building = null
-	for b in get_tree().get_nodes_in_group("buildings"):
-		if is_instance_valid(b) and b.name == building_name:
-			target_building = b
-			break
-	if not target_building:
-		target_building = get_node_or_null(building_name)
-
+	var target_building = _find_building_by_name(building_name)
 	if is_instance_valid(target_building) and target_building.has_method("set_rally_point"):
 		target_building.set_rally_point(rally_pos)
 		if multiplayer.has_multiplayer_peer():
@@ -852,36 +1429,30 @@ func _spawn_map_scrap_deposits():
 
 	for i in range(2):
 		var angle = (PI * 0.75) if i == 0 else (-PI * 0.25)
-		var dep_data = {
+		spawn_entity({
 			"type": "scrap_deposit",
 			"name": "ScrapDeposit_Start_" + str(i + 1),
 			"position": (base_pos + Vector2.RIGHT.rotated(angle) * 240.0).snapped(Vector2(32, 32))
-		}
-		if spawner: spawner.spawn(dep_data)
-		else: add_child(_custom_spawner(dep_data))
+		})
 
 	for i in range(5):
 		var angle = (float(i) * TAU / 5.0) + randf_range(-0.3, 0.3)
-		var dep_data = {
+		spawn_entity({
 			"type": "scrap_deposit",
 			"name": "ScrapDeposit_Wild_" + str(i + 1),
 			"position": (base_pos + Vector2.RIGHT.rotated(angle) * randf_range(650.0, 1050.0)).snapped(Vector2(32, 32))
-		}
-		if spawner: spawner.spawn(dep_data)
-		else: add_child(_custom_spawner(dep_data))
+		})
 
 func _spawn_ork_mega_camp():
 	var base_node = get_tree().get_first_node_in_group("base")
 	var base_pos = base_node.global_position if base_node else Vector2(500, 500)
 
 	var camp_pos = (base_pos + Vector2.RIGHT.rotated(randf_range(-PI, PI)) * 1450.0).snapped(Vector2(32, 32))
-	var citadel_data = {
+	spawn_entity({
 		"type": "ork_citadel",
 		"name": "OrkCitadel_Core",
 		"position": camp_pos
-	}
-	if spawner: spawner.spawn(citadel_data)
-	else: add_child(_custom_spawner(citadel_data))
+	})
 
 	var dir_to_base = (base_pos - camp_pos).normalized()
 	var heap_positions = [
@@ -891,13 +1462,11 @@ func _spawn_ork_mega_camp():
 	]
 
 	for i in range(heap_positions.size()):
-		var heap_data = {
+		spawn_entity({
 			"type": "ork_scrap_heap",
 			"name": "OrkScrapHeap_" + str(i + 1),
 			"position": heap_positions[i].snapped(Vector2(32, 32))
-		}
-		if spawner: spawner.spawn(heap_data)
-		else: add_child(_custom_spawner(heap_data))
+		})
 
 func start_next_wave():
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
@@ -942,16 +1511,14 @@ func _spawn_flanker_raid():
 	
 	for t in [1, 1, 3]:
 		enemy_count += 1
-		var enemy_data = {
+		spawn_entity({
 			"type": "enemy",
 			"name": "Flanker_" + str(enemy_count),
 			"enemy_type": t,
 			"position": edge_pos + Vector2.RIGHT.rotated(randf() * TAU) * 35.0,
 			"is_objective_guard": false,
 			"counts_toward_wave": false
-		}
-		if spawner: spawner.spawn(enemy_data)
-		else: add_child(_custom_spawner(enemy_data))
+		})
 
 func _spawn_tactical_squad(squad: Dictionary):
 	var units: Array = squad["units"]
@@ -966,16 +1533,14 @@ func _spawn_tactical_squad(squad: Dictionary):
 	for unit_type in units:
 		enemy_count += 1
 		var spawn_pos = squad_center + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(15.0, 50.0)
-		var enemy_data = {
+		spawn_entity({
 			"type": "enemy",
 			"name": "Enemy_" + str(enemy_count),
 			"enemy_type": unit_type,
 			"position": spawn_pos,
 			"is_objective_guard": false,
 			"counts_toward_wave": true
-		}
-		if spawner: spawner.spawn(enemy_data)
-		else: add_child(_custom_spawner(enemy_data))
+		})
 
 		active_enemies += 1
 		enemies_left_to_spawn = max(0, enemies_left_to_spawn - 1)
@@ -1052,18 +1617,22 @@ func spawn_waaagh_idol():
 	var center = base_node.global_position if base_node else Vector2(500, 500)
 	var camp_pos = center + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(720.0, 1020.0)
 
-	var idol_data = {"type": "waaagh_idol", "name": "WaaaghIdol_" + str(objective_count), "position": camp_pos}
-	if spawner: spawner.spawn(idol_data)
-	else: add_child(_custom_spawner(idol_data))
+	spawn_entity({
+		"type": "waaagh_idol",
+		"name": "WaaaghIdol_" + str(objective_count),
+		"position": camp_pos
+	})
 
 	for i in range(6):
-		var guard_data = {
-			"type": "enemy", "name": "IdolGuard_" + str(randi()), "enemy_type": 0 if i % 2 == 0 else 1,
+		spawn_entity({
+			"type": "enemy",
+			"name": "IdolGuard_" + str(randi()),
+			"enemy_type": 0 if i % 2 == 0 else 1,
 			"position": camp_pos + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(40.0, 100.0),
-			"is_objective_guard": true, "guard_anchor": camp_pos, "counts_toward_wave": false
-		}
-		if spawner: spawner.spawn(guard_data)
-		else: add_child(_custom_spawner(guard_data))
+			"is_objective_guard": true,
+			"guard_anchor": camp_pos,
+			"counts_toward_wave": false
+		})
 
 func notify_totem_destroyed():
 	_broadcast_wave_hud()
@@ -1196,7 +1765,6 @@ func request_build_structure(build_pos: Vector2, building_type: int = 0):
 	var scrap_c = info["scrap"]
 	var req_c = info["req"]
 
-	# Server deposit clearance enforcement
 	var requires_dep = info.get("requires_deposit", false)
 	var deposits = get_tree().get_nodes_in_group("scrap_deposits")
 	
@@ -1210,7 +1778,7 @@ func request_build_structure(build_pos: Vector2, building_type: int = 0):
 	else:
 		for dep in deposits:
 			if is_instance_valid(dep) and dep.global_position.distance_to(build_pos) < 42.0:
-				return # Blocked by deposit extractor clearance
+				return
 
 	if scrap_amount >= scrap_c and requisition_amount >= req_c:
 		scrap_amount -= scrap_c
@@ -1219,14 +1787,12 @@ func request_build_structure(build_pos: Vector2, building_type: int = 0):
 			rpc("sync_resources", scrap_amount, requisition_amount)
 		
 		building_count += 1
-		var b_data = {
+		spawn_entity({
 			"type": "building",
 			"name": "Building_" + str(building_count),
 			"position": build_pos,
 			"building_type": building_type
-		}
-		if spawner: spawner.spawn(b_data)
-		else: add_child(_custom_spawner(b_data))
+		})
 		
 		if building_type == 0:
 			Building.rebuild_all_barricade_connections(get_tree())
@@ -1397,7 +1963,15 @@ func execute_rematch():
 	for peer_id in player_ready.keys():
 		player_ready[peer_id] = false
 
-	_show_lobby_ui()
-	_set_session_text("Cadre standing by. Select class and Ready Up.")
-	if multiplayer.has_multiplayer_peer() and multiplayer.is_server():
-		_broadcast_lobby_state()
+	_show_title_screen()
+
+# ==============================================================================
+# 7. INNER CLASSES
+# ==============================================================================
+class ClassPreviewPedestal extends Node2D:
+	func _draw() -> void:
+		draw_set_transform(Vector2.ZERO, 0, Vector2(1.0, 0.45))
+		draw_circle(Vector2(0, 10), 16.0, Color(0.03, 0.05, 0.08, 0.95))
+		draw_arc(Vector2(0, 10), 16.0, 0, TAU, 24, Color(0.82, 0.62, 0.24, 0.65), 1.2)
+		draw_arc(Vector2(0, 10), 11.0, 0, TAU, 16, Color(0.20, 0.88, 1.0, 0.45), 1.0)
+		draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)

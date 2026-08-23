@@ -22,7 +22,6 @@ const C_GREEN_READY := Color(0.35, 0.95, 0.45)
 const C_PARCHMENT   := Color(0.88, 0.84, 0.72)
 const C_MUTED       := Color(0.50, 0.54, 0.60)
 
-# Layout Containers (Using base types so inner classes don't cause scope errors)
 var weapon_buttons: Array[Button] = []
 var action_buttons: Array[Button] = []
 var augment_buttons: Array[Button] = []
@@ -118,7 +117,7 @@ func _build_hud_layout():
 		weapon_hbox.add_child(slot)
 		weapon_buttons.append(slot)
 
-	# --- POD B: TACTICAL FORGE (TECH-PRIEST) / COHORT DIRECTIVES (MARSHAL) ---
+	# --- POD B: TACTICAL FORGE / COHORT DIRECTIVES ---
 	action_panel = _create_pod_panel("ActionPod", main_hbox)
 	var action_vbox = VBoxContainer.new()
 	action_vbox.add_theme_constant_override("separation", 2)
@@ -330,12 +329,9 @@ func _on_slot_clicked(slot: Button):
 				local_player.toggle_build_mode(t_id)
 		else:
 			match slot.slot_index:
-				0:
-					local_player.is_attack_move_queued = not local_player.is_attack_move_queued
-				1:
-					local_player._issue_stop_to_selection()
-				2:
-					local_player._issue_hold_to_selection()
+				0: local_player.is_attack_move_queued = not local_player.is_attack_move_queued
+				1: local_player._issue_stop_to_selection()
+				2: local_player._issue_hold_to_selection()
 				3:
 					var mouse_w = local_player.get_global_mouse_position()
 					var tgt = local_player._find_enemy_under_cursor(mouse_w)
@@ -344,6 +340,11 @@ func _on_slot_clicked(slot: Button):
 				4:
 					if is_instance_valid(local_player.camera):
 						local_player.camera.global_position = local_player.global_position
+				5:
+					if multiplayer.has_multiplayer_peer():
+						local_player.rpc_id(1, "request_field_requisition_uplink")
+					else:
+						local_player.request_field_requisition_uplink()
 
 	elif slot.category == "weapon":
 		if not is_techpriest and slot.slot_index == 1:
@@ -352,12 +353,15 @@ func _on_slot_clicked(slot: Button):
 
 	elif slot.category == "augment":
 		if is_techpriest and slot.slot_index == 0:
-			local_player.rpc_id(1, "request_spawn_servo_skull")
+			if multiplayer.has_multiplayer_peer():
+				local_player.rpc_id(1, "request_spawn_servo_skull")
+			else:
+				local_player.request_spawn_servo_skull()
 		elif not is_techpriest:
-			match slot.slot_index:
-				0: local_player.rpc_id(1, "request_upgrade_damage")
-				1: local_player.rpc_id(1, "request_upgrade_speed")
-				2: local_player.rpc_id(1, "request_upgrade_bodyguards")
+			if multiplayer.has_multiplayer_peer():
+				local_player.rpc_id(1, "request_recruit_bodyguard", slot.slot_index)
+			else:
+				local_player.request_recruit_bodyguard(slot.slot_index)
 
 func _get_data_for_category(category: String, idx: int) -> Dictionary:
 	if not is_instance_valid(local_player): return {}
@@ -384,7 +388,7 @@ func _get_data_for_category(category: String, idx: int) -> Dictionary:
 				match idx:
 					0: return {
 						"key": "LMB", "name": "Radium Serpenta Carbine", "sub": "Primary Ranged Munition",
-						"icon": "gun", "scrap": 0, "req": 0, "type_id": -1,
+						"icon": "radium_carbine", "scrap": 0, "req": 0, "type_id": -1,
 						"desc": "Rapid-fire irradiated rifle. Decays organic cellular structures on impact.",
 						"flavor": "\"Breathe deep the holy fallout, and let your flesh be cleansed in phosphor fire.\""
 					}
@@ -416,35 +420,16 @@ func _get_data_for_category(category: String, idx: int) -> Dictionary:
 					6: return {"key": "7", "name": "Cybernetica Manufactorum", "sub": "Automata Assembly", "icon": "foundry", "scrap": 50, "req": 20, "type_id": 7, "desc": "Construct Skitarii Vanguard, Rangers, Ruststalkers, Kataphrons, and Kastelan Battle-Automata.", "flavor": "\"From the holy fires march the undying cohorts of Mars.\""}
 			else:
 				match idx:
-					0: return {
-						"key": "A", "name": "Attack-Move Protocol", "sub": "Aggressive March",
-						"icon": "gun", "scrap": 0, "req": 0, "type_id": -1,
-						"desc": "Orders selected cohort units to march to destination, engaging any hostiles encountered along the path.",
-						"flavor": "\"Advance with fury; leave no heretic standing in your wake.\""
-					}
-					1: return {
-						"key": "S", "name": "Halt / Stop Order", "sub": "Cancel Directives",
-						"icon": "stop", "scrap": 0, "req": 0, "type_id": -1,
-						"desc": "Immediately cancels movement and combat orders for all currently selected units.",
-						"flavor": "\"Hold position. Recalibrate targeting arrays.\""
-					}
-					2: return {
-						"key": "H", "name": "Hold Ground Protocol", "sub": "Defensive Stance",
-						"icon": "barricade", "scrap": 0, "req": 0, "type_id": -1,
-						"desc": "Units hold their exact ground, refusing to pursue enemies while firing at max range.",
-						"flavor": "\"Stand like iron. The line does not yield.\""
-					}
-					3: return {
-						"key": "F", "name": "Auspex Target Paint", "sub": "Priority Designation",
-						"icon": "plasma_pistol", "scrap": 0, "req": 0, "type_id": -1,
-						"desc": "Paints the targeted enemy (+35% Crit). Directs all cohort units and connected turrets to focus-fire.",
-						"flavor": "\"Mark the xeno warlord for total eradication.\""
-					}
-					4: return {
-						"key": "SPACE", "name": "Lock Auspex on Commander", "sub": "Camera Focus",
-						"icon": "squad", "scrap": 0, "req": 0, "type_id": -1,
-						"desc": "Instantly centers the tactical camera back onto the Skitarii Marshal.",
-						"flavor": "\"Re-center telemetry on the commanding officer.\""
+					0: return { "key": "A", "name": "Attack-Move Protocol", "sub": "Aggressive March", "icon": "attack_move", "scrap": 0, "req": 0, "type_id": -1, "desc": "Orders selected units to march and engage all enemies.", "flavor": "\"Advance with fury; leave no heretic standing.\"" }
+					1: return { "key": "S", "name": "Halt / Stop Order", "sub": "Cancel Directives", "icon": "stop", "scrap": 0, "req": 0, "type_id": -1, "desc": "Cancels movement and combat orders.", "flavor": "\"Hold position. Recalibrate targeting.\"" }
+					2: return { "key": "H", "name": "Hold Ground Protocol", "sub": "Defensive Stance", "icon": "hold_ground", "scrap": 0, "req": 0, "type_id": -1, "desc": "Units hold ground and fire at maximum range.", "flavor": "\"Stand like iron. The line does not yield.\"" }
+					3: return { "key": "F", "name": "Auspex Target Paint", "sub": "Telemetry Harvest", "icon": "auspex_paint", "scrap": 0, "req": 0, "type_id": -1, "desc": "Paints target (+35% Crit). Eliminating marked targets uploads telemetry for +1 to +3 REQ.", "flavor": "\"Mark the xeno for harvest and eradication.\"" }
+					4: return { "key": "SPACE", "name": "Lock Auspex on Commander", "sub": "Camera Focus", "icon": "cam_lock", "scrap": 0, "req": 0, "type_id": -1, "desc": "Centers tactical camera on the Marshal.", "flavor": "\"Re-center telemetry on the commander.\"" }
+					5: return {
+						"key": "V", "name": "Orbital Supply Uplink", "sub": "Scrap Transmutation",
+						"icon": "distributor", "scrap": 15, "req": 0, "type_id": -1,
+						"desc": "Uploads 15 Scrap salvage to the orbital fleet in exchange for +8 Requisition supply canisters.",
+						"flavor": "\"Transmit battlefield debris to the orbital forge; receive consecrated munitions in return.\""
 					}
 					_: return {}
 
@@ -462,33 +447,34 @@ func _get_data_for_category(category: String, idx: int) -> Dictionary:
 						}
 					_: return {}
 			else:
+				var count = local_player.active_bodyguards.size() if "active_bodyguards" in local_player else 0
 				match idx:
 					0:
-						var dmg_lvl = local_player.damage_upgrade_level if "damage_upgrade_level" in local_player else 0
+						var r_info = GameData.BODYGUARD_ROSTER.get(0, {})
 						return {
-							"key": "Z", "name": "Galvanic Calibration", "sub": "Damage Overcharge",
-							"icon": "dmg_up", "scrap": 0, "req": GameData.DAMAGE_UPGRADE_REQ_COST, "type_id": -1,
-							"current_rank": dmg_lvl, "max_rank": GameData.MAX_DAMAGE_UPGRADES,
-							"desc": "Permanent weapon damage amplification (+10 Damage per rank, %d/%d)." % [dmg_lvl, GameData.MAX_DAMAGE_UPGRADES],
-							"flavor": "\"Sanctify the firing pin and let the discharge sing.\""
+							"key": "Z", "name": r_info.get("name", "Skitarii Ranger"), "sub": r_info.get("sub", "Galvanic Sniper"),
+							"icon": "recruit_ranger", "scrap": r_info.get("scrap", 15), "req": r_info.get("req", 5), "type_id": 0,
+							"current_rank": count, "max_rank": GameData.MAX_BODYGUARDS,
+							"desc": r_info.get("desc", "") + " (%d/%d Active Cohort)" % [count, GameData.MAX_BODYGUARDS],
+							"flavor": r_info.get("flavor", "")
 						}
 					1:
-						var spd_lvl = local_player.speed_upgrade_level if "speed_upgrade_level" in local_player else 0
+						var s_info = GameData.BODYGUARD_ROSTER.get(1, {})
 						return {
-							"key": "X", "name": "Bionic Locomotion", "sub": "Speed Augment",
-							"icon": "speed_up", "scrap": 0, "req": GameData.SPEED_UPGRADE_REQ_COST, "type_id": -1,
-							"current_rank": spd_lvl, "max_rank": GameData.MAX_SPEED_UPGRADES,
-							"desc": "Replaces limbs with high-speed bionic servos (+35 Speed per rank, %d/%d)." % [spd_lvl, GameData.MAX_SPEED_UPGRADES],
-							"flavor": "\"Embrace the relentless stride of steel.\""
+							"key": "X", "name": s_info.get("name", "Sicarian Ruststalker"), "sub": s_info.get("sub", "Cyber-Assassin"),
+							"icon": "recruit_sicarian", "scrap": s_info.get("scrap", 20), "req": s_info.get("req", 10), "type_id": 1,
+							"current_rank": count, "max_rank": GameData.MAX_BODYGUARDS,
+							"desc": s_info.get("desc", "") + " (%d/%d Active Cohort)" % [count, GameData.MAX_BODYGUARDS],
+							"flavor": s_info.get("flavor", "")
 						}
 					2:
-						var lvl = local_player.bodyguard_level if "bodyguard_level" in local_player else 0
+						var v_info = GameData.BODYGUARD_ROSTER.get(2, {})
 						return {
-							"key": "C", "name": "Recruit Vanguard Cadre", "sub": "Cohort Retinue",
-							"icon": "squad", "scrap": 0, "req": GameData.BODYGUARD_REQ_COST, "type_id": -1,
-							"current_rank": lvl, "max_rank": GameData.MAX_BODYGUARDS,
-							"desc": "Summons elite Skitarii Vanguard snipers and shock troops (%d/%d Active)." % [lvl, GameData.MAX_BODYGUARDS],
-							"flavor": "\"No soldier of Mars fights alone while the Noosphere binds us.\""
+							"key": "C", "name": v_info.get("name", "Skitarii Vanguard"), "sub": v_info.get("sub", "Rad-Shock Infantry"),
+							"icon": "recruit_vanguard", "scrap": v_info.get("scrap", 10), "req": v_info.get("req", 5), "type_id": 2,
+							"current_rank": count, "max_rank": GameData.MAX_BODYGUARDS,
+							"desc": v_info.get("desc", "") + " (%d/%d Active Cohort)" % [count, GameData.MAX_BODYGUARDS],
+							"flavor": v_info.flavor
 						}
 					_: return {}
 
@@ -511,7 +497,6 @@ func refresh_hud_display():
 	var selected_type = local_player.selected_building_type if "selected_building_type" in local_player else 0
 	var is_building = local_player.is_building_mode if "is_building_mode" in local_player else false
 
-	# Handle Reboot Banner Visibility (Safe check without 2-arg Object.get)
 	if is_instance_valid(reboot_panel):
 		var is_player_dead = local_player.is_dead if "is_dead" in local_player else false
 		if is_player_dead:
@@ -533,7 +518,7 @@ func refresh_hud_display():
 		elif not is_techpriest and i == 2:
 			slot.cooldown_left = local_player.orbital_strike_cooldown if "orbital_strike_cooldown" in local_player else 0.0
 
-	# 2. Update Action Pod (Tactical Forge vs Cohort Directives)
+	# 2. Update Action Pod
 	if is_instance_valid(action_title_lbl):
 		if is_techpriest:
 			action_title_lbl.text = "TACTICAL FORGE PROTOCOLS"
@@ -558,7 +543,6 @@ func refresh_hud_display():
 		var slot = augment_buttons[i]
 		var data = _get_data_for_category("augment", i)
 		_populate_slot(slot, data, cur_scrap, cur_req)
-		
 		if not data.is_empty() and data.has("current_rank") and data.has("max_rank"):
 			slot.current_rank = data.current_rank
 			slot.max_rank = data.max_rank
@@ -656,7 +640,7 @@ func _update_tooltip_position(slot: Button):
 		tooltip_card.global_position = Vector2(slot_center_x - (tooltip_card.size.x * 0.5), slot.global_position.y - tooltip_card.size.y - 12)
 
 # ==============================================================================
-# COMPACT HUD SLOT BUTTON
+# COMPACT HUD SLOT BUTTON (HIGH-CONTRAST READABLE VECTOR ICONS)
 # ==============================================================================
 
 class CompactSlot extends Button:
@@ -737,77 +721,157 @@ class CompactSlot extends Button:
 				draw_circle(pip_pos, 1.2, Color(0.25, 0.28, 0.35))
 
 	func _draw_icon(center: Vector2):
-		var gold = Color(0.82, 0.62, 0.24)
-		var cyan = Color(0.20, 0.88, 1.0)
-		var red  = Color(0.68, 0.16, 0.14)
-		var p_mid = Vector2(center.x, center.y - 1.0)
+		var gold  := Color(0.82, 0.62, 0.24)
+		var cyan  := Color(0.20, 0.88, 1.00)
+		var red   := Color(0.90, 0.22, 0.18)
+		var steel := Color(0.45, 0.50, 0.58)
+		var green := Color(0.35, 0.95, 0.45)
+		var amber := Color(1.00, 0.72, 0.15)
+		var p_mid := Vector2(center.x, center.y - 1.0)
 
 		match icon_type:
 			"axe":
 				draw_line(p_mid + Vector2(-6, 7), p_mid + Vector2(6, -7), Color(0.2, 0.24, 0.3), 3.0)
 				draw_circle(p_mid + Vector2(4, -5), 3.5, gold)
 				draw_colored_polygon(PackedVector2Array([p_mid + Vector2(2, -9), p_mid + Vector2(8, -9), p_mid + Vector2(7, -1)]), cyan)
+				draw_circle(p_mid + Vector2(4, -5), 1.2, Color.WHITE)
+
 			"plasma_pistol":
-				draw_line(p_mid + Vector2(-6, 2), p_mid + Vector2(7, 2), Color(0.25, 0.28, 0.35), 3.0)
-				draw_circle(p_mid + Vector2(1, 2), 2.5, cyan)
-				draw_circle(p_mid + Vector2(7, 2), 1.5, Color.WHITE)
-			"gun":
-				draw_line(p_mid + Vector2(-6, 2), p_mid + Vector2(8, 2), Color(0.4, 0.45, 0.5), 2.5)
-				draw_line(p_mid + Vector2(-4, 2), p_mid + Vector2(-6, 6), gold, 1.8)
-				draw_circle(p_mid + Vector2(2, 2), 1.5, cyan)
+				draw_rect(Rect2(p_mid + Vector2(-7, -2), Vector2(14, 5)), steel)
+				draw_rect(Rect2(p_mid + Vector2(-4, -4), Vector2(8, 3)), cyan)
+				draw_circle(p_mid + Vector2(7, 0), 1.8, Color.WHITE)
+
+			"radium_carbine":
+				# Radium Carbine Rifle
+				draw_line(p_mid + Vector2(-8, 2), p_mid + Vector2(8, -1), steel, 2.5)
+				draw_rect(Rect2(p_mid + Vector2(0, -3), Vector2(5, 3)), green)
+				draw_circle(p_mid + Vector2(8, -1), 1.5, Color.WHITE)
+
+			"doctrina_conq":
+				# Aggressive Red/Amber Crossed Combat Blades
+				draw_line(p_mid + Vector2(-7, -7), p_mid + Vector2(7, 7), amber, 2.2)
+				draw_line(p_mid + Vector2(-7, 7), p_mid + Vector2(7, -7), amber, 2.2)
+				draw_circle(p_mid, 2.5, red)
+				draw_circle(p_mid, 1.0, Color.WHITE)
+
+			"doctrina_prot":
+				# Defensive Cyan Aegis Ring Shield
+				draw_arc(p_mid, 7.0, 0, TAU, 20, cyan, 2.0)
+				draw_circle(p_mid, 2.5, cyan)
+				draw_circle(p_mid, 1.0, Color.WHITE)
+
+			"orbital":
+				# Piercing Orbital Telemetry Beam
+				draw_arc(p_mid, 7.0, 0, TAU, 20, Color(cyan.r, cyan.g, cyan.b, 0.4), 1.2)
+				draw_line(p_mid + Vector2(0, -9), p_mid + Vector2(0, 9), cyan, 2.2)
+				draw_line(p_mid + Vector2(-9, 0), p_mid + Vector2(9, 0), cyan, 2.2)
+				draw_circle(p_mid, 2.5, Color.WHITE)
+
+			"attack_move":
+				# Crossed Swords & Advance Arrow
+				draw_line(p_mid + Vector2(-6, 6), p_mid + Vector2(6, -6), Color.WHITE, 2.0)
+				draw_line(p_mid + Vector2(-6, -6), p_mid + Vector2(6, 6), Color.WHITE, 2.0)
+				draw_line(p_mid + Vector2(0, -8), p_mid + Vector2(0, -2), red, 2.0)
+				draw_line(p_mid + Vector2(-3, -5), p_mid + Vector2(0, -8), red, 2.0)
+				draw_line(p_mid + Vector2(3, -5), p_mid + Vector2(0, -8), red, 2.0)
+
 			"stop":
-				draw_rect(Rect2(p_mid - Vector2(5, 5), Vector2(10, 10)), red)
-				draw_rect(Rect2(p_mid - Vector2(5, 5), Vector2(10, 10)), gold, false, 1.2)
+				# Octagonal STOP Sign Barrier
+				var oct = PackedVector2Array([
+					p_mid + Vector2(-6, -3), p_mid + Vector2(-3, -6),
+					p_mid + Vector2(3, -6), p_mid + Vector2(6, -3),
+					p_mid + Vector2(6, 3), p_mid + Vector2(3, 6),
+					p_mid + Vector2(-3, 6), p_mid + Vector2(-6, 3)
+				])
+				draw_colored_polygon(oct, red)
+				draw_polyline(oct, Color.WHITE, 1.2)
+				draw_rect(Rect2(p_mid - Vector2(3, 1), Vector2(6, 2)), Color.WHITE)
+
+			"hold_ground":
+				# Heavy Bulwark Tower Shield
+				var shield = PackedVector2Array([
+					p_mid + Vector2(-6, -6), p_mid + Vector2(6, -6),
+					p_mid + Vector2(6, 2), p_mid + Vector2(0, 7), p_mid + Vector2(-6, 2)
+				])
+				draw_colored_polygon(shield, steel)
+				draw_polyline(shield, gold, 1.4)
+				draw_line(p_mid + Vector2(-3, -1), p_mid + Vector2(3, -1), cyan, 1.5)
+				draw_line(p_mid + Vector2(0, -4), p_mid + Vector2(0, 4), cyan, 1.5)
+
+			"auspex_paint":
+				# 4-Bracket Auspex Lock Reticle
+				var r = 6.5
+				draw_line(p_mid + Vector2(-r, -r), p_mid + Vector2(-r + 3, -r), cyan, 1.8)
+				draw_line(p_mid + Vector2(-r, -r), p_mid + Vector2(-r, -r + 3), cyan, 1.8)
+				draw_line(p_mid + Vector2(r, -r), p_mid + Vector2(r - 3, -r), cyan, 1.8)
+				draw_line(p_mid + Vector2(r, -r), p_mid + Vector2(r, -r + 3), cyan, 1.8)
+				draw_line(p_mid + Vector2(-r, r), p_mid + Vector2(-r + 3, r), cyan, 1.8)
+				draw_line(p_mid + Vector2(-r, r), p_mid + Vector2(-r, r - 3), cyan, 1.8)
+				draw_line(p_mid + Vector2(r, r), p_mid + Vector2(r - 3, r), cyan, 1.8)
+				draw_line(p_mid + Vector2(r, r), p_mid + Vector2(r, r - 3), cyan, 1.8)
+				draw_circle(p_mid, 1.8, red)
+
+			"cam_lock":
+				# Commander Visor / Camera Center Focus
+				draw_arc(p_mid, 6.5, 0, TAU, 16, gold, 1.2)
+				draw_circle(p_mid, 3.5, Color(0.68, 0.16, 0.14))
+				draw_circle(p_mid, 1.2, cyan)
+
+			"recruit_ranger":
+				# Galvanic Sniper Rifle with Scope
+				draw_line(p_mid + Vector2(-8, 3), p_mid + Vector2(8, -3), Color(0.28, 0.20, 0.14), 3.0)
+				draw_line(p_mid + Vector2(0, -1), p_mid + Vector2(9, -3), gold, 1.8)
+				draw_line(p_mid + Vector2(1, -4), p_mid + Vector2(6, -5), cyan, 1.6)
+				draw_circle(p_mid + Vector2(9, -3), 1.2, cyan)
+
+			"recruit_sicarian":
+				# Dual Crossed Cyan Power Blades
+				draw_line(p_mid + Vector2(-7, 6), p_mid + Vector2(7, -6), cyan, 2.5)
+				draw_line(p_mid + Vector2(-7, 6), p_mid + Vector2(7, -6), Color.WHITE, 1.0)
+				draw_line(p_mid + Vector2(-7, -6), p_mid + Vector2(7, 6), cyan, 2.5)
+				draw_line(p_mid + Vector2(-7, -6), p_mid + Vector2(7, 6), Color.WHITE, 1.0)
+				draw_circle(p_mid, 2.0, gold)
+
+			"recruit_vanguard":
+				# Vanguard Radium Helmet & Glowing Rad Chamber
+				draw_circle(p_mid, 5.5, Color(0.68, 0.16, 0.14))
+				draw_circle(p_mid + Vector2(0, -1), 2.0, green)
+				draw_circle(p_mid + Vector2(0, -1), 0.8, Color.WHITE)
+
 			"barricade":
-				var shield = PackedVector2Array([p_mid + Vector2(-7, -7), p_mid + Vector2(7, -7), p_mid + Vector2(5, 3), p_mid + Vector2(0, 7), p_mid + Vector2(-5, 3)])
-				draw_colored_polygon(shield, red)
-				draw_polyline(shield, gold, 1.2)
+				var b_shield = PackedVector2Array([p_mid + Vector2(-7, -7), p_mid + Vector2(7, -7), p_mid + Vector2(5, 3), p_mid + Vector2(0, 7), p_mid + Vector2(-5, 3)])
+				draw_colored_polygon(b_shield, Color(0.68, 0.16, 0.14))
+				draw_polyline(b_shield, gold, 1.2)
+
 			"distributor":
-				draw_line(p_mid + Vector2(0, 7), p_mid + Vector2(0, -5), Color(0.24, 0.28, 0.35), 2.8)
-				draw_circle(p_mid + Vector2(0, -5), 2.5, Color(1.0, 0.72, 0.15))
+				draw_line(p_mid + Vector2(0, 7), p_mid + Vector2(0, -5), steel, 2.8)
+				draw_circle(p_mid + Vector2(0, -5), 2.5, amber)
+
 			"generator":
-				draw_rect(Rect2(p_mid - Vector2(6, 6), Vector2(12, 12)), red)
+				draw_rect(Rect2(p_mid - Vector2(6, 6), Vector2(12, 12)), Color(0.68, 0.16, 0.14))
 				draw_rect(Rect2(p_mid - Vector2(6, 6), Vector2(12, 12)), gold, false, 1.0)
 				draw_circle(p_mid, 3.0, cyan)
+
 			"turret":
-				draw_circle(p_mid, 5.5, red)
+				draw_circle(p_mid, 5.5, Color(0.68, 0.16, 0.14))
 				draw_arc(p_mid, 5.5, 0, TAU, 12, gold, 1.0)
-				draw_line(p_mid + Vector2(2, -2), p_mid + Vector2(8, -2), Color(0.4, 0.45, 0.5), 1.8)
-				draw_line(p_mid + Vector2(2, 2), p_mid + Vector2(8, 2), Color(0.4, 0.45, 0.5), 1.8)
+				draw_line(p_mid + Vector2(2, -2), p_mid + Vector2(8, -2), steel, 1.8)
+				draw_line(p_mid + Vector2(2, 2), p_mid + Vector2(8, 2), steel, 1.8)
+
 			"foundry":
 				draw_rect(Rect2(p_mid - Vector2(6, 3), Vector2(12, 10)), Color(0.2, 0.22, 0.28))
-				draw_circle(p_mid + Vector2(0, 2), 2.2, Color(1.0, 0.5, 0.1))
+				draw_circle(p_mid + Vector2(0, 2), 2.2, amber)
+
 			"shrine":
 				var arch = PackedVector2Array([p_mid + Vector2(-6, 6), p_mid + Vector2(-6, -2), p_mid + Vector2(0, -7), p_mid + Vector2(6, -2), p_mid + Vector2(6, 6)])
-				draw_colored_polygon(arch, red)
+				draw_colored_polygon(arch, Color(0.68, 0.16, 0.14))
 				draw_polyline(arch, gold, 1.2)
 				draw_circle(p_mid + Vector2(0, 1), 2.0, cyan)
-			"doctrina_conq":
-				draw_line(p_mid + Vector2(-5, -5), p_mid + Vector2(5, 5), Color(1.0, 0.80, 0.20), 1.8)
-				draw_line(p_mid + Vector2(-5, 5), p_mid + Vector2(5, -5), Color(1.0, 0.80, 0.20), 1.8)
-			"doctrina_prot":
-				draw_arc(p_mid, 6.0, 0, TAU, 16, cyan, 1.6)
-				draw_circle(p_mid, 2.0, Color.WHITE)
+
 			"skull":
 				draw_circle(p_mid, 5.0, Color(0.88, 0.85, 0.75))
 				draw_circle(p_mid + Vector2(1.5, -0.5), 1.5, cyan)
 				draw_line(p_mid + Vector2(3, 2), p_mid + Vector2(6, 2), gold, 1.2)
-			"squad":
-				draw_circle(p_mid + Vector2(-3, 0), 3.5, red)
-				draw_circle(p_mid + Vector2(3, 0), 3.5, red)
-				draw_circle(p_mid + Vector2(-3, 0), 1.0, Color(0.2, 0.95, 0.35))
-				draw_circle(p_mid + Vector2(3, 0), 1.0, Color(0.2, 0.95, 0.35))
-			"dmg_up":
-				draw_polyline(PackedVector2Array([p_mid + Vector2(-5, 3), p_mid + Vector2(0, -2), p_mid + Vector2(5, 3)]), cyan, 1.5)
-				draw_polyline(PackedVector2Array([p_mid + Vector2(-5, -1), p_mid + Vector2(0, -6), p_mid + Vector2(5, -1)]), gold, 1.5)
-			"speed_up":
-				draw_line(p_mid + Vector2(-6, 0), p_mid + Vector2(6, 0), Color(0.2, 0.95, 0.45), 2.0)
-				draw_line(p_mid + Vector2(2, -4), p_mid + Vector2(6, 0), Color(0.2, 0.95, 0.45), 2.0)
-				draw_line(p_mid + Vector2(2, 4), p_mid + Vector2(6, 0), Color(0.2, 0.95, 0.45), 2.0)
-			"orbital":
-				draw_circle(p_mid, 6.0, Color(0.2, 0.88, 1.0, 0.3))
-				draw_line(p_mid + Vector2(0, -8), p_mid + Vector2(0, 8), cyan, 1.8)
-				draw_line(p_mid + Vector2(-8, 0), p_mid + Vector2(8, 0), cyan, 1.8)
 
 # ==============================================================================
 # TOOLTIP CARD

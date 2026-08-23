@@ -155,13 +155,25 @@ func _setup_building_light() -> void:
 		Type.MANUFACTORUM:
 			light = LightUtils.create_point_light(Color(1.0, 0.55, 0.15), 1.4, 2.8)
 		Type.TURRET:
-			light = LightUtils.create_point_light(Color(0.20, 0.88, 1.0), 0.7, 1.8)
-		Type.DISTRIBUTOR, Type.NOOSPHERE_ANTENNA:
+			# Adapt light color based on weapon specialization
+			match turret_spec:
+				GameData.TurretSpec.VOLKITE_CULVERIN:
+					light = LightUtils.create_point_light(Color(1.0, 0.25, 0.15), 1.2, 2.4)
+				GameData.TurretSpec.ARC_BLASTER:
+					light = LightUtils.create_point_light(Color(0.20, 0.88, 1.0), 1.3, 2.6)
+				GameData.TurretSpec.COGNIS_FLAK:
+					light = LightUtils.create_point_light(Color(1.0, 0.75, 0.25), 1.0, 2.2)
+				_:
+					var glow_col = Color(0.20, 0.88, 1.0) if is_noosphere_connected else Color(1.0, 0.75, 0.25)
+					light = LightUtils.create_point_light(glow_col, 0.8, 1.8)
+		Type.DISTRIBUTOR:
 			light = LightUtils.create_point_light(Color(1.0, 0.72, 0.15), 0.8, 1.8)
+		Type.NOOSPHERE_ANTENNA:
+			light = LightUtils.create_point_light(Color(0.20, 0.88, 1.0), 1.1, 2.4)
 		Type.RESEARCH_SHRINE:
 			light = LightUtils.create_point_light(Color(0.25, 0.95, 0.40), 0.9, 2.2)
 		Type.CYBERNETICA_FORGE:
-			light = LightUtils.create_point_light(Color(0.20, 0.88, 1.0), 1.2, 2.8)
+			light = LightUtils.create_point_light(Color(0.20, 0.88, 1.0), 1.4, 3.0)
 		Type.BARRICADE:
 			if is_gate:
 				light = LightUtils.create_point_light(Color(0.20, 0.88, 1.0), 0.6, 1.4)
@@ -227,7 +239,9 @@ func _spawn_manufactured_unit(unit_type_id: int):
 	}
 
 	var unit_node: Node2D = null
-	if main_node.spawner:
+	if main_node.has_method("spawn_entity"):
+		unit_node = main_node.spawn_entity(spawn_data) as Node2D
+	elif main_node.spawner and multiplayer.has_multiplayer_peer():
 		unit_node = main_node.spawner.spawn(spawn_data) as Node2D
 	else:
 		unit_node = main_node._custom_spawner(spawn_data) as Node2D

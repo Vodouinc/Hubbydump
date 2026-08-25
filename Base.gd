@@ -53,6 +53,9 @@ func take_damage(amount: int, _knockback: Vector2 = Vector2.ZERO):
 @rpc("call_local", "reliable")
 func sync_base_health(new_hp: int):
 	current_health = new_hp
+	var hb = get_node_or_null("HealthBar")
+	if hb and hb.has_method("update_health"):
+		hb.update_health(current_health, max_health)
 	update_ui()
 	
 	if current_health <= 0 and (multiplayer.is_server() or not multiplayer.has_multiplayer_peer()):

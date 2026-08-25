@@ -43,7 +43,7 @@ func _ready():
 func _apply_bullet_type_stats():
 	match bullet_type:
 		BulletType.GALVANIC_SNIPER:
-			speed = 1050.0 # Extremely high velocity
+			speed = 1050.0
 			is_enemy_bullet = false
 		BulletType.RADIUM_FLECHETTE:
 			speed = 680.0
@@ -54,7 +54,9 @@ func _apply_bullet_type_stats():
 			is_enemy_bullet = false
 		BulletType.KINETIC_TRACER:
 			speed = 720.0
-			is_enemy_bullet = false
+			# Only set to false if not already set as enemy
+			if not is_enemy_bullet:
+				is_enemy_bullet = false
 		BulletType.PHOSPHOR_ROUND:
 			speed = 580.0
 			is_enemy_bullet = false
@@ -146,16 +148,32 @@ func _draw() -> void:
 func _on_body_entered(body: Node2D):
 	if body == self: return
 
-	if multiplayer.is_server() or not multiplayer.has_multiplayer_peer():
-		if is_enemy_bullet:
-			if body.is_in_group("players") or body.is_in_group("bodyguards") or body.is_in_group("buildings") or body.is_in_group("base"):
+	# 1. ENEMY BULLETS (Gretchin scrap slugs, etc.)
+	if is_enemy_bullet:
+		# COMPLETELY IGNORE ALL ENEMIES (No self-harm or friendly fire)
+		if body.is_in_group("enemies") or body.is_in_group("ork_citadel") or body.is_in_group("ork_structures"):
+			return
+
+		if multiplayer.is_server() or not multiplayer.has_multiplayer_peer():
+			if body.is_in_group("players") or body.is_in_group("bodyguards") or body.is_in_group("buildings") or body.is_in_group("base") or body.is_in_group("friendlies"):
 				if body.has_method("take_damage"):
 					body.take_damage(damage)
 				call_deferred("queue_free")
-		else:
-			if body.is_in_group("enemies") or body.is_in_group("objectives"):
-				if is_plasma_caliver and body.has_method("apply_telemetry_mark"):
+			elif body.is_in_group("world_obstacles"):
+				call_deferred("queue_free")
+
+	# 2. PLAYER & DEFENDER BULLETS
+	else:
+		# COMPLETELY IGNORE PLAYERS AND FRIENDLIES
+		if body.is_in_group("players") or body.is_in_group("bodyguards") or body.is_in_group("friendlies") or body.is_in_group("buildings") or body.is_in_group("base"):
+			return
+
+		if multiplayer.is_server() or not multiplayer.has_multiplayer_peer():
+			if body.is_in_group("enemies") or body.is_in_group("objectives") or body.is_in_group("ork_citadel") or body.is_in_group("ork_structures"):
+				if "is_plasma_caliver" in self and is_plasma_caliver and body.has_method("apply_telemetry_mark"):
 					body.apply_telemetry_mark(6.0)
 				if body.has_method("take_damage"):
 					body.take_damage(damage)
+				call_deferred("queue_free")
+			elif body.is_in_group("world_obstacles"):
 				call_deferred("queue_free")

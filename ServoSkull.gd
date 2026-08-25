@@ -1,224 +1,276 @@
-@tool
 extends CharacterBody2D
+class_name ServoSkull
 
-@export var movement_speed: float = 220.0
-@export var detection_radius: float = 400.0
-@export var scrap_pickup_range: float = 30.0
-@export var zap_range: float = 100.0
-@export var zap_damage: int = 13
-@export var zap_cooldown: float = 1.0
+@export var speed: float = 250.0
+@export var repair_rate: float = 16.0 # HP repaired per second
+@export var scan_range: float = 550.0
 
-# Follow behavior matching bodyguards
-@export var follow_distance: float = 80.0
-@export var max_follow_distance: float = 300.0
-
-var owner_player: Node2D = null
+var player_owner: Node2D = null
+var current_target_building: Node2D = null
 var current_target_scrap: Node2D = null
-var current_target_enemy: Node2D = null
-var zap_timer: float = 0.0
-var zap_visual_timer: float = 0.0
-var anim_time: float = 0.0
-var hover_time: float = 0.0
-@export var base_elevation: float = 12.0
 
-# Core Palette Constants
-const COLOR_WHITE_TRIM = Color(0.92, 0.92, 0.88)
-const COLOR_BRONZE = Color(0.7, 0.48, 0.22)
-const COLOR_BRASS = Color(0.85, 0.65, 0.25)
-const COLOR_STEEL = Color(0.55, 0.58, 0.62)
-const COLOR_DARK_STEEL = Color(0.25, 0.28, 0.32)
-const COLOR_CYAN_GLOW = Color(0.15, 0.9, 1.0)
-const COLOR_PURITY_PAPER = Color(0.88, 0.85, 0.75)
-const COLOR_PURITY_WAX = Color(0.7, 0.1, 0.1)
+var is_repairing: bool = false
+var repair_accumulator: float = 0.0
+var scan_timer: float = 0.0
 
-@onready var navigation_agent: NavigationAgent2D = $NavigationAgent2D
-@onready var visual_sprite: Node2D = get_node_or_null("VisualSprite")
-@onready var shadow_node: Node2D = get_node_or_null("Shadow")
+var hover_angle: float = 0.0
+var seed_offset: float = 0.0
 
-func _ready():
+func _ready() -> void:
 	add_to_group("ServoSkull")
-	set_process(true)
+	add_to_group("friendlies")
+	seed_offset = randf() * 100.0
 	
-	if not has_node("SkullSearchLight"):
-		var light = LightUtils.create_point_light(Color(0.20, 0.88, 1.0), 1.0, 1.8)
-		light.name = "SkullSearchLight"
-		add_child(light)
-	
-	if not Engine.is_editor_hint():
-		set_physics_process(multiplayer.is_server())
-	else:
-		set_physics_process(false)
+	z_index = 86
+	var mat = CanvasItemMaterial.new()
+	mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+	material = mat
 
-func _process(delta):
-	# 1. Floating Hover & Bobbing Animation
-	hover_time += delta * 3.2
-	var current_elevation = base_elevation + sin(hover_time) * 3.0
-	if visual_sprite:
-		visual_sprite.position.y = -current_elevation
-	if shadow_node and shadow_node.has_method("set_elevation"):
-		shadow_node.set_elevation(current_elevation)
+func set_owner_player(p: Node2D) -> void:
+	player_owner = p
 
-	# 2. Server/Authority logic for timers
+func _physics_process(delta: float) -> void:
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
-		return
-
-	if zap_timer > 0:
-		zap_timer -= delta
-		
-	if zap_visual_timer > 0:
-		zap_visual_timer -= delta
-		anim_time += delta
-		if anim_time > 0.05:
-			anim_time = 0.0
-			queue_redraw()
-	elif zap_visual_timer <= 0 and anim_time != 0.0:
-		anim_time = 0.0
-		queue_redraw() # Clear the canvas once when the zap finishes
-
-func _physics_process(delta):
-	if not owner_player or not is_instance_valid(owner_player):
-		find_owner_player()
-		return
-
-	# 1. Prioritize looking for scrap if none is currently targeted
-	if not current_target_scrap or not is_instance_valid(current_target_scrap):
-		current_target_scrap = find_nearest_scrap()
-
-	var target_position: Vector2
-
-	if current_target_scrap:
-		target_position = current_target_scrap.global_position
-		float_toward(target_position, delta)
-		
-		if global_position.distance_to(current_target_scrap.global_position) <= scrap_pickup_range:
-			# Extract scrap value safely before freeing or collecting
-			var scrap_value = 5 # Default fallback value
-			if "scrap_value" in current_target_scrap:
-				scrap_value = current_target_scrap.scrap_value
-			elif current_target_scrap.has_method("get_scrap_value"):
-				scrap_value = current_target_scrap.get_scrap_value()
-
-			# Deposit directly to the main game node pool
-			var main_node = get_tree().get_first_node_in_group("main")
-			if main_node and main_node.has_method("add_scrap"):
-				main_node.add_scrap(scrap_value)
-
-			if current_target_scrap.has_method("collect"):
-				current_target_scrap.collect(owner_player)
-			else:
-				current_target_scrap.queue_free()
-				
-			current_target_scrap = null
-	else:
-		handle_bodyguard_idle_behavior(delta)
-
-func float_toward(target_pos: Vector2, delta: float):
-	var direction = global_position.direction_to(target_pos)
-	velocity = velocity.move_toward(direction * movement_speed, movement_speed * 5.0 * delta)
-	move_and_slide()
-
-func handle_bodyguard_idle_behavior(delta: float):
-	var dist_to_owner = global_position.distance_to(owner_player.global_position)
-
-	# Check for nearby enemies to zap defensively
-	current_target_enemy = find_nearest_enemy_in_range(zap_range)
-	if current_target_enemy and zap_timer <= 0:
-		fire_zap(current_target_enemy)
-		zap_timer = zap_cooldown
-		zap_visual_timer = 0.25
 		queue_redraw()
+		return
 
-	if dist_to_owner > max_follow_distance:
-		float_toward(owner_player.global_position, delta)
-	elif dist_to_owner > follow_distance:
-		var idle_target = owner_player.global_position + (owner_player.transform.x * follow_distance)
-		float_toward(idle_target, delta)
-	else:
-		velocity = velocity.move_toward(Vector2.ZERO, movement_speed * 3.0 * delta)
+	scan_timer += delta
+	if scan_timer >= 0.35:
+		scan_timer = randf_range(-0.05, 0.05) # Desync multiple skulls
+		_evaluate_priorities()
+
+	# =========================================================================
+	# 1. ACTIVE MISSION: REPAIR BUILDING
+	# =========================================================================
+	if is_instance_valid(current_target_building):
+		var cur_hp = current_target_building.get("current_health")
+		var max_hp = current_target_building.get("max_health")
+
+		# If building was destroyed or fully healed, finish mission
+		if cur_hp == null or max_hp == null or cur_hp >= max_hp:
+			current_target_building = null
+			is_repairing = false
+			repair_accumulator = 0.0
+		else:
+			var b_pos = current_target_building.global_position
+			var dist = global_position.distance_to(b_pos)
+
+			if dist > 45.0:
+				is_repairing = false
+				repair_accumulator = 0.0
+				velocity = global_position.direction_to(b_pos) * speed
+			else:
+				is_repairing = true
+				velocity = velocity.move_toward(Vector2.ZERO, 600.0 * delta)
+
+				# Smooth fractional HP restoration
+				repair_accumulator += repair_rate * delta
+				if repair_accumulator >= 1.0:
+					var hp_to_add = int(repair_accumulator)
+					repair_accumulator -= float(hp_to_add)
+
+					var new_hp = min(max_hp, cur_hp + hp_to_add)
+					if current_target_building.has_method("sync_health"):
+						current_target_building.sync_health(new_hp)
+					elif current_target_building.has_method("sync_base_health"):
+						current_target_building.sync_base_health(new_hp)
+					else:
+						current_target_building.set("current_health", new_hp)
+
+					if new_hp >= max_hp:
+						current_target_building = null
+						is_repairing = false
+						repair_accumulator = 0.0
+
+			move_and_slide()
+			queue_redraw()
+			return
+
+	# =========================================================================
+	# 2. ACTIVE MISSION: HARVEST GROUND SCRAP
+	# =========================================================================
+	if is_instance_valid(current_target_scrap):
+		is_repairing = false
+		repair_accumulator = 0.0
+		var s_pos = current_target_scrap.global_position
+		var dist = global_position.distance_to(s_pos)
+
+		if dist > 18.0:
+			velocity = global_position.direction_to(s_pos) * (speed * 1.15)
+		else:
+			var main_node = get_tree().get_first_node_in_group("main")
+			var val = current_target_scrap.get("value") if "value" in current_target_scrap else 5
+			if main_node and main_node.has_method("add_scrap"):
+				main_node.add_scrap(val)
+			current_target_scrap.queue_free()
+			current_target_scrap = null
+			AudioManager.play_sfx("building_place", global_position, -4.0, 1.8)
+
 		move_and_slide()
+		queue_redraw()
+		return
 
-func find_nearest_scrap() -> Node2D:
-	var scrap_nodes = get_tree().get_nodes_in_group("scrap")
-	var nearest_scrap: Node2D = null
-	var shortest_distance: float = detection_radius
+	# =========================================================================
+	# 3. IDLE: ESCORT TECH-PRIEST / PATROL SANCTUM
+	# =========================================================================
+	is_repairing = false
+	repair_accumulator = 0.0
+	var anchor_pos = global_position
+	if is_instance_valid(player_owner):
+		anchor_pos = player_owner.global_position
+	else:
+		var base = get_tree().get_first_node_in_group("base")
+		if is_instance_valid(base): anchor_pos = base.global_position
 
-	for scrap in scrap_nodes:
-		var dist = global_position.distance_to(scrap.global_position)
-		if dist < shortest_distance:
-			shortest_distance = dist
-			nearest_scrap = scrap
+	hover_angle += delta * 1.8
+	var hover_target = anchor_pos + Vector2.RIGHT.rotated(hover_angle + seed_offset) * 48.0
+	hover_target.y += sin(Time.get_ticks_msec() * 0.004 + seed_offset) * 8.0
 
-	return nearest_scrap
+	if global_position.distance_to(hover_target) > 12.0:
+		velocity = global_position.direction_to(hover_target) * (speed * 0.85)
+	else:
+		velocity = Vector2.ZERO
 
-func find_nearest_enemy_in_range(range_limit: float) -> Node2D:
-	var enemy_nodes = get_tree().get_nodes_in_group("enemies")
-	var nearest_enemy: Node2D = null
-	var shortest_distance: float = range_limit
+	move_and_slide()
+	queue_redraw()
 
-	for enemy in enemy_nodes:
-		var dist = global_position.distance_to(enemy.global_position)
-		if dist < shortest_distance:
-			shortest_distance = dist
-			nearest_enemy = enemy
+# =============================================================================
+# SMART TARGET SELECTION & PRIORITY MATRIX
+# =============================================================================
 
-	return nearest_enemy
+func _evaluate_priorities() -> void:
+	# If already engaged in repairing a valid building, don't abandon it unless finished
+	if is_instance_valid(current_target_building):
+		var cur_hp = current_target_building.get("current_health")
+		var max_hp = current_target_building.get("max_health")
+		if cur_hp != null and max_hp != null and cur_hp < max_hp:
+			return # Commit to current repair task
 
-func fire_zap(target: Node2D):
-	if target.has_method("take_damage"):
-		target.take_damage(zap_damage)
+	# -------------------------------------------------------------------------
+	# 1. SCAN FOR DAMAGED BUILDINGS (Weighted by Strategic Importance)
+	# -------------------------------------------------------------------------
+	var candidates: Array = get_tree().get_nodes_in_group("buildings")
+	var base_node = get_tree().get_first_node_in_group("base")
+	if is_instance_valid(base_node): candidates.append(base_node)
 
-func set_owner_player(player: Node2D):
-	owner_player = player
+	var best_building: Node2D = null
+	var highest_repair_priority: float = -100.0
 
-func find_owner_player():
-	for player in get_tree().get_nodes_in_group("players"):
-		if player.name == str(name.get_slice("_", 0)):
-			owner_player = player
-			break
+	for b in candidates:
+		if is_instance_valid(b) and not b.get("is_preview"):
+			# Check if another skull is already actively repairing this building
+			if _is_building_claimed_by_another_skull(b):
+				continue
 
-func _draw():
-	# 1. Anti-Grav Engine / Top Exhaust Vent Mount
-	draw_rect(Rect2(-3, -11, 6, 4), COLOR_DARK_STEEL)
-	draw_line(Vector2(0, -11), Vector2(0, -14), COLOR_BRASS, 1.5)
+			var cur_hp = float(b.get("current_health")) if b.get("current_health") != null else 1.0
+			var max_hp = float(b.get("max_health")) if b.get("max_health") != null else 1.0
 
-	# 2. Cybernetic Cranium & Mechanical Plate Framing
-	draw_circle(Vector2.ZERO, 8.0, COLOR_WHITE_TRIM)
-	draw_circle(Vector2.ZERO, 7.0, COLOR_STEEL)
-	draw_arc(Vector2.ZERO, 7.2, -PI * 0.75, PI * 0.25, 8, COLOR_BRASS, 2.5)
+			if max_hp > 0.0 and cur_hp < max_hp:
+				var dist = global_position.distance_to(b.global_position)
+				if dist <= scan_range:
+					var damage_pct = 1.0 - (cur_hp / max_hp) # 0.0 (full) to 1.0 (dead)
+					
+					# Importance Weight
+					var importance = 1.0
+					if b.is_in_group("base"):
+						importance = 4.0 # Base core is top emergency
+					elif "building_type" in b:
+						match int(b.building_type):
+							1, 2, 4: importance = 2.8 # Dynamos, Turrets, Distributors
+							3, 6, 7: importance = 2.0 # Factories, Shrines
+							0:       importance = 1.2 # Barricades
 
-	# 3. Central Ocular Augment (Glowing Cyan Main Lens)
-	draw_circle(Vector2(3, -1), 3.5, COLOR_DARK_STEEL)
-	draw_circle(Vector2(3, -1), 2.0, COLOR_CYAN_GLOW)
-	draw_circle(Vector2(3.5, -1.5), 0.7, Color.WHITE)
+					# Calculate final priority score (urgency + importance - distance penalty)
+					var priority_score = (damage_pct * 30.0 * importance) - (dist / scan_range * 5.0)
 
-	# 4. Lower Jaw Augment & Data-Spike (Pointing Forward/Right)
-	draw_rect(Rect2(2, 3, 5, 3), COLOR_DARK_STEEL)
-	draw_line(Vector2(7, 4), Vector2(14, 4), COLOR_BRASS, 2.0)
-	draw_circle(Vector2(14, 4), 1.0, COLOR_CYAN_GLOW)
+					if priority_score > highest_repair_priority:
+						highest_repair_priority = priority_score
+						best_building = b
 
-	# 5. Purity Seal
-	draw_line(Vector2(-4, 3), Vector2(-6, 8), COLOR_PURITY_WAX, 2.0)
-	draw_rect(Rect2(-8, 8, 5, 8), COLOR_PURITY_PAPER)
-	draw_circle(Vector2(-5.5, 9.5), 1.5, COLOR_PURITY_WAX)
+	if is_instance_valid(best_building):
+		current_target_building = best_building
+		current_target_scrap = null
+		return
 
-	# 6. Synchronized Targeted Attack Zap Animation
-	if zap_visual_timer > 0 and current_target_enemy and is_instance_valid(current_target_enemy):
-		var zap_start = Vector2(14, 4) # Tip of the data spike
-		# Convert enemy's global position into local coordinates relative to the Servo-Skull
-		var local_target_pos = to_local(current_target_enemy.global_position)
+	# -------------------------------------------------------------------------
+	# 2. SCAN FOR UNCLAIMED GROUND SCRAP (Low Priority)
+	# -------------------------------------------------------------------------
+	# If we already have a scrap target, ensure it's still unclaimed
+	if is_instance_valid(current_target_scrap) and not _is_scrap_claimed_by_another_skull(current_target_scrap):
+		return
+
+	var scrap_list = get_tree().get_nodes_in_group("scrap")
+	var closest_scrap: Node2D = null
+	var min_scrap_dist = scan_range
+
+	for s in scrap_list:
+		if is_instance_valid(s):
+			if _is_scrap_claimed_by_another_skull(s):
+				continue
+
+			var d = global_position.distance_to(s.global_position)
+			if d < min_scrap_dist:
+				min_scrap_dist = d
+				closest_scrap = s
+
+	current_target_scrap = closest_scrap
+	current_target_building = null
+
+# Check if another friendly Servo-Skull is already targeting this building
+func _is_building_claimed_by_another_skull(building: Node2D) -> bool:
+	for skull in get_tree().get_nodes_in_group("ServoSkull"):
+		if is_instance_valid(skull) and skull != self:
+			if skull.current_target_building == building:
+				return true
+	return false
+
+# Check if another friendly Servo-Skull is already flying toward this scrap item
+func _is_scrap_claimed_by_another_skull(scrap: Node2D) -> bool:
+	for skull in get_tree().get_nodes_in_group("ServoSkull"):
+		if is_instance_valid(skull) and skull != self:
+			if skull.current_target_scrap == scrap:
+				return true
+	return false
+
+# =============================================================================
+# VISUAL RENDERING
+# =============================================================================
+
+func _draw() -> void:
+	# --- DRAW REPAIR WELDING BEAM ---
+	if is_repairing and is_instance_valid(current_target_building):
+		var local_b = to_local(current_target_building.global_position)
+		var pulse = 0.8 + sin(Time.get_ticks_msec() * 0.03) * 0.2
+		var beam_col = Color(0.20, 0.88, 1.00, 0.9 * pulse)
 		
-		var points = PackedVector2Array()
-		points.append(zap_start)
-		
-		var segments = 4
-		for i in range(1, segments):
-			var t = float(i) / float(segments)
-			var lerped_pos = zap_start.lerp(local_target_pos, t)
-			var jitter = Vector2(randf_range(-5, 5), randf_range(-5, 5))
-			points.append(lerped_pos + jitter)
-			
-		points.append(local_target_pos)
-		
-		# Draw precise electrical strike hitting the actual enemy position
-		draw_polyline(points, Color(COLOR_CYAN_GLOW.r, COLOR_CYAN_GLOW.g, COLOR_CYAN_GLOW.b, 0.5), 4.0)
-		draw_polyline(points, Color.WHITE, 1.5)
+		# Core arc + glow
+		draw_line(Vector2(0, 2), local_b, Color(0.20, 0.88, 1.00, 0.35), 4.0)
+		draw_line(Vector2(0, 2), local_b, beam_col, 1.5)
+		draw_circle(local_b, 3.5 * pulse, Color(0.55, 0.95, 1.0))
+		draw_circle(local_b, 1.5, Color.WHITE)
+
+		# Spark particles
+		for i in range(3):
+			var spark_offset = Vector2.RIGHT.rotated(randf() * TAU) * randf_range(4.0, 14.0)
+			draw_circle(local_b + spark_offset, 1.0, Color(1.0, 0.85, 0.2))
+
+	# --- DRAW SERVO-SKULL CHASSIS ---
+	# Hover shadow
+	draw_set_transform(Vector2(0, 14), 0.0, Vector2(1.0, 0.4))
+	draw_circle(Vector2.ZERO, 5.0, Color(0.02, 0.03, 0.05, 0.45))
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+	# Cranium Bone / Brass plating
+	draw_circle(Vector2(0, -2), 6.5, Color(0.82, 0.76, 0.65)) # Bone Cranium
+	draw_circle(Vector2(0, -2), 4.5, Color(0.92, 0.86, 0.75))
+
+	# Cybernetic Ocular Lenses (Left: Brass mount, Right: Glowing Cyan Sensor)
+	draw_circle(Vector2(-2.5, -2), 2.2, Color(0.25, 0.22, 0.18))
+	draw_circle(Vector2(2.5, -2), 2.2, Color(0.20, 0.88, 1.00)) # Glowing Lens
+	draw_circle(Vector2(2.5, -2), 1.0, Color.WHITE)
+
+	# Trailing Mechatendril Cables
+	var t = Time.get_ticks_msec() * 0.008 + seed_offset
+	draw_line(Vector2(-3, 3), Vector2(-4 + sin(t) * 3.0, 10), Color(0.20, 0.22, 0.25), 1.2)
+	draw_line(Vector2(0, 4), Vector2(0 + sin(t + 1.5) * 3.0, 12), Color(0.20, 0.22, 0.25), 1.2)
+	draw_line(Vector2(3, 3), Vector2(4 + sin(t + 3.0) * 3.0, 10), Color(0.20, 0.22, 0.25), 1.2)

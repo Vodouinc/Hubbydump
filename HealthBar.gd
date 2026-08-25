@@ -69,9 +69,7 @@ func _process(delta: float) -> void:
 	if not Engine.is_editor_hint() and not always_visible:
 		if auto_hide_when_full:
 			var is_hp_full = (target_ratio >= 0.999)
-			# If max_shield is 0, consider shield full. If max_shield > 0, check shield_ratio >= 0.999
 			var is_shield_full = (max_shield <= 0.0 or shield_ratio >= 0.999)
-
 			var target_alpha = 0.0
 
 			if visibility_timer > 0.0:
@@ -113,10 +111,13 @@ func update_health(current_val: int, max_val: int = -1) -> void:
 	current_hp = clampf(float(current_val), 0.0, max_hp)
 	var new_ratio = current_hp / max_hp
 	
-	# Only wake up visibility timer if damage was taken (health decreased)
+	# Wake up health bar on BOTH damage taken AND healing received
 	if new_ratio < target_ratio:
 		ghost_lag_timer = 0.28
 		visibility_timer = 4.0
+	elif new_ratio > target_ratio:
+		visibility_timer = 3.0 # Stay visible during repair welding
+		ghost_ratio = new_ratio # Snap ghost bar up so it doesn't lag on heals
 		
 	target_ratio = new_ratio
 	queue_redraw()
@@ -152,7 +153,7 @@ func _draw() -> void:
 	# 4. Metallic Border
 	draw_rect(Rect2(-half_w - 1, -half_h - 1, bar_size.x + 2, bar_size.y + 2), border_color, false, 1.0)
 
-	# 5. Aegis Refractor Shield Bar (Stacked above health bar if shields exist)
+	# 5. Aegis Refractor Shield Bar
 	if max_shield > 0.0 and shield_ratio > 0.001:
 		var shield_y = -half_h - 4.5
 		var shield_w = bar_size.x * clampf(shield_ratio, 0.0, 1.0)

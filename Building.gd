@@ -283,6 +283,13 @@ func try_queue_unit(unit_id: int) -> bool:
 	return true
 
 @rpc("call_local", "reliable")
+func sync_health(new_hp: int) -> void:
+	current_health = new_hp
+	var hb = get_node_or_null("HealthBar")
+	if hb and hb.has_method("update_health"):
+		hb.update_health(current_health, max_health)
+
+@rpc("call_local", "reliable")
 func sync_production_state(queue_data: Array, timer_val: float):
 	var incoming = queue_data.duplicate()
 	production_queue.clear()

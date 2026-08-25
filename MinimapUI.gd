@@ -1,343 +1,245 @@
+# res://MinimapUI.gd
 extends Control
-class_name MinimapUI
 
-const GameData = preload("res://GameData.gd")
+@export var corner_map_size: Vector2 = Vector2(210, 210)
+@export var fullscreen_map_size: Vector2 = Vector2(760, 760)
+@export var world_radius: float = 3600.0 # Covers full 7200x7200 map
 
-var is_fullscreen_map: bool = false
-var sweep_angle: float = 0.0
-var world_size: Vector2 = Vector2(3000, 3000)
+var is_fullscreen: bool = false
+var base_position: Vector2 = Vector2(500, 500)
+var citadel_cached_pos: Vector2 = Vector2.ZERO
+var has_citadel_pos: bool = false
 
-var detected_blips: Dictionary = {}
-var is_waaagh_gauge_hovered: bool = false
+# Palette Constants
+const COL_BG = Color(0.04, 0.05, 0.08, 0.92)
+const COL_GRID = Color(0.20, 0.88, 1.0, 0.12)
+const COL_BORDER = Color(0.82, 0.62, 0.24, 0.85)
+const COL_BASE = Color(0.20, 0.88, 1.0, 1.0)
+const COL_PLAYER = Color(0.35, 0.95, 0.45, 1.0)
+const COL_SCRAP = Color(1.00, 0.82, 0.20, 0.85)
+const COL_ENEMY = Color(0.92, 0.22, 0.18, 0.90)
+const COL_CITADEL = Color(1.0, 0.15, 0.15, 1.0)
+const COL_TOTEM = Color(0.25, 0.95, 0.55, 1.0)
+const COL_CAM_BOX = Color(1.0, 1.0, 1.0, 0.45)
+const COL_OFFLINE = Color(0.92, 0.22, 0.18, 0.85)
 
-# Custom WAAAGH! Telemetry Hover Tooltip
-var waaagh_tooltip: PanelContainer = null
-var waaagh_title_lbl: Label = null
-var waaagh_sub_lbl: Label = null
-var waaagh_stats_lbl: Label = null
-var waaagh_lore_lbl: Label = null
-
-func _ready():
-	process_mode = Node.PROCESS_MODE_ALWAYS
+func _ready() -> void:
 	add_to_group("minimap_ui")
 	set_anchors_preset(Control.PRESET_FULL_RECT)
-	mouse_filter = Control.MOUSE_FILTER_PASS
-	_setup_waaagh_tooltip()
-
-func _setup_waaagh_tooltip():
-	waaagh_tooltip = PanelContainer.new()
-	waaagh_tooltip.name = "WaaaghTooltip"
-	waaagh_tooltip.custom_minimum_size = Vector2(310, 0)
-	waaagh_tooltip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-
-	var sb = StyleBoxFlat.new()
-	sb.bg_color = Color(0.04, 0.05, 0.08, 0.96)
-	sb.border_color = Color(0.35, 0.95, 0.15)
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(4)
-	sb.content_margin_left = 10
-	sb.content_margin_right = 10
-	sb.content_margin_top = 8
-	sb.content_margin_bottom = 8
-	sb.shadow_color = Color(0, 0, 0, 0.65)
-	sb.shadow_size = 6
-	waaagh_tooltip.add_theme_stylebox_override("panel", sb)
-
-	var vbox = VBoxContainer.new()
-	vbox.name = "VBox"
-	vbox.add_theme_constant_override("separation", 4)
-	waaagh_tooltip.add_child(vbox)
-
-	waaagh_title_lbl = Label.new()
-	waaagh_title_lbl.name = "Title"
-	waaagh_title_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.15))
-	waaagh_title_lbl.add_theme_font_size_override("font_size", 12)
-	vbox.add_child(waaagh_title_lbl)
-
-	waaagh_sub_lbl = Label.new()
-	waaagh_sub_lbl.name = "Sub"
-	waaagh_sub_lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
-	waaagh_sub_lbl.add_theme_font_size_override("font_size", 9)
-	vbox.add_child(waaagh_sub_lbl)
-
-	var sep = ColorRect.new()
-	sep.custom_minimum_size = Vector2(0, 1)
-	sep.color = Color(0.25, 0.28, 0.35, 0.6)
-	vbox.add_child(sep)
-
-	waaagh_stats_lbl = Label.new()
-	waaagh_stats_lbl.name = "Stats"
-	waaagh_stats_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	waaagh_stats_lbl.add_theme_color_override("font_color", Color(0.90, 0.92, 0.96))
-	waaagh_stats_lbl.add_theme_font_size_override("font_size", 10)
-	vbox.add_child(waaagh_stats_lbl)
-
-	waaagh_lore_lbl = Label.new()
-	waaagh_lore_lbl.name = "Lore"
-	waaagh_lore_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	waaagh_lore_lbl.add_theme_color_override("font_color", Color(0.68, 0.72, 0.65))
-	waaagh_lore_lbl.add_theme_font_size_override("font_size", 9)
-	vbox.add_child(waaagh_lore_lbl)
-
-	add_child(waaagh_tooltip)
-	waaagh_tooltip.hide()
-
-func _process(delta: float):
-	sweep_angle = fmod(sweep_angle + delta * 2.5, TAU)
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	
-	for k in detected_blips.keys():
-		detected_blips[k] -= delta
-		if detected_blips[k] <= 0.0:
-			detected_blips.erase(k)
+	var mat = CanvasItemMaterial.new()
+	mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+	material = mat
 
-	_check_waaagh_mouse_hover()
+func _process(_delta: float) -> void:
 	queue_redraw()
 
-func _gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed:
-		var screen_size = get_viewport_rect().size
-		var radar_size = Vector2(165, 165)
-		var radar_rect = Rect2(screen_size.x - radar_size.x - 16, 12, radar_size.x, radar_size.y)
-
-		if radar_rect.has_point(event.position):
-			var center = radar_rect.get_center()
-			var radius = radar_size.x * 0.46
-			var click_offset = event.position - center
-
-			if click_offset.length() <= radius:
-				var max_radar_world_range = 1900.0
-				var scale_factor = radius / max_radar_world_range
-				
-				var base_node = get_tree().get_first_node_in_group("base")
-				var world_origin = base_node.global_position if is_instance_valid(base_node) else Vector2(500, 500)
-				var target_world_pos = world_origin + (click_offset / scale_factor)
-
-				var player = _get_local_player()
-				if player:
-					if event.button_index == MOUSE_BUTTON_LEFT:
-						# Jump RTS Camera
-						if is_instance_valid(player.get_node_or_null("Camera2D")):
-							player.get_node("Camera2D").global_position = target_world_pos
-					elif event.button_index == MOUSE_BUTTON_RIGHT and player.current_class == 1:
-						# Send Move Order to Selected Units
-						player._issue_order_to_selection(target_world_pos, false)
-
-				accept_event()
-
-func _get_local_player() -> Node2D:
-	for p in get_tree().get_nodes_in_group("players"):
-		if is_instance_valid(p) and ((not multiplayer.has_multiplayer_peer()) or p.is_multiplayer_authority()):
-			return p
-	return null
-
-func _check_waaagh_mouse_hover():
-	var main_node = get_tree().get_first_node_in_group("main")
-	var is_waaagh_unlocked = main_node.tech_waaagh_reader_unlocked if (main_node and "tech_waaagh_reader_unlocked" in main_node) else false
-	if not is_waaagh_unlocked:
-		if waaagh_tooltip: waaagh_tooltip.hide()
-		return
-
-	var screen_size = get_viewport_rect().size
-	var gauge_rect = Rect2(screen_size.x - 290, 12, 110, 42)
-	var mouse_pos = get_local_mouse_position()
-
-	var was_hovered = is_waaagh_gauge_hovered
-	is_waaagh_gauge_hovered = gauge_rect.has_point(mouse_pos)
-
-	if is_waaagh_gauge_hovered:
-		_update_waaagh_tooltip_content(gauge_rect)
-		waaagh_tooltip.show()
-	elif was_hovered:
-		waaagh_tooltip.hide()
-
-func _update_waaagh_tooltip_content(gauge_rect: Rect2):
-	var main_node = get_tree().get_first_node_in_group("main")
-	if not main_node or not is_instance_valid(waaagh_title_lbl): return
-
-	var totems = main_node.get_active_totem_count() if main_node.has_method("get_active_totem_count") else 0
-	var spd_buff = int(totems * 12)
-	var dmg_buff = int(totems * 10)
-
-	waaagh_title_lbl.text = "◆ WAAAGH! PSYCHIC FIELD TELEMETRY ◆"
-	waaagh_sub_lbl.text = "THREAT LEVEL: %s (%d ACTIVE TOTEMS)" % [("DORMANT" if totems == 0 else "CRITICAL PHASE %d" % totems), totems]
-	
-	if totems > 0:
-		waaagh_stats_lbl.text = "• +%d%% Hostile Movement & Charge Speed\n• +%d%% Hostile Melee & Weapon Damage\n• +25%% Horde Spawn Frequency\n\nTACTICAL ADVICE: Dispatch sorties across the desert to destroy WAAAGH! Idols and suppress enemy buffs." % [spd_buff, dmg_buff]
-	else:
-		waaagh_stats_lbl.text = "No active WAAAGH! Totems detected. Hostile psychic gestalt is currently dormant.\n\nKeep radar sweeps active to detect newly manifested shrines."
-
-	waaagh_lore_lbl.text = "\"The psychic wavelength of the greenskin burns across the ether like a toxic flare. Silence their crude shrines.\" — Magos Biologis"
-
-	waaagh_tooltip.global_position = Vector2(gauge_rect.position.x - waaagh_tooltip.size.x - 8, gauge_rect.position.y)
-
-func toggle_fullscreen_map():
-	var main_node = get_tree().get_first_node_in_group("main")
-	var radar_level = main_node.base_radar_level if (main_node and "base_radar_level" in main_node) else 0
-	if radar_level < 1: return
-	is_fullscreen_map = not is_fullscreen_map
+func toggle_fullscreen_map() -> void:
+	is_fullscreen = not is_fullscreen
 	queue_redraw()
 
-func _draw():
-	var main_node = get_tree().get_first_node_in_group("main")
-	var radar_tier = main_node.base_radar_level if (main_node and "base_radar_level" in main_node) else 0
-	var waaagh_unlocked = main_node.tech_waaagh_reader_unlocked if (main_node and "tech_waaagh_reader_unlocked" in main_node) else false
-	
-	# 1. Draw WAAAGH! Companion Widget (By Minimap) if researched
-	if waaagh_unlocked:
-		_draw_waaagh_minimap_widget()
+func register_citadel_position(pos: Vector2) -> void:
+	citadel_cached_pos = pos
+	has_citadel_pos = true
+	queue_redraw()
 
-	# 2. Draw Radar / Cartograph
-	if radar_tier == 0:
-		_draw_offline_hud()
-		return
+func _world_to_map(world_pos: Vector2, map_center: Vector2, map_radius_px: float) -> Vector2:
+	var delta_pos = world_pos - base_position
+	var norm_x = clampf(delta_pos.x / world_radius, -1.0, 1.0)
+	var norm_y = clampf(delta_pos.y / world_radius, -1.0, 1.0)
+	return map_center + Vector2(norm_x, norm_y) * map_radius_px
 
-	if is_fullscreen_map:
-		_draw_fullscreen_holo_map(radar_tier)
-	else:
-		_draw_corner_radar(radar_tier)
-
-func _draw_waaagh_minimap_widget():
-	var main_node = get_tree().get_first_node_in_group("main")
-	if not main_node: return
-
-	var screen_size = get_viewport_rect().size
-	var totems = main_node.get_active_totem_count() if main_node.has_method("get_active_totem_count") else 0
-	var spd_buff = int(totems * 12)
-
-	var widget_rect = Rect2(screen_size.x - 290, 12, 110, 42)
-	var bg_color = Color(0.04, 0.05, 0.08, 0.94)
-	var border_color = Color(0.35, 0.95, 0.15, 0.8) if totems > 0 else Color(0.30, 0.35, 0.40, 0.8)
-
-	if is_waaagh_gauge_hovered:
-		border_color = Color(1.0, 0.85, 0.20)
-
-	# Widget Frame
-	draw_rect(widget_rect, bg_color, true)
-	draw_rect(widget_rect, border_color, false, 1.2)
-
-	var font = ThemeDB.fallback_font
-	var header_color = Color(0.35, 0.95, 0.15) if totems > 0 else Color(0.60, 0.65, 0.70)
-	draw_string(font, widget_rect.position + Vector2(6, 14), "🔥 WAAAGH!", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, header_color)
-
-	# Buff / Status
-	var status_str = "+%d%% SPD" % spd_buff if totems > 0 else "DORMANT"
-	var status_col = Color(1.0, 0.85, 0.20) if totems > 0 else Color(0.50, 0.55, 0.60)
-	draw_string(font, widget_rect.position + Vector2(widget_rect.size.x - 62, 14), status_str, HORIZONTAL_ALIGNMENT_RIGHT, 56, 8, status_col)
-
-	# Active Totem Pips
-	var pips_origin = widget_rect.position + Vector2(10, 28)
-	var pulse = 0.7 + sin(Time.get_ticks_msec() * 0.006) * 0.3
-	for i in range(5):
-		var p_pos = pips_origin + Vector2(i * 18.0, 0)
-		if i < totems:
-			draw_circle(p_pos, 3.2, Color(0.35, 0.95, 0.15, 0.9 * pulse))
-			draw_circle(p_pos, 1.2, Color.WHITE)
-		else:
-			draw_circle(p_pos, 2.0, Color(0.20, 0.22, 0.25))
-
-func _draw_offline_hud():
-	var screen_size = get_viewport_rect().size
-	var box_w = 160.0
-	var box_h = 36.0
-	var box_rect = Rect2(screen_size.x - box_w - 16, 12, box_w, box_h)
-	
-	draw_rect(box_rect, Color(0.04, 0.05, 0.08, 0.92), true)
-	draw_rect(box_rect, Color(0.35, 0.40, 0.45, 0.75), false, 1.2)
-	
-	var font = ThemeDB.fallback_font
-	draw_string(font, box_rect.position + Vector2(10, 22), "📡 AUSPEX OFFLINE", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.70, 0.75, 0.80))
-
-func _draw_corner_radar(radar_tier: int):
-	var screen_size = get_viewport_rect().size
-	var radar_size = Vector2(165, 165)
-	var radar_rect = Rect2(screen_size.x - radar_size.x - 16, 12, radar_size.x, radar_size.y)
-	var center = radar_rect.get_center()
-	var radius = radar_size.x * 0.46
-
-	draw_circle(center, radius, Color(0.03, 0.06, 0.08, 0.90))
-	draw_arc(center, radius, 0, TAU, 32, Color(0.20, 0.88, 1.0, 0.75), 1.5)
-	draw_arc(center, radius * 0.66, 0, TAU, 24, Color(0.20, 0.88, 1.0, 0.25), 1.0)
-	draw_arc(center, radius * 0.33, 0, TAU, 16, Color(0.20, 0.88, 1.0, 0.25), 1.0)
-	draw_line(center - Vector2(radius, 0), center + Vector2(radius, 0), Color(0.20, 0.88, 1.0, 0.2), 1.0)
-	draw_line(center - Vector2(0, radius), center + Vector2(0, radius), Color(0.20, 0.88, 1.0, 0.2), 1.0)
-
-	if radar_tier >= 2:
-		var sweep_dir = Vector2.RIGHT.rotated(sweep_angle)
-		draw_line(center, center + sweep_dir * radius, Color(0.20, 0.95, 1.0, 0.85), 1.5)
-
-	_render_entities_to_scope(center, radius, radar_tier, false)
-
-func _draw_fullscreen_holo_map(radar_tier: int):
-	var screen_size = get_viewport_rect().size
-	var map_size = Vector2(600, 600)
-	var map_rect = Rect2((screen_size - map_size) * 0.5, map_size)
-	var center = map_rect.get_center()
-	var radius = map_size.x * 0.46
-
-	draw_rect(Rect2(Vector2.ZERO, screen_size), Color(0.02, 0.03, 0.05, 0.80), true)
-	draw_rect(map_rect, Color(0.04, 0.07, 0.10, 0.95), true)
-	draw_rect(map_rect, Color(0.20, 0.88, 1.0, 0.85), false, 2.0)
-
-	var font = ThemeDB.fallback_font
-	draw_string(font, map_rect.position + Vector2(16, 24), "◆ NOOSPHERIC BATTLEFIELD CARTOGRAPH [M to close] ◆", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.20, 0.88, 1.0))
-
-	draw_circle(center, radius, Color(0.02, 0.05, 0.08, 0.5))
-	draw_arc(center, radius, 0, TAU, 48, Color(0.20, 0.88, 1.0, 0.4), 1.2)
-	draw_line(center - Vector2(radius, 0), center + Vector2(radius, 0), Color(0.20, 0.88, 1.0, 0.15), 1.0)
-	draw_line(center - Vector2(0, radius), center + Vector2(0, radius), Color(0.20, 0.88, 1.0, 0.15), 1.0)
-
-	_render_entities_to_scope(center, radius, radar_tier, true)
-
-func _render_entities_to_scope(scope_center: Vector2, scope_radius: float, radar_tier: int, is_large: bool):
+func _draw() -> void:
+	var vp_size = get_viewport_rect().size
 	var base_node = get_tree().get_first_node_in_group("base")
-	var world_origin = base_node.global_position if is_instance_valid(base_node) else Vector2(500, 500)
-	var max_radar_world_range = 1900.0
-	var scale_factor = scope_radius / max_radar_world_range
+	if is_instance_valid(base_node):
+		base_position = base_node.global_position
 
-	draw_rect(Rect2(scope_center - Vector2(4, 4), Vector2(8, 8)), Color(0.20, 0.88, 1.0))
+	var main_node = get_tree().get_first_node_in_group("main")
+	var radar_lvl: int = main_node.base_radar_level if is_instance_valid(main_node) and "base_radar_level" in main_node else 0
 
-	for b in get_tree().get_nodes_in_group("buildings"):
-		if is_instance_valid(b):
-			var local_pos = (b.global_position - world_origin) * scale_factor
-			if local_pos.length() <= scope_radius:
+	if is_fullscreen:
+		_draw_fullscreen_tactical_map(vp_size, radar_lvl)
+	else:
+		_draw_corner_radar_minimap(vp_size, radar_lvl)
+
+# ==============================================================================
+# 1. CORNER MINIMAP (BOTTOM-RIGHT)
+# ==============================================================================
+func _draw_corner_radar_minimap(vp_size: Vector2, radar_lvl: int) -> void:
+	var margin = 16.0
+	var map_rect = Rect2(vp_size.x - corner_map_size.x - margin, vp_size.y - corner_map_size.y - margin, corner_map_size.x, corner_map_size.y)
+	var map_center = map_rect.position + (corner_map_size * 0.5)
+	var map_rad_px = corner_map_size.x * 0.48
+	var font = ThemeDB.fallback_font
+
+	# Background & Frame
+	draw_rect(map_rect, COL_BG, true)
+	draw_rect(map_rect, COL_BORDER if radar_lvl > 0 else COL_OFFLINE, false, 1.5)
+
+	# --- LEVEL 0: OFFLINE STATIC ---
+	if radar_lvl == 0:
+		var pulse = 0.6 + sin(Time.get_ticks_msec() * 0.008) * 0.4
+		draw_rect(map_rect, Color(0.92, 0.22, 0.18, 0.08 * pulse), true)
+		
+		# Draw basic crosshair
+		draw_line(Vector2(map_rect.position.x, map_center.y), Vector2(map_rect.end.x, map_center.y), Color(0.92, 0.22, 0.18, 0.25), 1.0)
+		draw_line(Vector2(map_center.x, map_rect.position.y), Vector2(map_center.x, map_rect.end.y), Color(0.92, 0.22, 0.18, 0.25), 1.0)
+		
+		# Only draw base & player in local proximity
+		var base_p = _world_to_map(base_position, map_center, map_rad_px)
+		draw_circle(base_p, 3.5, COL_BASE)
+		for p in get_tree().get_nodes_in_group("players"):
+			if is_instance_valid(p):
+				draw_circle(_world_to_map(p.global_position, map_center, map_rad_px), 2.5, COL_PLAYER)
+
+		# Offline warning text
+		draw_string(font, map_rect.position + Vector2(10, map_rect.size.y * 0.45), "⚠️ AUSPEX OFFLINE", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.92, 0.22, 0.18, 0.9 * pulse))
+		draw_string(font, map_rect.position + Vector2(10, map_rect.size.y * 0.58), "Upgrade Base [E]", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.85, 0.75, 0.65, 0.8))
+		return
+
+	# --- LEVEL 1+: ACTIVE RADAR RINGS ---
+	draw_arc(map_center, map_rad_px * 0.33, 0, TAU, 24, COL_GRID, 1.0)
+	draw_arc(map_center, map_rad_px * 0.66, 0, TAU, 32, COL_GRID, 1.0)
+	draw_arc(map_center, map_rad_px, 0, TAU, 40, COL_GRID, 1.2)
+	draw_line(Vector2(map_rect.position.x, map_center.y), Vector2(map_rect.end.x, map_center.y), COL_GRID, 1.0)
+	draw_line(Vector2(map_center.x, map_rect.position.y), Vector2(map_center.x, map_rect.end.y), COL_GRID, 1.0)
+
+	# Draw entities gated by radar level
+	_draw_map_entities(map_center, map_rad_px, 1.0, radar_lvl)
+
+	# Status text
+	var status_str = "LVL %d AUSPEX [M]" % radar_lvl
+	draw_string(font, map_rect.position + Vector2(6, 14), status_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 8, Color(0.82, 0.62, 0.24, 0.85))
+
+# ==============================================================================
+# 2. FULLSCREEN TACTICAL WAR-ROOM MAP (PRESS 'M')
+# ==============================================================================
+func _draw_fullscreen_tactical_map(vp_size: Vector2, radar_lvl: int) -> void:
+	draw_rect(Rect2(Vector2.ZERO, vp_size), Color(0.02, 0.03, 0.05, 0.90), true)
+
+	var map_rect = Rect2((vp_size - fullscreen_map_size) * 0.5, fullscreen_map_size)
+	var map_center = map_rect.position + (fullscreen_map_size * 0.5)
+	var map_rad_px = fullscreen_map_size.x * 0.48
+	var font = ThemeDB.fallback_font
+
+	draw_rect(map_rect, Color(0.04, 0.05, 0.08, 0.96), true)
+	draw_rect(map_rect, Color(0.20, 0.88, 1.0, 0.85) if radar_lvl > 0 else COL_OFFLINE, false, 2.0)
+
+	# --- LEVEL 0: OFFLINE HOLO WARNING ---
+	if radar_lvl == 0:
+		var pulse = 0.7 + sin(Time.get_ticks_msec() * 0.006) * 0.3
+		draw_rect(map_rect, Color(0.92, 0.22, 0.18, 0.06 * pulse), true)
+
+		var title = "◆ TACTICAL HOLOMAP OFFLINE ◆"
+		draw_string(font, map_center + Vector2(-160, -30), title, HORIZONTAL_ALIGNMENT_CENTER, 320, 16, Color(0.92, 0.22, 0.18, pulse))
+		
+		var desc = "Sanctum Auspex array requires power restoration.\nInteract with the Main Base [E] and research Auspex Radar Level 1."
+		draw_string(font, map_center + Vector2(-220, 10), desc, HORIZONTAL_ALIGNMENT_CENTER, 440, 11, Color(0.85, 0.88, 0.94, 0.85))
+		
+		draw_string(font, map_rect.position + Vector2(16, map_rect.size.y - 14), "[M / ESC TO CLOSE]", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.65, 0.60, 0.50))
+		return
+
+	# --- LEVEL 1+: HOLOGRAPHIC GRID ---
+	for i in range(1, 5):
+		draw_arc(map_center, map_rad_px * (float(i) / 4.0), 0, TAU, 48, Color(0.20, 0.88, 1.0, 0.15), 1.0)
+	draw_line(Vector2(map_rect.position.x, map_center.y), Vector2(map_rect.end.x, map_center.y), Color(0.20, 0.88, 1.0, 0.25), 1.0)
+	draw_line(Vector2(map_center.x, map_rect.position.y), Vector2(map_center.x, map_rect.end.y), Color(0.20, 0.88, 1.0, 0.25), 1.0)
+
+	_draw_map_entities(map_center, map_rad_px, 2.4, radar_lvl)
+
+	# Header & Dynamic Legend
+	var header_txt = "◆ OMNISSIAN TACTICAL HOLO-AUSPEX (RADAR LVL %d) ◆ [M / ESC TO CLOSE]" % radar_lvl
+	draw_string(font, map_rect.position + Vector2(16, 24), header_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.20, 0.88, 1.0))
+
+	var legend_txt = "🔵 SANCTUM  |  🟢 CADRE  |  🟡 SCRAP"
+	if radar_lvl >= 2:
+		legend_txt += "  |  🔴 ENEMY BLIPS"
+	if radar_lvl >= 3:
+		legend_txt += "  |  💀 ORK CITADEL  |  💎 WAAAGH! IDOLS"
+	draw_string(font, map_rect.position + Vector2(16, map_rect.size.y - 12), legend_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.82, 0.75, 0.60))
+
+# ==============================================================================
+# 3. GATED ENTITY RENDERING
+# ==============================================================================
+func _draw_map_entities(map_center: Vector2, map_rad_px: float, scale_mult: float, radar_lvl: int) -> void:
+	# -------------------------------------------------------------------------
+	# RADAR LEVEL 1+: Resource Deposits, Friendly Buildings, Base, Players
+	# -------------------------------------------------------------------------
+	if radar_lvl >= 1:
+		# 1. Scrap Deposits
+		for dep in get_tree().get_nodes_in_group("scrap_deposits"):
+			if is_instance_valid(dep):
+				var p = _world_to_map(dep.global_position, map_center, map_rad_px)
+				draw_circle(p, 2.2 * scale_mult, COL_SCRAP)
+
+		# 2. Player Barricades & Buildings
+		for b in get_tree().get_nodes_in_group("buildings"):
+			if is_instance_valid(b) and not b.get("is_preview"):
+				var p = _world_to_map(b.global_position, map_center, map_rad_px)
 				var b_type = int(b.get("building_type")) if "building_type" in b else 0
-				var col = Color(0.95, 0.75, 0.20) if b_type == 3 else Color(0.20, 0.88, 1.0, 0.8)
-				draw_circle(scope_center + local_pos, 2.5 if not is_large else 4.0, col)
+				var b_col = COL_BASE if b_type != 0 else Color(0.35, 0.55, 0.75, 0.8)
+				draw_rect(Rect2(p - Vector2.ONE * scale_mult, Vector2.ONE * 2.0 * scale_mult), b_col)
 
-	for dep in get_tree().get_nodes_in_group("scrap_deposits"):
-		if is_instance_valid(dep):
-			var local_pos = (dep.global_position - world_origin) * scale_factor
-			if local_pos.length() <= scope_radius:
-				draw_circle(scope_center + local_pos, 2.0 if not is_large else 3.5, Color(0.78, 0.58, 0.22, 0.7))
+	# Base Core Sanctum
+	var base_p = _world_to_map(base_position, map_center, map_rad_px)
+	draw_circle(base_p, 4.0 * scale_mult, COL_BASE)
+	draw_arc(base_p, 6.0 * scale_mult, 0, TAU, 16, COL_BASE, 1.2)
 
+	# Players & Camera Frustum Box
 	for p in get_tree().get_nodes_in_group("players"):
 		if is_instance_valid(p):
-			var local_pos = (p.global_position - world_origin) * scale_factor
-			if local_pos.length() <= scope_radius:
-				draw_circle(scope_center + local_pos, 3.5 if not is_large else 5.0, Color(0.25, 0.95, 0.40))
+			var pp = _world_to_map(p.global_position, map_center, map_rad_px)
+			draw_circle(pp, 3.2 * scale_mult, COL_PLAYER)
+			
+			var cam = p.get_node_or_null("Camera2D")
+			if is_instance_valid(cam) and cam.is_current() and radar_lvl >= 1:
+				var vp_half = (get_viewport_rect().size * (1.0 / cam.zoom.x)) * 0.5
+				var cam_p1 = _world_to_map(cam.global_position - vp_half, map_center, map_rad_px)
+				var cam_p2 = _world_to_map(cam.global_position + vp_half, map_center, map_rad_px)
+				draw_rect(Rect2(cam_p1, cam_p2 - cam_p1), COL_CAM_BOX, false, 1.2)
 
-	if radar_tier >= 2:
-		for cit in get_tree().get_nodes_in_group("ork_citadel"):
-			if is_instance_valid(cit):
-				var local_pos = (cit.global_position - world_origin) * scale_factor
-				if local_pos.length() <= scope_radius:
-					draw_rect(Rect2(scope_center + local_pos - Vector2(4, 4), Vector2(8, 8)), Color(1.0, 0.15, 0.15))
-
-		for tot in get_tree().get_nodes_in_group("waaagh_totems"):
-			if is_instance_valid(tot):
-				var local_pos = (tot.global_position - world_origin) * scale_factor
-				if local_pos.length() <= scope_radius:
-					draw_circle(scope_center + local_pos, 3.5 if not is_large else 5.0, Color(0.85, 0.20, 0.95))
-
+	# -------------------------------------------------------------------------
+	# RADAR LEVEL 2+: Real-Time Enemy Horde Blips
+	# -------------------------------------------------------------------------
+	if radar_lvl >= 2:
 		for e in get_tree().get_nodes_in_group("enemies"):
-			if is_instance_valid(e) and not e.is_in_group("objectives"):
-				var local_pos = (e.global_position - world_origin) * scale_factor
-				if local_pos.length() <= scope_radius:
-					if radar_tier >= 3:
-						draw_circle(scope_center + local_pos, 2.0 if not is_large else 3.0, Color(1.0, 0.25, 0.20))
-					else:
-						var to_blip_angle = fposmod(local_pos.angle(), TAU)
-						if abs(angle_difference(sweep_angle, to_blip_angle)) < 0.12:
-							detected_blips[e] = 1.6
-						if detected_blips.has(e):
-							draw_circle(scope_center + local_pos, 2.2, Color(1.0, 0.25, 0.20, detected_blips[e] / 1.6))
+			if is_instance_valid(e):
+				var ep = _world_to_map(e.global_position, map_center, map_rad_px)
+				draw_circle(ep, 1.5 * scale_mult, COL_ENEMY)
+
+	# -------------------------------------------------------------------------
+	# RADAR LEVEL 3+: Global Threat Telemetry (Ork Citadel & WAAAGH! Totems)
+	# -------------------------------------------------------------------------
+	if radar_lvl >= 3:
+		# 1. WAAAGH! Totems / Idols
+		for idol in get_tree().get_nodes_in_group("waaagh_totems"):
+			if is_instance_valid(idol):
+				var p = _world_to_map(idol.global_position, map_center, map_rad_px)
+				var diamond = [
+					p + Vector2(0, -4.5 * scale_mult),
+					p + Vector2(4.5 * scale_mult, 0),
+					p + Vector2(0, 4.5 * scale_mult),
+					p + Vector2(-4.5 * scale_mult, 0)
+				]
+				draw_colored_polygon(diamond, COL_TOTEM)
+
+		# 2. ORK CITADEL MEGA-CAMP
+		var cit = get_tree().get_first_node_in_group("ork_citadel")
+		var cit_pos = cit.global_position if is_instance_valid(cit) else citadel_cached_pos
+
+		if is_instance_valid(cit) or has_citadel_pos:
+			var cp = _world_to_map(cit_pos, map_center, map_rad_px)
+			var pulse = 0.75 + sin(Time.get_ticks_msec() * 0.008) * 0.25
+			
+			draw_circle(cp, 5.0 * scale_mult, Color(1.0, 0.15, 0.15, 0.35))
+			draw_arc(cp, 8.0 * scale_mult * pulse, 0, TAU, 24, COL_CITADEL, 1.5)
+			draw_arc(cp, 13.0 * scale_mult * (1.2 - pulse * 0.2), 0, TAU, 24, Color(1.0, 0.2, 0.2, 0.5), 1.0)
+			
+			draw_line(cp - Vector2(3, 3) * scale_mult, cp + Vector2(3, 3) * scale_mult, Color.WHITE, 1.5)
+			draw_line(cp - Vector2(-3, 3) * scale_mult, cp + Vector2(-3, 3) * scale_mult, Color.WHITE, 1.5)
+
+			if is_fullscreen:
+				var font = ThemeDB.fallback_font
+				draw_string(font, cp + Vector2(-32, -16 * scale_mult), "💀 ORK CITADEL", HORIZONTAL_ALIGNMENT_CENTER, 64, 8, COL_CITADEL)

@@ -207,21 +207,31 @@ func _generate_sound_effects():
 	sfx_library["binary_canticle"] = _synth_binary_burst(0.22)
 
 
-func _synth_binary_burst(duration: float) -> AudioStreamWAV:
+func _synth_binary_burst(duration: float = 0.28) -> AudioStreamWAV:
 	var sample_rate = 22050
 	var total_samples = int(sample_rate * duration)
 	var byte_data = PackedByteArray()
 	byte_data.resize(total_samples * 2)
 
-	var phase = 0.0
+	var phase1 = 0.0
+	var phase2 = 0.0
+
 	for i in range(total_samples):
 		var t = float(i) / float(total_samples)
-		# Rapid frequency-shift keying (FSK data-burst chirps)
-		var freq = 1200.0 if (int(t * 32.0) % 2 == 0) else 1850.0
-		phase += (freq * TAU) / sample_rate
-		var tone = (1.0 if sin(phase) > 0.0 else -1.0) * 0.4
-		var env = sin(t * PI)
-		byte_data.encode_s16(i * 2, int(tone * env * 32767.0))
+		
+		# Smooth, harmonic twin-tone chime (880Hz & 1320Hz)
+		var freq1 = 880.0 if (int(t * 16.0) % 2 == 0) else 1174.66 # A5 / D6 chord
+		var freq2 = 1320.0 if (int(t * 16.0) % 2 == 0) else 1760.0 # E6 / A6 chord
+		
+		phase1 += (freq1 * TAU) / sample_rate
+		phase2 += (freq2 * TAU) / sample_rate
+		
+		# Smooth sine waves with warm soft clip
+		var tone = (sin(phase1) * 0.5 + sin(phase2) * 0.3) * 0.6
+		var env = sin(t * PI) * (1.0 - t * 0.4)
+		
+		var sample_val = clampf(tone * env, -1.0, 1.0)
+		byte_data.encode_s16(i * 2, int(sample_val * 32767.0))
 
 	return _create_stream_from_bytes(byte_data, sample_rate)
 	

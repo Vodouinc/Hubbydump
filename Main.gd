@@ -141,6 +141,7 @@ var sp_arsenal_lbl: Label = null
 var sp_desc_lbl: Label = null
 var sp_flavor_lbl: Label = null
 var sp_sprite_preview: Node2D = null
+var tutorial_hud_node: Control = null
 
 var wave_prep_timer: float = 0.0
 var is_wave_preparing: bool = false
@@ -296,7 +297,13 @@ func _setup_core_sub_uis():
 		w_hud.name = "WaveHUD"
 		$UI.add_child(w_hud)
 		wave_hud_node = w_hud
-
+		
+	if not has_node("UI/TutorialHUD"):
+		var tut_hud = load("res://TutorialHUD.gd").new()
+		tut_hud.name = "TutorialHUD"
+		$UI.add_child(tut_hud)
+		tutorial_hud_node = tut_hud
+		
 	if not has_node("UI/AbilityHUD"):
 		var a_hud = load("res://AbilityHUD.gd").new()
 		a_hud.name = "AbilityHUD"
@@ -1287,7 +1294,7 @@ func spawn_player(peer_id: int):
 		"class": chosen_class
 	})
 
-	# Give Tech-Priest a free starter maintenance Servo-Skull
+	# Starter Servo-Skull for Tech-Priest
 	if chosen_class == CharacterClass.ADMECH_TECHPRIEST:
 		spawn_entity({
 			"type": "servo_skull",
@@ -1295,6 +1302,12 @@ func spawn_player(peer_id: int):
 			"position": p_node.position + Vector2(35, -20),
 			"owner_id": peer_id
 		})
+
+	# Launch Class-Specific Tutorial for Local Player
+	if peer_id == multiplayer.get_unique_id() or (peer_id == 1 and not multiplayer.has_multiplayer_peer()):
+		var tut = get_tree().get_first_node_in_group("tutorial_hud")
+		if tut and tut.has_method("start_tutorial_for_class"):
+			tut.start_tutorial_for_class(int(chosen_class))
 
 func _custom_spawner(data) -> Node:
 	if typeof(data) == TYPE_ARRAY and data.size() > 0: data = data[0]

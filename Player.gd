@@ -1414,7 +1414,7 @@ func _handle_modal_esc_close() -> bool:
 	var s_ui = get_tree().get_first_node_in_group("settings_ui")
 	if s_ui and s_ui.visible: s_ui.toggle_settings(); return true
 	var m_ui = get_tree().get_first_node_in_group("minimap_ui")
-	if m_ui and m_ui.get("is_fullscreen_map"): m_ui.toggle_fullscreen_map(); return true
+	if m_ui and m_ui.get("is_fullscreen"): m_ui.toggle_fullscreen_map(); return true
 	if is_building_mode: _cancel_build_mode(); return true
 	return false
 

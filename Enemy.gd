@@ -187,6 +187,15 @@ func update_visuals() -> void:
 		shadow_node.update_shadow_size()
 
 func _process(delta: float) -> void:
+	# --- FOG OF WAR VISIBILITY CULLING ---
+	var fow = get_tree().get_first_node_in_group("fog_of_war")
+	if fow and fow.has_method("is_world_pos_visible"):
+		var in_sight = fow.is_world_pos_visible(global_position)
+		if visual_sprite: visual_sprite.visible = in_sight
+		if shadow_node: shadow_node.visible = in_sight
+		if health_bar: health_bar.visible = in_sight
+	# ------------------------------------
+
 	if flash_timer > 0.0:
 		flash_timer -= delta
 		if flash_timer <= 0.0 and visual_sprite:

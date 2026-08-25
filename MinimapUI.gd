@@ -205,15 +205,21 @@ func _draw_fullscreen_tactical_map(vp_size: Vector2, radar_lvl: int) -> void:
 	draw_string(font, map_rect.position + Vector2(16, map_rect.size.y - 12), legend_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.82, 0.75, 0.60))
 
 func _draw_map_entities(map_center: Vector2, map_rad_px: float, scale_mult: float, radar_lvl: int) -> void:
+	var fow = get_tree().get_first_node_in_group("fog_of_war")
+
 	# -------------------------------------------------------------------------
 	# RADAR LEVEL 1+: Resource Deposits, Friendly Buildings, Base, Players
 	# -------------------------------------------------------------------------
 	if radar_lvl >= 1:
+		# Scrap Deposits (Only visible if explored OR if Radar Level 3)
 		for dep in get_tree().get_nodes_in_group("scrap_deposits"):
 			if is_instance_valid(dep):
-				var p = _world_to_map(dep.global_position, map_center, map_rad_px)
-				draw_circle(p, 2.2 * scale_mult, COL_SCRAP)
+				var is_seen = (fow and fow.is_world_pos_explored(dep.global_position)) or (radar_lvl >= 3)
+				if is_seen:
+					var p = _world_to_map(dep.global_position, map_center, map_rad_px)
+					draw_circle(p, 2.2 * scale_mult, COL_SCRAP)
 
+		# Barricades & Buildings
 		for b in get_tree().get_nodes_in_group("buildings"):
 			if is_instance_valid(b) and not b.get("is_preview"):
 				var p = _world_to_map(b.global_position, map_center, map_rad_px)
@@ -240,43 +246,51 @@ func _draw_map_entities(map_center: Vector2, map_rad_px: float, scale_mult: floa
 				draw_rect(Rect2(cam_p1, cam_p2 - cam_p1), COL_CAM_BOX, false, 1.2 * scale_mult)
 
 	# -------------------------------------------------------------------------
-	# RADAR LEVEL 2+: Real-Time Enemy Horde Blips
+	# RADAR LEVEL 2+: Real-Time Enemy Horde Blips (Active Sight OR Radar Scan)
 	# -------------------------------------------------------------------------
 	if radar_lvl >= 2:
 		for e in get_tree().get_nodes_in_group("enemies"):
 			if is_instance_valid(e):
-				var ep = _world_to_map(e.global_position, map_center, map_rad_px)
-				draw_circle(ep, 1.5 * scale_mult, COL_ENEMY)
+				var in_sight = (fow and fow.is_world_pos_visible(e.global_position)) or (radar_lvl >= 2)
+				if in_sight:
+					var ep = _world_to_map(e.global_position, map_center, map_rad_px)
+					draw_circle(ep, 1.5 * scale_mult, COL_ENEMY)
 
 	# -------------------------------------------------------------------------
 	# RADAR LEVEL 3+: Global Threat Telemetry (Ork Citadel & WAAAGH! Totems)
 	# -------------------------------------------------------------------------
-	if radar_lvl >= 3:
+	if radar_lvl >= 1:
+		# WAAAGH! Totems (Visible if explored OR if Radar Level 3)
 		for idol in get_tree().get_nodes_in_group("waaagh_totems"):
 			if is_instance_valid(idol):
-				var p = _world_to_map(idol.global_position, map_center, map_rad_px)
-				var diamond = [
-					p + Vector2(0, -4.5 * scale_mult),
-					p + Vector2(4.5 * scale_mult, 0),
-					p + Vector2(0, 4.5 * scale_mult),
-					p + Vector2(-4.5 * scale_mult, 0)
-				]
-				draw_colored_polygon(diamond, COL_TOTEM)
+				var is_seen = (fow and fow.is_world_pos_explored(idol.global_position)) or (radar_lvl >= 3)
+				if is_seen:
+					var p = _world_to_map(idol.global_position, map_center, map_rad_px)
+					var diamond = [
+						p + Vector2(0, -4.5 * scale_mult),
+						p + Vector2(4.5 * scale_mult, 0),
+						p + Vector2(0, 4.5 * scale_mult),
+						p + Vector2(-4.5 * scale_mult, 0)
+					]
+					draw_colored_polygon(diamond, COL_TOTEM)
 
+		# ORK CITADEL MEGA-CAMP (Visible if explored OR if Radar Level 3)
 		var cit = get_tree().get_first_node_in_group("ork_citadel")
 		var cit_pos = cit.global_position if is_instance_valid(cit) else citadel_cached_pos
 
 		if is_instance_valid(cit) or has_citadel_pos:
-			var cp = _world_to_map(cit_pos, map_center, map_rad_px)
-			var pulse = 0.75 + sin(Time.get_ticks_msec() * 0.008) * 0.25
-			
-			draw_circle(cp, 5.0 * scale_mult, Color(1.0, 0.15, 0.15, 0.35))
-			draw_arc(cp, 8.0 * scale_mult * pulse, 0, TAU, 24, COL_CITADEL, 1.5)
-			draw_arc(cp, 13.0 * scale_mult * (1.2 - pulse * 0.2), 0, TAU, 24, Color(1.0, 0.2, 0.2, 0.5), 1.0)
-			
-			draw_line(cp - Vector2(3, 3) * scale_mult, cp + Vector2(3, 3) * scale_mult, Color.WHITE, 1.5)
-			draw_line(cp - Vector2(-3, 3) * scale_mult, cp + Vector2(-3, 3) * scale_mult, Color.WHITE, 1.5)
+			var is_seen = (fow and fow.is_world_pos_explored(cit_pos)) or (radar_lvl >= 3)
+			if is_seen:
+				var cp = _world_to_map(cit_pos, map_center, map_rad_px)
+				var pulse = 0.75 + sin(Time.get_ticks_msec() * 0.008) * 0.25
+				
+				draw_circle(cp, 5.0 * scale_mult, Color(1.0, 0.15, 0.15, 0.35))
+				draw_arc(cp, 8.0 * scale_mult * pulse, 0, TAU, 24, COL_CITADEL, 1.5)
+				draw_arc(cp, 13.0 * scale_mult * (1.2 - pulse * 0.2), 0, TAU, 24, Color(1.0, 0.2, 0.2, 0.5), 1.0)
+				
+				draw_line(cp - Vector2(3, 3) * scale_mult, cp + Vector2(3, 3) * scale_mult, Color.WHITE, 1.5)
+				draw_line(cp - Vector2(-3, 3) * scale_mult, cp + Vector2(-3, 3) * scale_mult, Color.WHITE, 1.5)
 
-			if is_fullscreen:
-				var font = ThemeDB.fallback_font
-				draw_string(font, cp + Vector2(-32, -16 * scale_mult), "💀 ORK CITADEL", HORIZONTAL_ALIGNMENT_CENTER, 64, 8, COL_CITADEL)
+				if is_fullscreen:
+					var font = ThemeDB.fallback_font
+					draw_string(font, cp + Vector2(-32, -16 * scale_mult), "💀 ORK CITADEL", HORIZONTAL_ALIGNMENT_CENTER, 64, 8, COL_CITADEL)

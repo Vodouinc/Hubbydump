@@ -297,7 +297,12 @@ func _setup_core_sub_uis():
 		w_hud.name = "WaveHUD"
 		$UI.add_child(w_hud)
 		wave_hud_node = w_hud
-		
+	
+	if not has_node("FogOfWar"):
+		var fow = load("res://FogOfWar.gd").new()
+		fow.name = "FogOfWar"
+		add_child(fow)
+	
 	if not has_node("UI/TutorialHUD"):
 		var tut_hud = load("res://TutorialHUD.gd").new()
 		tut_hud.name = "TutorialHUD"
@@ -2445,7 +2450,8 @@ func execute_rematch():
 	active_paused_peers.clear()
 	
 	get_tree().call_group("minimap_ui", "reset_minimap_state")
-
+	get_tree().call_group("fog_of_war", "reset_fog")
+	
 	var go_ui = get_node_or_null("%GameOverUI")
 	if not go_ui and has_node("UI/GameOverUI"): go_ui = $UI/GameOverUI
 	if go_ui: go_ui.hide()

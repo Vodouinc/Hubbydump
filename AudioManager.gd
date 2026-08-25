@@ -19,10 +19,10 @@ func _ready():
 	_load_audio_settings()
 	_generate_sound_effects()
 	_generate_soundtrack()
+	_generate_sister_soundtrack() # <-- ADD THIS LINE
 	_create_audio_pool()
 	_create_music_player()
 	
-	# Start soundtrack on Music bus
 	play_music(true)
 
 # ------------------------------------------------------------------------------
@@ -170,13 +170,190 @@ func _create_music_player():
 	music_player.bus = "Music"
 	add_child(music_player)
 
-func play_music(loop: bool = true):
-	if music_player and sfx_library.has("soundtrack"):
+func play_music(_loop: bool = true):
+	if not is_instance_valid(music_player): return
+	if sfx_library.has("soundtrack"):
+		if music_player.playing and music_player.stream == sfx_library["soundtrack"]:
+			return
+		music_player.stop()
 		music_player.stream = sfx_library["soundtrack"]
 		music_player.play()
 
 func stop_music():
-	if music_player: music_player.stop()
+	if is_instance_valid(music_player):
+		music_player.stop()
+
+func switch_soundtrack_for_class(chosen_class_id: int):
+	if not is_instance_valid(music_player): return
+	
+	var target_stream: AudioStream = null
+	if chosen_class_id == 2 and sfx_library.has("soundtrack_sister"):
+		target_stream = sfx_library["soundtrack_sister"]
+	elif sfx_library.has("soundtrack"):
+		target_stream = sfx_library["soundtrack"]
+		
+	if target_stream == null:
+		return
+		
+	if music_player.playing and music_player.stream == target_stream:
+		return
+
+	music_player.stop()
+	music_player.stream = target_stream
+	music_player.play()
+
+# ------------------------------------------------------------------------------
+# PROCEDURAL CASTLEVANIA-INSPIRED GOTHIC BATTLE HYMN (SISTER OF BATTLE)
+# ------------------------------------------------------------------------------
+
+func _generate_sister_soundtrack():
+	var sample_rate = 22050
+	var bpm = 132.0 # Upbeat Castlevania action tempo
+	var beat_dur = 60.0 / bpm
+	var total_bars = 8
+	var beats_per_bar = 4.0
+	var total_beats = total_bars * beats_per_bar
+	var total_duration = total_beats * beat_dur
+	var total_samples = int(sample_rate * total_duration)
+
+	var mix_buffer = PackedFloat32Array()
+	mix_buffer.resize(total_samples)
+	mix_buffer.fill(0.0)
+
+	# 8-Bar D-Minor Baroque Chord Progression
+	var chord_roots = [73.42, 58.27, 49.00, 55.00, 73.42, 87.31, 49.00, 55.00] # D, Bb, G, A, D, F, G, A
+	var chord_fifths = [110.00, 87.31, 73.42, 82.41, 110.00, 130.81, 73.42, 82.41]
+	var chord_triads = [
+		[146.83, 174.61, 220.00], # Dm
+		[116.54, 146.83, 174.61], # Bb
+		[98.00,  116.54, 146.83], # Gm
+		[110.00, 138.59, 164.81], # A Maj
+		[146.83, 174.61, 220.00], # Dm
+		[174.61, 220.00, 261.63], # F Maj
+		[98.00,  116.54, 146.83], # Gm
+		[110.00, 138.59, 164.81]  # A Maj
+	]
+
+	# Castlevania-style 16th-note Baroque Lead Line (128 notes across 8 bars)
+	var melody_notes: Array[float] = [
+		# Bar 1 (Dm - Driving arpeggio & flourish)
+		293.66, 349.23, 440.00, 587.33, 554.37, 587.33, 440.00, 349.23, 392.00, 440.00, 466.16, 440.00, 392.00, 349.23, 329.63, 349.23,
+		# Bar 2 (Bb - Melodic descent)
+		233.08, 293.66, 349.23, 466.16, 440.00, 466.16, 349.23, 293.66, 329.63, 349.23, 392.00, 349.23, 329.63, 293.66, 277.18, 293.66,
+		# Bar 3 (Gm - Galloping baroque climb)
+		196.00, 233.08, 293.66, 392.00, 369.99, 392.00, 293.66, 233.08, 261.63, 293.66, 311.13, 293.66, 261.63, 233.08, 220.00, 233.08,
+		# Bar 4 (A - Dramatic harmonic turn)
+		220.00, 277.18, 329.63, 440.00, 415.30, 440.00, 329.63, 277.18, 293.66, 329.63, 349.23, 329.63, 293.66, 277.18, 246.94, 277.18,
+		# Bar 5 (Dm - High octave anthem)
+		587.33, 440.00, 349.23, 293.66, 329.63, 349.23, 392.00, 440.00, 466.16, 440.00, 392.00, 349.23, 329.63, 293.66, 277.18, 293.66,
+		# Bar 6 (F Maj - Heroic lift)
+		349.23, 523.25, 440.00, 349.23, 392.00, 440.00, 466.16, 523.25, 587.33, 523.25, 466.16, 440.00, 392.00, 349.23, 329.63, 349.23,
+		# Bar 7 (Gm - High tension)
+		392.00, 587.33, 466.16, 392.00, 440.00, 466.16, 523.25, 587.33, 622.25, 587.33, 523.25, 466.16, 440.00, 392.00, 369.99, 392.00,
+		# Bar 8 (A7 - Grand cadence finale)
+		440.00, 659.25, 554.37, 440.00, 466.16, 440.00, 392.00, 349.23, 329.63, 293.66, 277.18, 246.94, 220.00, 277.18, 329.63, 440.00
+	]
+
+	# Phase accumulators
+	var lead_phase = 0.0
+	var bass_phase = 0.0
+	var organ_phases = [0.0, 0.0, 0.0]
+	var bell_phase = 0.0
+
+	for i in range(total_samples):
+		var time = float(i) / float(sample_rate)
+		var current_beat = time / beat_dur
+		var bar_idx = int(current_beat / beats_per_bar) % total_bars
+		var beat_in_bar = fmod(current_beat, beats_per_bar)
+		var sixteenth_in_bar = int(current_beat * 4.0) % 16
+		var global_sixteenth = int(current_beat * 4.0) % 128
+		var sixteenth_t = fmod(current_beat * 4.0, 1.0)
+
+		# 1. CASTLEVANIA BAROQUE LEAD (Bright Pipe Organ & Harpsichord Hybrid)
+		var note_freq = melody_notes[global_sixteenth]
+		lead_phase = fposmod(lead_phase + (note_freq * TAU) / sample_rate, TAU)
+		var lead_saw = (fmod(lead_phase, TAU) / PI - 1.0) * 0.4
+		var lead_square = (1.0 if sin(lead_phase) > 0.0 else -1.0) * 0.25
+		var lead_env = pow(1.0 - sixteenth_t, 1.35)
+		var lead_mix = (lead_saw + lead_square) * lead_env * 0.42
+
+		# 2. DRIVING GALLOPING BASSLINE (Octave Jumping 16th-Note Engine)
+		var root = chord_roots[bar_idx]
+		var fifth = chord_fifths[bar_idx]
+		var bass_freq = root
+		match sixteenth_in_bar % 4:
+			0: bass_freq = root
+			1: bass_freq = root * 2.0
+			2: bass_freq = fifth
+			3: bass_freq = root * 2.0
+
+		bass_phase = fposmod(bass_phase + (bass_freq * TAU) / sample_rate, TAU)
+		var bass_tone = (sin(bass_phase) * 0.65 + (fmod(bass_phase, TAU) / PI - 1.0) * 0.35)
+		var bass_env = pow(1.0 - sixteenth_t, 1.2)
+		var bass_mix = bass_tone * bass_env * 0.45
+
+		# 3. CATHEDRAL PIPE ORGAN CHORDS (Sustained Harmonic Pad)
+		var triad = chord_triads[bar_idx]
+		var organ_mix = 0.0
+		for v in range(3):
+			organ_phases[v] = fposmod(organ_phases[v] + (triad[v] * TAU) / sample_rate, TAU)
+			organ_mix += sin(organ_phases[v]) * 0.5 + sin(fposmod(organ_phases[v] * 2.0, TAU)) * 0.3
+		organ_mix *= 0.18
+
+		# 4. CATHEDRAL CHIME (On Bar 1 & 5 Downbeats)
+		var bell_mix = 0.0
+		if (bar_idx == 0 or bar_idx == 4) and beat_in_bar < 2.0:
+			var bt = beat_in_bar * beat_dur
+			bell_phase = fposmod(bell_phase + (587.33 * TAU) / sample_rate, TAU)
+			bell_mix = sin(bell_phase) * exp(-3.0 * bt) * 0.25
+
+		# 5. HIGH-ENERGY ACTION DRUMS
+		var drum_mix = 0.0
+
+		# Kick (Punchy Castlevania pattern: Beats 1, 2.5, 3, 4.5)
+		if sixteenth_in_bar in [0, 6, 8, 14]:
+			var kt = sixteenth_t
+			drum_mix += sin(lerpf(130.0, 42.0, kt) * TAU * kt * (beat_dur * 0.25)) * pow(1.0 - kt, 2.0) * 0.7
+
+		# Snare (Sharp backbeat on beats 2 and 4)
+		if sixteenth_in_bar in [4, 12]:
+			var st = sixteenth_t
+			var noise = randf_range(-0.5, 0.5) * pow(1.0 - st, 2.5)
+			var snap = sin(220.0 * TAU * st * (beat_dur * 0.25)) * pow(1.0 - st, 3.0) * 0.4
+			drum_mix += (noise + snap) * 0.65
+
+		# Hi-Hats (Continuous 16th-note drive)
+		var hat_accent = 0.22 if (sixteenth_in_bar % 2 == 0) else 0.12
+		drum_mix += randf_range(-hat_accent, hat_accent) * (1.0 - sixteenth_t)
+
+		# 6. MASTER SATURATION LIMITER (Punchy, Clean, No Clipping)
+		var raw_sum = lead_mix + bass_mix + organ_mix + bell_mix + drum_mix
+		mix_buffer[i] = tanh(raw_sum * 1.1) * 0.82
+
+	# Seamless Loop Crossfade (0.15s)
+	var xfade_samples = int(sample_rate * 0.15)
+	for k in range(xfade_samples):
+		var alpha = float(k) / float(xfade_samples)
+		var start_idx = k
+		var end_idx = total_samples - xfade_samples + k
+		mix_buffer[start_idx] = lerpf(mix_buffer[end_idx], mix_buffer[start_idx], alpha)
+
+	var byte_data = PackedByteArray()
+	byte_data.resize(total_samples * 2)
+	for i in range(total_samples):
+		var int16_val = int(clampf(mix_buffer[i] * 32767.0, -32768.0, 32767.0))
+		byte_data.encode_s16(i * 2, int16_val)
+
+	var stream = AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = sample_rate
+	stream.stereo = false
+	stream.data = byte_data
+	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	stream.loop_begin = 0
+	stream.loop_end = total_samples
+
+	sfx_library["soundtrack_sister"] = stream
 
 # ------------------------------------------------------------------------------
 # 3. GRIMDARK PROCEDURAL SFX GENERATOR

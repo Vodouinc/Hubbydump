@@ -870,6 +870,20 @@ func _handle_death() -> void:
 		if counts_toward_wave and main_node.has_method("notify_enemy_defeated"):
 			main_node.notify_enemy_defeated()
 
+# Award EXP to Battle Sisters
+		var exp_reward = 15
+		match type:
+			EnemyType.GRETCHIN: exp_reward = 12
+			EnemyType.SQUIG: exp_reward = 18
+			EnemyType.ORK_BOY: exp_reward = 28
+			EnemyType.STORMBOY: exp_reward = 35
+			EnemyType.NOB: exp_reward = 80
+			EnemyType.WARBOSS: exp_reward = 300
+
+		for p in get_tree().get_nodes_in_group("players"):
+			if is_instance_valid(p) and p.get("current_class") == 2:
+				p.gain_exp(exp_reward)
+
 	queue_free()
 
 @rpc("call_local", "unreliable")

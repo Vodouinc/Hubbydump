@@ -29,11 +29,12 @@ func _ready():
 	unshaded_mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
 	material = unshaded_mat
 
-	collision_layer = 0
+	collision_layer = 4 # FIXED: Layer 4 allows the sanctuary dome to intercept bullets
 	collision_mask = 0xFFFFFFFF
 	monitoring = true
 	monitorable = true
 
+	add_to_group("bullets")
 	_apply_bullet_type_stats()
 	_setup_bullet_light()
 
@@ -63,6 +64,7 @@ func _apply_bullet_type_stats():
 		BulletType.ORK_SLUG:
 			speed = 460.0
 			is_enemy_bullet = true
+			add_to_group("enemy_bullets")
 
 func _setup_bullet_light():
 	if point_light: point_light.queue_free()

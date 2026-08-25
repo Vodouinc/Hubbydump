@@ -117,7 +117,7 @@ func _build_hud_layout():
 		weapon_hbox.add_child(slot)
 		weapon_buttons.append(slot)
 
-	# --- POD B: TACTICAL FORGE / COHORT DIRECTIVES ---
+	# --- POD B: TACTICAL PROTOCOLS ---
 	action_panel = _create_pod_panel("ActionPod", main_hbox)
 	var action_vbox = VBoxContainer.new()
 	action_vbox.add_theme_constant_override("separation", 2)
@@ -144,14 +144,14 @@ func _build_hud_layout():
 		action_hbox.add_child(slot)
 		action_buttons.append(slot)
 
-	# --- POD C: CYBERNETICS & REINFORCEMENTS ---
+	# --- POD C: CYBERNETICS & BLESSINGS ---
 	var augment_panel = _create_pod_panel("AugmentPod", main_hbox)
 	var augment_vbox = VBoxContainer.new()
 	augment_vbox.add_theme_constant_override("separation", 2)
 	augment_panel.add_child(augment_vbox)
 
 	var aug_title = Label.new()
-	aug_title.text = "BIONICS & REINFORCEMENTS"
+	aug_title.text = "BIONICS & BLESSINGS"
 	aug_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	aug_title.add_theme_font_size_override("font_size", 8)
 	aug_title.add_theme_color_override("font_color", C_AMBER)
@@ -313,14 +313,23 @@ func _on_slot_unhovered():
 
 func _on_slot_clicked(slot: Button):
 	if not is_instance_valid(local_player) or not (slot is CompactSlot): return
-	var is_techpriest = (local_player.current_class == 0)
+	var p_class = int(local_player.current_class)
 
-	if slot.category == "action":
-		if is_techpriest:
+	# --- 1. TECH-PRIEST ACTIONS ---
+	if p_class == 0:
+		if slot.category == "action":
 			var t_id = slot.cached_data.get("type_id", -1)
 			if t_id != -1 and local_player.has_method("toggle_build_mode"):
 				local_player.toggle_build_mode(t_id)
-		else:
+		elif slot.category == "augment" and slot.slot_index == 0:
+			if multiplayer.has_multiplayer_peer():
+				local_player.rpc_id(1, "request_spawn_servo_skull")
+			else:
+				local_player.request_spawn_servo_skull()
+
+	# --- 2. SKITARII MARSHAL ACTIONS ---
+	elif p_class == 1:
+		if slot.category == "action":
 			match slot.slot_index:
 				0: local_player.is_attack_move_queued = not local_player.is_attack_move_queued
 				1: local_player._issue_stop_to_selection()
@@ -338,139 +347,136 @@ func _on_slot_clicked(slot: Button):
 						local_player.rpc_id(1, "request_field_requisition_uplink")
 					else:
 						local_player.request_field_requisition_uplink()
-
-	elif slot.category == "weapon":
-		if not is_techpriest and slot.slot_index == 1:
+		elif slot.category == "weapon" and slot.slot_index == 1:
 			if local_player.has_method("_toggle_doctrina_imperative"):
 				local_player._toggle_doctrina_imperative()
-
-	elif slot.category == "augment":
-		if is_techpriest and slot.slot_index == 0:
-			if multiplayer.has_multiplayer_peer():
-				local_player.rpc_id(1, "request_spawn_servo_skull")
-			else:
-				local_player.request_spawn_servo_skull()
-		elif not is_techpriest:
+		elif slot.category == "augment":
 			if multiplayer.has_multiplayer_peer():
 				local_player.rpc_id(1, "request_recruit_bodyguard", slot.slot_index)
 			else:
 				local_player.request_recruit_bodyguard(slot.slot_index)
 
+	# --- 3. SISTER OF BATTLE ACTIONS (FIXED ABILITY UPGRADE ROUTING) ---
+	elif p_class == 2:
+		var pts = local_player.get("miracle_points") if "miracle_points" in local_player else 0
+		var s_lvl = local_player.get("current_level") if "current_level" in local_player else 1
+
+		# Upgrading abilities when miracle points are available
+		if pts > 0:
+			if slot.category == "action":
+				var ability_id = slot.slot_index # 0: Intervention, 1: Grenade, 2: Miracle Shield, 3: Ultimate
+				if ability_id in [0, 1, 2]:
+					local_player.rpc("request_upgrade_sister_ability", ability_id)
+					return
+				elif ability_id == 3 and s_lvl >= 3 and local_player.get("rank_ultimate") < 2:
+					local_player.rpc("request_upgrade_sister_ability", 3)
+					return
+			elif slot.category == "weapon" and slot.slot_index == 2: # Weapon Slot 2 = SPACE Dash
+				if local_player.get("rank_dash") < 3:
+					local_player.rpc("request_upgrade_sister_ability", 4) # ID 4 = Dash Upgrade
+					return
+
 func _get_data_for_category(category: String, idx: int) -> Dictionary:
 	if not is_instance_valid(local_player): return {}
-	var is_techpriest = (local_player.current_class == 0)
+	var p_class = int(local_player.current_class)
 
-	match category:
-		"weapon":
-			if is_techpriest:
+	# ==========================================================================
+	# A. TECH-PRIEST ENGINSEER
+	# ==========================================================================
+	if p_class == 0:
+		match category:
+			"weapon":
 				match idx:
-					0: return {
-						"key": "LMB", "name": "Omnissian Power-Axe", "sub": "Heavy Melee Cleave",
-						"icon": "axe", "scrap": 0, "req": 0, "type_id": -1,
-						"desc": "Heavy energized power-axe. Cleaves forward in a wide arc (40 DMG) that cuts through enemy armor.",
-						"flavor": "\"The blade is the voice of the Omnissiah; it speaks in the severance of heretical flesh.\""
-					}
-					1: return {
-						"key": "RMB", "name": "Plasma Caliver", "sub": "Secondary Ranged & Auspex Paint",
-						"icon": "plasma_pistol", "scrap": 0, "req": 0, "type_id": -1,
-						"desc": "Fires superheated plasma (30 DMG). Applies Auspex Lock-On (+35% Crit Damage taken by target for 6s).",
-						"flavor": "\"Paint the xeno in telemetry, and let our cohorts extinguish their spark.\""
-					}
-					2: return {}
-			else:
-				match idx:
-					0: return {
-						"key": "LMB", "name": "Radium Serpenta Carbine", "sub": "Primary Ranged Munition",
-						"icon": "radium_carbine", "scrap": 0, "req": 0, "type_id": -1,
-						"desc": "Rapid-fire irradiated rifle. Decays organic cellular structures on impact.",
-						"flavor": "\"Breathe deep the holy fallout, and let your flesh be cleansed in phosphor fire.\""
-					}
-					1:
-						var is_conq = (local_player.active_doctrina == 0) if "active_doctrina" in local_player else true
-						return {
-							"key": "Q", "name": "Doctrina: " + ("CONQUEROR (DPS)" if is_conq else "PROTECTOR (ARMOR)"),
-							"sub": "Noospheric Cohort Broadcast",
-							"icon": "doctrina_conq" if is_conq else "doctrina_prot", "scrap": 0, "req": 0, "type_id": -1,
-							"desc": "Broadcasts aura: +30% Cohort Speed & +25% Fire Rate (-15% Armor)" if is_conq else "Broadcasts aura: +35% Cohort Armor & +20% Range (-15% Speed)",
-							"flavor": "\"The Omnissiah guides our feet as He guides our guns. Upload the sacred canticle.\""
-						}
-					2: return {
-						"key": "R", "name": "Orbital Lance Strike", "sub": "Fleet Telemetry Bombardment",
-						"icon": "orbital", "scrap": 0, "req": GameData.ORBITAL_REQ_COST, "type_id": -1,
-						"desc": "Calls down a searing orbital lance strike directly at your cursor (220 DMG / 45s CD).",
-						"flavor": "\"Let the stars themselves descend upon the blasphemer in cleansing fire.\""
-					}
-
-		"action":
-			if is_techpriest:
-				match idx:
-					0: return {"key": "1", "name": "Aegis Blast Rampart", "sub": "Tactical Fortification", "icon": "barricade", "scrap": 15, "req": 0, "type_id": 0, "desc": "Heavy blast wall. Snap-links into continuous defensive ramparts. Upgradable to Motorized Gate [E].", "flavor": "\"Armor is the iron shroud that preserves the faithful.\""}
-					1: return {"key": "2", "name": "Electro-Relay Substation", "sub": "Power & Scrap Distribution", "icon": "distributor", "scrap": 20, "req": 0, "type_id": 4, "desc": "Extends Noosphere power conduits. Magnetically siphons loose battlefield scrap.", "flavor": "\"Where the conductor reaches, the Motive Force flows unbroken.\""}
-					2: return {"key": "3", "name": "Imperial Plasma Dynamo", "sub": "Energy Generation", "icon": "generator", "scrap": 25, "req": 0, "type_id": 1, "desc": "Generates +2 Requisition per cycle. Energizes Noosphere Aegis shields and repair swarms.", "flavor": "\"From the caged fury of the atom do we draw civilization.\""}
-					3: return {"key": "4", "name": "Cognis Defense Battery", "sub": "Automated Heavy Emplacement", "icon": "turret", "scrap": 35, "req": 5, "type_id": 2, "desc": "Automated tracking battery. Upgradable through 4 tiers to specialized Flak, Volkite, or Arc Blasters.", "flavor": "\"Let the wrath of the Machine God strike swift.\""}
-					4: return {"key": "5", "name": "Promethium Scrap Smelter", "sub": "Ore Extraction & Refining", "icon": "foundry", "scrap": 30, "req": 5, "type_id": 3, "desc": "Must be built over a Scrap Deposit. Automatically extracts debris, generating +5 Scrap periodically.", "flavor": "\"The broken iron of the foe is remade into bulwarks.\""}
-					5: return {"key": "6", "name": "Omnissian Reliquary Vault", "sub": "Cogitator Archives", "icon": "shrine", "scrap": 40, "req": 15, "type_id": 6, "desc": "Access terminal [E] to research Aegis Shields, Cutting Lasers, Siphons, and Targeting Uplinks.", "flavor": "\"Knowledge is the true holy relic; safeguard it.\""}
-					6: return {"key": "7", "name": "Cybernetica Manufactorum", "sub": "Automata Assembly", "icon": "foundry", "scrap": 50, "req": 20, "type_id": 7, "desc": "Construct Skitarii Vanguard, Rangers, Ruststalkers, Kataphrons, and Kastelan Battle-Automata.", "flavor": "\"From the holy fires march the undying cohorts of Mars.\""}
-			else:
-				match idx:
-					0: return { "key": "A", "name": "Attack-Move Protocol", "sub": "Aggressive March", "icon": "attack_move", "scrap": 0, "req": 0, "type_id": -1, "desc": "Orders selected units to march and engage all enemies.", "flavor": "\"Advance with fury; leave no heretic standing.\"" }
-					1: return { "key": "S", "name": "Halt / Stop Order", "sub": "Cancel Directives", "icon": "stop", "scrap": 0, "req": 0, "type_id": -1, "desc": "Cancels movement and combat orders.", "flavor": "\"Hold position. Recalibrate targeting.\"" }
-					2: return { "key": "H", "name": "Hold Ground Protocol", "sub": "Defensive Stance", "icon": "hold_ground", "scrap": 0, "req": 0, "type_id": -1, "desc": "Units hold ground and fire at maximum range.", "flavor": "\"Stand like iron. The line does not yield.\"" }
-					3: return { "key": "F", "name": "Auspex Target Paint", "sub": "Telemetry Harvest", "icon": "auspex_paint", "scrap": 0, "req": 0, "type_id": -1, "desc": "Paints target (+35% Crit). Eliminating marked targets uploads telemetry for +1 to +3 REQ.", "flavor": "\"Mark the xeno for harvest and eradication.\"" }
-					4: return { "key": "SPACE", "name": "Lock Auspex on Commander", "sub": "Camera Focus", "icon": "cam_lock", "scrap": 0, "req": 0, "type_id": -1, "desc": "Centers tactical camera on the Marshal.", "flavor": "\"Re-center telemetry on the commander.\"" }
-					5: return {
-						"key": "V", "name": "Orbital Supply Uplink", "sub": "Scrap Transmutation",
-						"icon": "distributor", "scrap": 15, "req": 0, "type_id": -1,
-						"desc": "Uploads 15 Scrap salvage to the orbital fleet in exchange for +8 Requisition supply canisters.",
-						"flavor": "\"Transmit battlefield debris to the orbital forge; receive consecrated munitions in return.\""
-					}
+					0: return {"key": "LMB", "name": "Omnissian Power-Axe", "sub": "Heavy Melee Cleave", "icon": "axe", "scrap": 0, "req": 0, "type_id": -1, "desc": "Heavy energized power-axe (40 DMG). Cuts through armor in a wide arc.", "flavor": "\"The blade is the voice of the Omnissiah.\""}
+					1: return {"key": "RMB", "name": "Plasma Caliver", "sub": "Auspex Paint", "icon": "plasma_pistol", "scrap": 0, "req": 0, "type_id": -1, "desc": "Fires superheated plasma (30 DMG). Applies Auspex Lock-On (+35% Crit).", "flavor": "\"Paint the xeno in telemetry.\""}
 					_: return {}
-
-		"augment":
-			if is_techpriest:
+			"action":
+				match idx:
+					0: return {"key": "1", "name": "Aegis Blast Rampart", "sub": "Fortification", "icon": "barricade", "scrap": 15, "req": 0, "type_id": 0, "desc": "Heavy blast wall. Links into continuous ramparts. Upgrade to Gate [E].", "flavor": "\"Armor preserves the faithful.\""}
+					1: return {"key": "2", "name": "Electro-Relay Substation", "sub": "Conduit & Scrap", "icon": "distributor", "scrap": 20, "req": 0, "type_id": 4, "desc": "Extends Noosphere power grid. Magnetically siphons loose battlefield scrap.", "flavor": "\"The Motive Force flows unbroken.\""}
+					2: return {"key": "3", "name": "Imperial Plasma Dynamo", "sub": "Energy Generator", "icon": "generator", "scrap": 25, "req": 0, "type_id": 1, "desc": "Generates +2 Requisition per cycle. Energizes shields and nanobots.", "flavor": "\"From caged fury we draw civilization.\""}
+					3: return {"key": "4", "name": "Cognis Defense Battery", "sub": "Turret", "icon": "turret", "scrap": 35, "req": 5, "type_id": 2, "desc": "Automated battery. Upgradable to Flak, Volkite, or Arc Blasters.", "flavor": "\"Strike swift in His name.\""}
+					4: return {"key": "5", "name": "Scrap Smelter", "sub": "Resource Extractor", "icon": "foundry", "scrap": 30, "req": 5, "type_id": 3, "desc": "Build over Scrap Deposit. Automatically extracts +5 Scrap per cycle.", "flavor": "\"The broken iron of the foe is remade.\""}
+					5: return {"key": "6", "name": "Omnissian Reliquary", "sub": "Tech Archives", "icon": "shrine", "scrap": 40, "req": 15, "type_id": 6, "desc": "Access terminal [E] to research Shields, Lasers, Siphons, and Uplinks.", "flavor": "\"Knowledge is the true holy relic.\""}
+					6: return {"key": "7", "name": "Cybernetica Manufactorum", "sub": "Automata Assembly", "icon": "foundry", "scrap": 50, "req": 20, "type_id": 7, "desc": "Construct Vanguard, Rangers, Ruststalkers, Kataphrons, and Kastelans.", "flavor": "\"From holy fires march undying cohorts.\""}
+					_: return {}
+			"augment":
 				match idx:
 					0:
 						var skulls = local_player.active_servo_skulls.size() if "active_servo_skulls" in local_player else 0
-						return {
-							"key": "C", "name": "Fabricate Servo-Skull", "sub": "Autonomous Cyber-Drone",
-							"icon": "skull", "scrap": GameData.SERVO_SKULL_SCRAP_COST, "req": GameData.SERVO_SKULL_REQ_COST, "type_id": -1,
-							"current_rank": skulls, "max_rank": GameData.MAX_SERVO_SKULLS,
-							"desc": "Deploys an autonomous Servo-Skull drone to retrieve distant scrap (%d/%d Active)." % [skulls, GameData.MAX_SERVO_SKULLS],
-							"flavor": "\"Even in death, the servant of Mars performs the holy work.\""
-						}
-					_: return {}
-			else:
-				var count = local_player.active_bodyguards.size() if "active_bodyguards" in local_player else 0
-				match idx:
-					0:
-						var r_info = GameData.BODYGUARD_ROSTER.get(0, {})
-						return {
-							"key": "Z", "name": r_info.get("name", "Skitarii Ranger"), "sub": r_info.get("sub", "Galvanic Sniper"),
-							"icon": "recruit_ranger", "scrap": r_info.get("scrap", 15), "req": r_info.get("req", 5), "type_id": 0,
-							"current_rank": count, "max_rank": GameData.MAX_BODYGUARDS,
-							"desc": r_info.get("desc", "") + " (%d/%d Active Cohort)" % [count, GameData.MAX_BODYGUARDS],
-							"flavor": r_info.get("flavor", "")
-						}
-					1:
-						var s_info = GameData.BODYGUARD_ROSTER.get(1, {})
-						return {
-							"key": "X", "name": s_info.get("name", "Sicarian Ruststalker"), "sub": s_info.get("sub", "Cyber-Assassin"),
-							"icon": "recruit_sicarian", "scrap": s_info.get("scrap", 20), "req": s_info.get("req", 10), "type_id": 1,
-							"current_rank": count, "max_rank": GameData.MAX_BODYGUARDS,
-							"desc": s_info.get("desc", "") + " (%d/%d Active Cohort)" % [count, GameData.MAX_BODYGUARDS],
-							"flavor": s_info.get("flavor", "")
-						}
-					2:
-						var v_info = GameData.BODYGUARD_ROSTER.get(2, {})
-						return {
-							"key": "C", "name": v_info.get("name", "Skitarii Vanguard"), "sub": v_info.get("sub", "Rad-Shock Infantry"),
-							"icon": "recruit_vanguard", "scrap": v_info.get("scrap", 10), "req": v_info.get("req", 5), "type_id": 2,
-							"current_rank": count, "max_rank": GameData.MAX_BODYGUARDS,
-							"desc": v_info.get("desc", "") + " (%d/%d Active Cohort)" % [count, GameData.MAX_BODYGUARDS],
-							"flavor": v_info.flavor
-						}
+						return {"key": "C", "name": "Fabricate Servo-Skull", "sub": "Drone", "icon": "skull", "scrap": GameData.SERVO_SKULL_SCRAP_COST, "req": GameData.SERVO_SKULL_REQ_COST, "type_id": -1, "current_rank": skulls, "max_rank": GameData.MAX_SERVO_SKULLS, "desc": "Deploys an autonomous drone to retrieve scrap (%d/%d Active)." % [skulls, GameData.MAX_SERVO_SKULLS], "flavor": "\"Even in death, the servant performs the work.\""}
 					_: return {}
 
+	# ==========================================================================
+	# B. SKITARII MARSHAL
+	# ==========================================================================
+	elif p_class == 1:
+		match category:
+			"weapon":
+				match idx:
+					0: return {"key": "LMB", "name": "Radium Serpenta Carbine", "sub": "Ranged Munition", "icon": "radium_carbine", "scrap": 0, "req": 0, "type_id": -1, "desc": "Rapid-fire irradiated rifle. Decays organic cellular structures on impact.", "flavor": "\"Cleanse in phosphor fallout.\""}
+					1:
+						var is_conq = (local_player.active_doctrina == 0) if "active_doctrina" in local_player else true
+						return {"key": "Q", "name": "Doctrina: " + ("CONQUEROR" if is_conq else "PROTECTOR"), "sub": "Aura", "icon": "doctrina_conq" if is_conq else "doctrina_prot", "scrap": 0, "req": 0, "type_id": -1, "desc": "Aura: +30% Speed & +25% Fire Rate (-15% Armor)" if is_conq else "Aura: +35% Armor & +20% Range (-15% Speed)", "flavor": "\"Upload the sacred canticle.\""}
+					2: return {"key": "R", "name": "Orbital Lance Strike", "sub": "Bombardment", "icon": "orbital", "scrap": 0, "req": GameData.ORBITAL_REQ_COST, "type_id": -1, "desc": "Calls down a searing orbital lance strike (220 DMG / 45s CD).", "flavor": "\"Let the stars descend in cleansing fire.\""}
+					_: return {}
+			"action":
+				match idx:
+					0: return {"key": "A", "name": "Attack-Move", "sub": "Directive", "icon": "attack_move", "scrap": 0, "req": 0, "type_id": -1, "desc": "Orders selected units to march and engage all enemies.", "flavor": "\"Advance with fury.\""}
+					1: return {"key": "S", "name": "Halt / Stop", "sub": "Directive", "icon": "stop", "scrap": 0, "req": 0, "type_id": -1, "desc": "Cancels movement and combat orders.", "flavor": "\"Hold position.\""}
+					2: return {"key": "H", "name": "Hold Ground", "sub": "Directive", "icon": "hold_ground", "scrap": 0, "req": 0, "type_id": -1, "desc": "Units hold ground and fire at maximum range.", "flavor": "\"The line does not yield.\""}
+					3: return {"key": "F", "name": "Auspex Target Paint", "sub": "Telemetry", "icon": "auspex_paint", "scrap": 0, "req": 0, "type_id": -1, "desc": "Paints target (+35% Crit). Kills yield +1 to +3 REQ.", "flavor": "\"Mark the xeno for eradication.\""}
+					4: return {"key": "SPACE", "name": "Focus Commander", "sub": "Camera", "icon": "cam_lock", "scrap": 0, "req": 0, "type_id": -1, "desc": "Centers tactical camera on the Marshal.", "flavor": "\"Re-center telemetry.\""}
+					5: return {"key": "V", "name": "Orbital Supply Uplink", "sub": "Transmutation", "icon": "distributor", "scrap": 15, "req": 0, "type_id": -1, "desc": "Transmits 15 Scrap to orbit for +8 Requisition.", "flavor": "\"Receive consecrated munitions.\""}
+					_: return {}
+			"augment":
+				var count = local_player.active_bodyguards.size() if "active_bodyguards" in local_player else 0
+				match idx:
+					0: return {"key": "Z", "name": "Skitarii Ranger", "sub": "Sniper", "icon": "recruit_ranger", "scrap": 15, "req": 5, "type_id": 0, "current_rank": count, "max_rank": GameData.MAX_BODYGUARDS, "desc": "Galvanic sniper cadre (%d/%d Active)." % [count, GameData.MAX_BODYGUARDS], "flavor": "\"Never miss the spark.\""}
+					1: return {"key": "X", "name": "Sicarian Ruststalker", "sub": "Assassin", "icon": "recruit_sicarian", "scrap": 20, "req": 10, "type_id": 1, "current_rank": count, "max_rank": GameData.MAX_BODYGUARDS, "desc": "Transonic cyber-assassin (%d/%d Active)." % [count, GameData.MAX_BODYGUARDS], "flavor": "\"Cleave at a molecular level.\""}
+					2: return {"key": "C", "name": "Skitarii Vanguard", "sub": "Shock Trooper", "icon": "recruit_vanguard", "scrap": 10, "req": 5, "type_id": 2, "current_rank": count, "max_rank": GameData.MAX_BODYGUARDS, "desc": "Rad-shock infantry with fallout aura (%d/%d Active)." % [count, GameData.MAX_BODYGUARDS], "flavor": "\"Their bodies burn with fallout.\""}
+					_: return {}
+
+	# ==========================================================================
+	# C. SISTER SUPERIOR (ADEPTA SORORITAS)
+	# ==========================================================================
+	elif p_class == 2:
+		var pts = local_player.get("miracle_points") if "miracle_points" in local_player else 0
+		var r_dash = local_player.get("rank_dash") if "rank_dash" in local_player else 1
+		var r_int = local_player.get("rank_intervention") if "rank_intervention" in local_player else 0
+		var r_gren = local_player.get("rank_grenade") if "rank_grenade" in local_player else 0
+		var r_shld = local_player.get("rank_shield") if "rank_shield" in local_player else 0
+		var r_ult = local_player.get("rank_ultimate") if "rank_ultimate" in local_player else 0
+		var s_lvl = local_player.get("current_level") if "current_level" in local_player else 1
+
+		match category:
+			"weapon":
+				match idx:
+					0: return {"key": "LMB", "name": "Holy Flamer", "sub": "Armor-Piercing Burn", "icon": "flamer", "scrap": 0, "req": 0, "type_id": -1, "desc": "Sprays continuous promethium fire (%d DPS). Scales with level." % int(local_player.get("bullet_damage")), "flavor": "\"Cleanse with holy fire.\""}
+					1: return {"key": "RMB", "name": "Multi-Melta", "sub": "Thermal Beam", "icon": "melta", "scrap": 0, "req": 0, "type_id": -1, "desc": "Devastating thermal ray (110 DMG) melting heavy Nobz and bastions.", "flavor": "\"No armor withstands His fury.\""}
+					2: return {"key": "SPACE", "name": "Seraphim Dash", "sub": "Jetpack Thrust (Rank %d/3)" % r_dash, "icon": "seraphim_dash", "scrap": 0, "req": 0, "type_id": 4, "current_rank": r_dash, "max_rank": 3, "can_upgrade": (pts > 0 and r_dash < 3), "desc": "Rocket dash leaving burning scorch trails. Upgrading reduces cooldown.", "flavor": "\"Seraphim wings bear us swift.\""}
+			"action":
+				match idx:
+					0: return {"key": "1", "name": "Holy Intervention", "sub": "Sanctuary Relic", "icon": "miracle_shield", "scrap": 0, "req": 0, "type_id": 0, "current_rank": r_int, "max_rank": 3, "can_upgrade": (pts > 0 and r_int < 3), "desc": "Throws a holy relic that absorbs all incoming enemy projectiles in a 140px dome before detonating.", "flavor": "\"Stand within the sacred circle.\""}
+					1: return {"key": "2", "name": "Holy Hand Grenade", "sub": "Consecrated Relic", "icon": "holy_grenade", "scrap": 0, "req": 0, "type_id": 1, "current_rank": r_gren, "max_rank": 3, "can_upgrade": (pts > 0 and r_gren < 3), "desc": "Lobs a sacred grenade dealing 160-300 DMG with wide knockback.", "flavor": "\"O Lord, bless this thy hand grenade...\""}
+					2: return {"key": "3", "name": "Act of Faith", "sub": "Faith Shield", "icon": "miracle_shield", "scrap": 0, "req": 0, "type_id": 2, "current_rank": r_shld, "max_rank": 3, "can_upgrade": (pts > 0 and r_shld < 3), "desc": "Passive: Dodge + Faith Shield. Active: Instantly overcharges shield to max.", "flavor": "\"Faith is my shield.\""}
+					3: return {"key": "4", "name": "Righteous Pyre", "sub": "Divine Ultimate", "icon": "righteous_pyre", "scrap": 0, "req": 0, "type_id": 3, "current_rank": r_ult, "max_rank": 2, "can_upgrade": (pts > 0 and s_lvl >= 3 and r_ult < 2), "desc": "Heavenly pillar of divine wrath (260 DMG), granting invulnerability for 6s.", "flavor": "\"By Saint Katherine's blood!\""}
+					_: return {}
+			"augment":
+				var is_saint = local_player.get("is_celestine_ascended") == true
+				match idx:
+					0:
+						var status_txt = "MARTYRDOM READY (LVL 6)" if s_lvl >= 6 else "LOCKED (Req. Level 6)"
+						return {"key": "PASSIVE", "name": "Living Saint Ascension", "sub": status_txt, "icon": "celestine_wings", "scrap": 0, "req": 0, "type_id": -1, "current_rank": (1 if s_lvl >= 6 else 0), "max_rank": 1, "desc": "Upon taking lethal damage at Level 6, ascend into Saint Celestine with glowing wings, full HP/Shield, and divine shockwaves.", "flavor": "\"She who dies in His light shall rise unbroken.\""}
+					1:
+						return {"key": "PASSIVE", "name": "Holy Evasion", "sub": "+%d%% Dodge" % int(local_player.get("faith_dodge_chance") * 100), "icon": "seraphim_dash", "scrap": 0, "req": 0, "type_id": -1, "desc": "Passively dodges incoming projectile and melee attacks.", "flavor": "\"The Emperor protects her stride.\""}
+					2:
+						var cur_s = int(local_player.get("faith_shield_current")) if "faith_shield_current" in local_player else 40
+						var max_s = int(local_player.get("faith_shield_max")) if "faith_shield_max" in local_player else 40
+						return {"key": "PASSIVE", "name": "Consecrated Aegis", "sub": "Shield (%d/%d)" % [cur_s, max_s], "icon": "miracle_shield", "scrap": 0, "req": 0, "type_id": -1, "desc": "Absorbs incoming damage before health. Regenerates passively.", "flavor": "\"Anointed in holy oils.\""}
+					_: return {}
+
+	# ADD THIS AT THE BOTTOM OF THE FUNCTION:
 	return {}
 
 func refresh_hud_display():
@@ -481,12 +487,17 @@ func refresh_hud_display():
 	var cur_req = main_node.requisition_amount if main_node and "requisition_amount" in main_node else 0
 	var cur_pop = main_node.get_cohort_population() if main_node and main_node.has_method("get_cohort_population") else 0
 
-	if global_res_label:
-		global_res_label.text = "⚙ %d SCRAP   ⚡ %d REQ   🤖 %d/%d" % [
-			cur_scrap, cur_req, cur_pop, GameData.BASE_COHORT_CAP
-		]
+	var p_class = int(local_player.current_class)
 
-	var is_techpriest = (local_player.current_class == 0)
+	if global_res_label:
+		if p_class == 2:
+			var s_pts = local_player.get("miracle_points") if "miracle_points" in local_player else 0
+			global_res_label.text = "⚙ %d SCRAP   ⚡ %d REQ   ✨ %d PTS" % [cur_scrap, cur_req, s_pts]
+		else:
+			global_res_label.text = "⚙ %d SCRAP   ⚡ %d REQ   🤖 %d/%d" % [
+				cur_scrap, cur_req, cur_pop, GameData.BASE_COHORT_CAP
+			]
+
 	var selected_type = local_player.selected_building_type if "selected_building_type" in local_player else 0
 	var is_building = local_player.is_building_mode if "is_building_mode" in local_player else false
 
@@ -499,37 +510,38 @@ func refresh_hud_display():
 		else:
 			reboot_panel.hide()
 
-	# 1. Update Weapon Pod
+# 1. Update Weapon Pod Cooldowns
 	for i in range(weapon_buttons.size()):
 		var slot = weapon_buttons[i]
 		var data = _get_data_for_category("weapon", i)
 		_populate_slot(slot, data, cur_scrap, cur_req)
-		if is_techpriest and i == 1:
+
+		if p_class == 0 and i == 1:
 			var can_plasma = local_player.can_plasma_attack if "can_plasma_attack" in local_player else true
 			var cd = local_player.plasma_cooldown if "plasma_cooldown" in local_player else 0.65
 			slot.cooldown_left = 0.0 if can_plasma else cd
-		elif not is_techpriest and i == 2:
+		elif p_class == 1 and i == 2:
 			slot.cooldown_left = local_player.orbital_strike_cooldown if "orbital_strike_cooldown" in local_player else 0.0
+		elif p_class == 2:
+			if i == 1: slot.cooldown_left = local_player.melta_cooldown_timer if "melta_cooldown_timer" in local_player else 0.0
+			elif i == 2: slot.cooldown_left = local_player.dash_cooldown_timer if "dash_cooldown_timer" in local_player else 0.0
 
-	# 2. Update Action Pod
-	if is_instance_valid(action_title_lbl):
-		if is_techpriest:
-			action_title_lbl.text = "TACTICAL FORGE PROTOCOLS"
-			action_title_lbl.add_theme_color_override("font_color", C_CYAN)
-		else:
-			var sel_count = local_player.rts_selected_units.size() if "rts_selected_units" in local_player else 0
-			action_title_lbl.text = "◆ COHORT DIRECTIVES (%d SELECTED) ◆" % sel_count
-			action_title_lbl.add_theme_color_override("font_color", C_CYAN if sel_count > 0 else C_MUTED)
-
+	# 2. Update Action Pod Cooldowns
 	for i in range(action_buttons.size()):
 		var slot = action_buttons[i]
 		var data = _get_data_for_category("action", i)
 		_populate_slot(slot, data, cur_scrap, cur_req)
-		if is_techpriest:
+
+		if p_class == 0:
 			slot.is_selected = (is_building and selected_type == data.get("type_id", -1))
-		else:
+		elif p_class == 1:
 			if i == 0 and "is_attack_move_queued" in local_player:
 				slot.is_selected = local_player.is_attack_move_queued
+		elif p_class == 2:
+			if i == 0: slot.cooldown_left = local_player.holy_intervention_cooldown if "holy_intervention_cooldown" in local_player else 0.0
+			elif i == 1: slot.cooldown_left = local_player.holy_grenade_cooldown if "holy_grenade_cooldown" in local_player else 0.0
+			elif i == 2: slot.cooldown_left = local_player.miracle_act_cooldown if "miracle_act_cooldown" in local_player else 0.0
+			elif i == 3: slot.cooldown_left = local_player.sister_ultimate_cooldown if "sister_ultimate_cooldown" in local_player else 0.0
 
 	# 3. Update Augment Pod
 	for i in range(augment_buttons.size()):
@@ -544,7 +556,7 @@ func refresh_hud_display():
 	if not hovered_slot_data.is_empty() and tooltip_card and tooltip_card.visible:
 		tooltip_card.set_data(hovered_slot_data, cur_scrap, cur_req)
 
-	_update_context_banner_display(is_techpriest, cur_scrap, cur_req)
+	_update_context_banner_display(p_class == 0, cur_scrap, cur_req)
 
 func _update_context_banner_display(is_techpriest: bool, cur_scrap: int, cur_req: int):
 	if not is_instance_valid(context_banner) or not is_techpriest:
@@ -628,6 +640,12 @@ func _populate_slot(slot: Button, data: Dictionary, cur_scrap: int, cur_req: int
 	slot.scrap_cost = data.scrap
 	slot.req_cost = data.req
 	slot.can_afford = (cur_scrap >= data.scrap and cur_req >= data.req)
+	
+	# Rank pips & Upgrade status
+	slot.current_rank = data.get("current_rank", 0)
+	slot.max_rank = data.get("max_rank", 0)
+	slot.can_upgrade = data.get("can_upgrade", false)
+	
 	slot.queue_redraw()
 
 func _update_tooltip_position(slot: Button):
@@ -642,7 +660,7 @@ func _update_tooltip_position(slot: Button):
 		tooltip_card.global_position = Vector2(slot_center_x - (tooltip_card.size.x * 0.5), slot.global_position.y - tooltip_card.size.y - 12)
 
 # ==============================================================================
-# COMPACT HUD SLOT BUTTON (HIGH-CONTRAST READABLE VECTOR ICONS)
+# COMPACT HUD SLOT BUTTON (HIGH-CONTRAST VECTOR ICONS)
 # ==============================================================================
 
 class CompactSlot extends Button:
@@ -658,6 +676,7 @@ class CompactSlot extends Button:
 	var cooldown_left: float = 0.0
 	var current_rank: int = 0
 	var max_rank: int = 0
+	var can_upgrade: bool = false
 	var cached_data: Dictionary = {}
 
 	func _init(cat: String, idx: int):
@@ -670,47 +689,58 @@ class CompactSlot extends Button:
 		var bg_color = Color(0.06, 0.07, 0.10, 0.95)
 		var border_color = Color(0.24, 0.28, 0.35)
 
-		if cooldown_left > 0.0 or is_maxed:
-			border_color = Color(0.40, 0.42, 0.48, 0.5)
+		if can_upgrade:
+			var pulse = 0.6 + sin(Time.get_ticks_msec() * 0.01) * 0.4
+			border_color = Color(0.20, 0.88, 1.0, pulse)
+		elif current_rank == 0 and max_rank > 0:
+			border_color = Color(0.30, 0.32, 0.38, 0.4)
+			bg_color = Color(0.03, 0.04, 0.05, 0.85)
+		elif cooldown_left > 0.0:
+			border_color = Color(1.0, 0.65, 0.15, 0.85)
 		elif is_selected:
-			var pulse = 0.85 + sin(Time.get_ticks_msec() * 0.008) * 0.15
-			border_color = Color(0.20, 0.88, 1.00, pulse)
-		elif not can_afford and (scrap_cost > 0 or req_cost > 0):
-			border_color = Color(0.70, 0.20, 0.18, 0.8)
+			border_color = Color(0.20, 0.88, 1.00, 1.0)
 		elif is_hovered():
 			border_color = Color(0.95, 0.78, 0.35)
 
 		draw_rect(rect, bg_color, true)
-		draw_rect(rect, border_color, false, 1.2 if not is_selected else 1.8)
 
-		var c_len = 3.5
-		draw_line(rect.position, rect.position + Vector2(c_len, 0), border_color, 1.2)
-		draw_line(rect.position, rect.position + Vector2(0, c_len), border_color, 1.2)
-		var tr = rect.position + Vector2(rect.size.x, 0)
-		draw_line(tr, tr - Vector2(c_len, 0), border_color, 1.2)
-		draw_line(tr, tr + Vector2(0, c_len), border_color, 1.2)
-
+		# 1. Base Icon
 		_draw_icon(rect.get_center())
 
-		var font = ThemeDB.fallback_font
-		var key_color = Color(0.20, 0.88, 1.0) if is_selected else Color(0.85, 0.88, 0.92)
-		if cooldown_left > 0.0 or is_maxed: key_color = Color(0.5, 0.5, 0.5)
-		draw_string(font, Vector2(3, 10), key_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 8, key_color)
+		# 2. CLEAR COOLDOWN OVERLAY & CENTERED TIMER
+		if cooldown_left > 0.0:
+			draw_rect(rect, Color(0.02, 0.03, 0.05, 0.78), true)
 
-		if max_rank > 0 and category == "augment":
+			var font = ThemeDB.fallback_font
+			var cd_text = "%.1f" % cooldown_left if cooldown_left < 10.0 else "%d" % int(ceil(cooldown_left))
+			var text_size = 13 if cooldown_left < 10.0 else 15
+			var t_pos = Vector2(0, (size.y * 0.5) + 4.0)
+
+			draw_string(font, t_pos + Vector2(1, 1), cd_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, text_size, Color.BLACK)
+			draw_string(font, t_pos, cd_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, text_size, Color(1.0, 0.88, 0.25))
+
+		# 3. Border
+		draw_rect(rect, border_color, false, 1.8 if (can_upgrade or is_selected or cooldown_left > 0.0) else 1.2)
+
+		var font = ThemeDB.fallback_font
+
+		# Key text or Locked status
+		if current_rank == 0 and max_rank > 0 and not can_upgrade:
+			draw_string(font, Vector2(3, 10), "🔒", HORIZONTAL_ALIGNMENT_LEFT, -1, 8, Color(0.5, 0.5, 0.5))
+		else:
+			var key_col = Color(0.20, 0.88, 1.0) if (is_selected or can_upgrade) else Color(0.85, 0.88, 0.92)
+			draw_string(font, Vector2(3, 10), key_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 8, key_col)
+
+		# Blinking [+] Plus Badge when upgradable
+		if can_upgrade:
+			var plus_rect = Rect2(size.x - 14, 2, 12, 10)
+			draw_rect(plus_rect, Color(0.04, 0.05, 0.08, 0.9), true)
+			draw_rect(plus_rect, Color(0.20, 0.88, 1.0), false, 1.0)
+			draw_string(font, Vector2(size.x - 12, 10), "+", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.20, 0.88, 1.0))
+
+		# Bottom Rank Pips
+		if max_rank > 0:
 			_draw_rank_pips(rect)
-		elif cooldown_left > 0.0:
-			var cd_str = "%.1fs" % cooldown_left if cooldown_left < 10.0 else "%ds" % int(ceil(cooldown_left))
-			draw_string(font, Vector2(0, size.y - 3), cd_str, HORIZONTAL_ALIGNMENT_CENTER, size.x, 8, Color(1.0, 0.85, 0.2))
-		elif is_maxed:
-			draw_string(font, Vector2(0, size.y - 3), "MAX", HORIZONTAL_ALIGNMENT_CENTER, size.x, 8, Color(0.45, 0.9, 0.5))
-		elif scrap_cost > 0 or req_cost > 0:
-			var parts: Array[String] = []
-			if scrap_cost > 0: parts.append("⚙%d" % scrap_cost)
-			if req_cost > 0: parts.append("⚡%d" % req_cost)
-			var cost_str = " ".join(parts)
-			var c_color = Color(0.9, 0.85, 0.7) if can_afford else Color(0.92, 0.22, 0.18)
-			draw_string(font, Vector2(0, size.y - 3), cost_str, HORIZONTAL_ALIGNMENT_CENTER, size.x, 7, c_color)
 
 	func _draw_rank_pips(rect: Rect2):
 		var pips_y = rect.size.y - 4.0
@@ -743,102 +773,100 @@ class CompactSlot extends Button:
 				draw_rect(Rect2(p_mid + Vector2(-4, -4), Vector2(8, 3)), cyan)
 				draw_circle(p_mid + Vector2(7, 0), 1.8, Color.WHITE)
 
+			"flamer":
+				draw_rect(Rect2(p_mid + Vector2(-8, -2), Vector2(8, 4)), steel)
+				var flame_pts = PackedVector2Array([p_mid + Vector2(0, -5), p_mid + Vector2(8, -8), p_mid + Vector2(6, 0), p_mid + Vector2(8, 8), p_mid + Vector2(0, 5)])
+				draw_colored_polygon(flame_pts, amber)
+				draw_circle(p_mid + Vector2(2, 0), 2.5, Color(1.0, 0.9, 0.3))
+
+			"melta":
+				draw_rect(Rect2(p_mid + Vector2(-8, -3), Vector2(10, 6)), Color(0.2, 0.22, 0.28))
+				draw_circle(p_mid + Vector2(4, 0), 4.5, Color(1.0, 0.3, 0.1))
+				draw_circle(p_mid + Vector2(4, 0), 2.0, Color.WHITE)
+
+			"seraphim_dash":
+				draw_colored_polygon(PackedVector2Array([p_mid + Vector2(-6, 4), p_mid + Vector2(6, -6), p_mid + Vector2(2, 6)]), gold)
+				draw_line(p_mid + Vector2(-7, 5), p_mid + Vector2(-3, 8), amber, 2.0)
+				draw_circle(p_mid + Vector2(2, -2), 1.5, Color.WHITE)
+
+			"holy_grenade":
+				draw_circle(p_mid + Vector2(0, 2), 5.5, gold)
+				draw_line(p_mid + Vector2(-3, -5), p_mid + Vector2(3, -5), Color.WHITE, 1.6)
+				draw_line(p_mid + Vector2(0, -8), p_mid + Vector2(0, -2), Color.WHITE, 1.6)
+
+			"miracle_shield":
+				var sh = PackedVector2Array([p_mid + Vector2(-6, -6), p_mid + Vector2(6, -6), p_mid + Vector2(5, 3), p_mid + Vector2(0, 8), p_mid + Vector2(-5, 3)])
+				draw_colored_polygon(sh, Color(0.68, 0.12, 0.12))
+				draw_polyline(sh, gold, 1.4)
+				draw_circle(p_mid + Vector2(0, 1), 2.0, cyan)
+
+			"righteous_pyre":
+				draw_line(p_mid + Vector2(0, -9), p_mid + Vector2(0, 9), Color.WHITE, 3.0)
+				draw_arc(p_mid, 7.0, 0, TAU, 16, gold, 1.4)
+				draw_circle(p_mid, 2.5, amber)
+
+			"celestine_wings":
+				var l_w = PackedVector2Array([p_mid + Vector2(-2, 3), p_mid + Vector2(-8, -6), p_mid + Vector2(-3, 0)])
+				var r_w = PackedVector2Array([p_mid + Vector2(2, 3), p_mid + Vector2(8, -6), p_mid + Vector2(3, 0)])
+				draw_colored_polygon(l_w, gold)
+				draw_colored_polygon(r_w, gold)
+				draw_arc(p_mid + Vector2(0, -5), 3.0, 0, TAU, 12, Color.WHITE, 1.2)
+
 			"radium_carbine":
-				# Radium Carbine Rifle
 				draw_line(p_mid + Vector2(-8, 2), p_mid + Vector2(8, -1), steel, 2.5)
 				draw_rect(Rect2(p_mid + Vector2(0, -3), Vector2(5, 3)), green)
 				draw_circle(p_mid + Vector2(8, -1), 1.5, Color.WHITE)
 
 			"doctrina_conq":
-				# Aggressive Red/Amber Crossed Combat Blades
 				draw_line(p_mid + Vector2(-7, -7), p_mid + Vector2(7, 7), amber, 2.2)
 				draw_line(p_mid + Vector2(-7, 7), p_mid + Vector2(7, -7), amber, 2.2)
 				draw_circle(p_mid, 2.5, red)
-				draw_circle(p_mid, 1.0, Color.WHITE)
 
 			"doctrina_prot":
-				# Defensive Cyan Aegis Ring Shield
 				draw_arc(p_mid, 7.0, 0, TAU, 20, cyan, 2.0)
 				draw_circle(p_mid, 2.5, cyan)
-				draw_circle(p_mid, 1.0, Color.WHITE)
 
 			"orbital":
-				# Piercing Orbital Telemetry Beam
 				draw_arc(p_mid, 7.0, 0, TAU, 20, Color(cyan.r, cyan.g, cyan.b, 0.4), 1.2)
 				draw_line(p_mid + Vector2(0, -9), p_mid + Vector2(0, 9), cyan, 2.2)
 				draw_line(p_mid + Vector2(-9, 0), p_mid + Vector2(9, 0), cyan, 2.2)
 				draw_circle(p_mid, 2.5, Color.WHITE)
 
 			"attack_move":
-				# Crossed Swords & Advance Arrow
 				draw_line(p_mid + Vector2(-6, 6), p_mid + Vector2(6, -6), Color.WHITE, 2.0)
 				draw_line(p_mid + Vector2(-6, -6), p_mid + Vector2(6, 6), Color.WHITE, 2.0)
 				draw_line(p_mid + Vector2(0, -8), p_mid + Vector2(0, -2), red, 2.0)
-				draw_line(p_mid + Vector2(-3, -5), p_mid + Vector2(0, -8), red, 2.0)
-				draw_line(p_mid + Vector2(3, -5), p_mid + Vector2(0, -8), red, 2.0)
 
 			"stop":
-				# Octagonal STOP Sign Barrier
-				var oct = PackedVector2Array([
-					p_mid + Vector2(-6, -3), p_mid + Vector2(-3, -6),
-					p_mid + Vector2(3, -6), p_mid + Vector2(6, -3),
-					p_mid + Vector2(6, 3), p_mid + Vector2(3, 6),
-					p_mid + Vector2(-3, 6), p_mid + Vector2(-6, 3)
-				])
+				var oct = PackedVector2Array([p_mid + Vector2(-6, -3), p_mid + Vector2(-3, -6), p_mid + Vector2(3, -6), p_mid + Vector2(6, -3), p_mid + Vector2(6, 3), p_mid + Vector2(3, 6), p_mid + Vector2(-3, 6), p_mid + Vector2(-6, 3)])
 				draw_colored_polygon(oct, red)
 				draw_polyline(oct, Color.WHITE, 1.2)
-				draw_rect(Rect2(p_mid - Vector2(3, 1), Vector2(6, 2)), Color.WHITE)
 
 			"hold_ground":
-				# Heavy Bulwark Tower Shield
-				var shield = PackedVector2Array([
-					p_mid + Vector2(-6, -6), p_mid + Vector2(6, -6),
-					p_mid + Vector2(6, 2), p_mid + Vector2(0, 7), p_mid + Vector2(-6, 2)
-				])
+				var shield = PackedVector2Array([p_mid + Vector2(-6, -6), p_mid + Vector2(6, -6), p_mid + Vector2(6, 2), p_mid + Vector2(0, 7), p_mid + Vector2(-6, 2)])
 				draw_colored_polygon(shield, steel)
 				draw_polyline(shield, gold, 1.4)
-				draw_line(p_mid + Vector2(-3, -1), p_mid + Vector2(3, -1), cyan, 1.5)
-				draw_line(p_mid + Vector2(0, -4), p_mid + Vector2(0, 4), cyan, 1.5)
 
 			"auspex_paint":
-				# 4-Bracket Auspex Lock Reticle
 				var r = 6.5
-				draw_line(p_mid + Vector2(-r, -r), p_mid + Vector2(-r + 3, -r), cyan, 1.8)
-				draw_line(p_mid + Vector2(-r, -r), p_mid + Vector2(-r, -r + 3), cyan, 1.8)
-				draw_line(p_mid + Vector2(r, -r), p_mid + Vector2(r - 3, -r), cyan, 1.8)
-				draw_line(p_mid + Vector2(r, -r), p_mid + Vector2(r, -r + 3), cyan, 1.8)
-				draw_line(p_mid + Vector2(-r, r), p_mid + Vector2(-r + 3, r), cyan, 1.8)
-				draw_line(p_mid + Vector2(-r, r), p_mid + Vector2(-r, r - 3), cyan, 1.8)
-				draw_line(p_mid + Vector2(r, r), p_mid + Vector2(r - 3, r), cyan, 1.8)
-				draw_line(p_mid + Vector2(r, r), p_mid + Vector2(r, r - 3), cyan, 1.8)
+				draw_arc(p_mid, r, 0, TAU, 16, cyan, 1.4)
 				draw_circle(p_mid, 1.8, red)
 
 			"cam_lock":
-				# Commander Visor / Camera Center Focus
 				draw_arc(p_mid, 6.5, 0, TAU, 16, gold, 1.2)
 				draw_circle(p_mid, 3.5, Color(0.68, 0.16, 0.14))
-				draw_circle(p_mid, 1.2, cyan)
 
 			"recruit_ranger":
-				# Galvanic Sniper Rifle with Scope
 				draw_line(p_mid + Vector2(-8, 3), p_mid + Vector2(8, -3), Color(0.28, 0.20, 0.14), 3.0)
-				draw_line(p_mid + Vector2(0, -1), p_mid + Vector2(9, -3), gold, 1.8)
-				draw_line(p_mid + Vector2(1, -4), p_mid + Vector2(6, -5), cyan, 1.6)
 				draw_circle(p_mid + Vector2(9, -3), 1.2, cyan)
 
 			"recruit_sicarian":
-				# Dual Crossed Cyan Power Blades
 				draw_line(p_mid + Vector2(-7, 6), p_mid + Vector2(7, -6), cyan, 2.5)
-				draw_line(p_mid + Vector2(-7, 6), p_mid + Vector2(7, -6), Color.WHITE, 1.0)
 				draw_line(p_mid + Vector2(-7, -6), p_mid + Vector2(7, 6), cyan, 2.5)
-				draw_line(p_mid + Vector2(-7, -6), p_mid + Vector2(7, 6), Color.WHITE, 1.0)
-				draw_circle(p_mid, 2.0, gold)
 
 			"recruit_vanguard":
-				# Vanguard Radium Helmet & Glowing Rad Chamber
 				draw_circle(p_mid, 5.5, Color(0.68, 0.16, 0.14))
 				draw_circle(p_mid + Vector2(0, -1), 2.0, green)
-				draw_circle(p_mid + Vector2(0, -1), 0.8, Color.WHITE)
 
 			"barricade":
 				var b_shield = PackedVector2Array([p_mid + Vector2(-7, -7), p_mid + Vector2(7, -7), p_mid + Vector2(5, 3), p_mid + Vector2(0, 7), p_mid + Vector2(-5, 3)])
@@ -851,14 +879,11 @@ class CompactSlot extends Button:
 
 			"generator":
 				draw_rect(Rect2(p_mid - Vector2(6, 6), Vector2(12, 12)), Color(0.68, 0.16, 0.14))
-				draw_rect(Rect2(p_mid - Vector2(6, 6), Vector2(12, 12)), gold, false, 1.0)
 				draw_circle(p_mid, 3.0, cyan)
 
 			"turret":
 				draw_circle(p_mid, 5.5, Color(0.68, 0.16, 0.14))
-				draw_arc(p_mid, 5.5, 0, TAU, 12, gold, 1.0)
-				draw_line(p_mid + Vector2(2, -2), p_mid + Vector2(8, -2), steel, 1.8)
-				draw_line(p_mid + Vector2(2, 2), p_mid + Vector2(8, 2), steel, 1.8)
+				draw_line(p_mid + Vector2(2, 0), p_mid + Vector2(8, 0), steel, 2.5)
 
 			"foundry":
 				draw_rect(Rect2(p_mid - Vector2(6, 3), Vector2(12, 10)), Color(0.2, 0.22, 0.28))
@@ -868,12 +893,10 @@ class CompactSlot extends Button:
 				var arch = PackedVector2Array([p_mid + Vector2(-6, 6), p_mid + Vector2(-6, -2), p_mid + Vector2(0, -7), p_mid + Vector2(6, -2), p_mid + Vector2(6, 6)])
 				draw_colored_polygon(arch, Color(0.68, 0.16, 0.14))
 				draw_polyline(arch, gold, 1.2)
-				draw_circle(p_mid + Vector2(0, 1), 2.0, cyan)
 
 			"skull":
 				draw_circle(p_mid, 5.0, Color(0.88, 0.85, 0.75))
 				draw_circle(p_mid + Vector2(1.5, -0.5), 1.5, cyan)
-				draw_line(p_mid + Vector2(3, 2), p_mid + Vector2(6, 2), gold, 1.2)
 
 # ==============================================================================
 # TOOLTIP CARD

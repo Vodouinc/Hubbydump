@@ -8,8 +8,9 @@ enum UnitType {
 	SKITARII_VANGUARD = 2, 
 	SERVO_SKULL = 3,
 	SKITARII_RANGER = 4,
-	SICARIAN_RUSTSTALKER = 5
-} 
+	SICARIAN_RUSTSTALKER = 5,
+	SISTER_OF_BATTLE = 6 # <-- Appended at end so bodyguards retain their IDs
+}
 
 enum BodyFacing { FRONT, BACK, SIDE }
 
@@ -23,6 +24,10 @@ var is_attacking: bool = false
 var attack_progress: float = 0.0
 var attack_strike_angle: float = 0.0
 
+# Sister of Battle Custom Visual States
+var is_flamer_firing: bool = false
+var is_celestine_ascended: bool = false
+
 var anim_time: float = 0.0
 var attack_flash: float = 0.0
 
@@ -34,29 +39,35 @@ var attack_flash: float = 0.0
 
 var glow_layer: Node2D = null
 
-# --- GRIMDARK FORGE-WORLD PALETTE ---
-const C_OUTLINE     := Color(0.04, 0.05, 0.07)
-const C_STEEL_DARK  := Color(0.12, 0.14, 0.18)
-const C_STEEL_MID   := Color(0.24, 0.28, 0.35)
-const C_STEEL_LIGHT := Color(0.44, 0.50, 0.58)
-const C_MARS_DARK   := Color(0.28, 0.05, 0.05)
-const C_MARS_RED    := Color(0.68, 0.16, 0.14)
-const C_MARS_LIGHT  := Color(0.85, 0.25, 0.20)
-const C_WHITE_TRIM  := Color(0.92, 0.92, 0.88)
-const C_BRASS       := Color(0.82, 0.62, 0.24)
-const C_BRASS_LIGHT := Color(0.96, 0.82, 0.45)
-const C_COPPER      := Color(0.82, 0.44, 0.18)
-const C_CYAN        := Color(0.20, 0.88, 1.00)
-const C_RAD_GREEN   := Color(0.25, 0.95, 0.35)
-const C_IVORY       := Color(0.90, 0.86, 0.76)
-const C_PARCHMENT   := Color(0.88, 0.84, 0.72)
-const C_SEAL_WAX    := Color(0.78, 0.08, 0.08)
+# --- GRIMDARK 40K PALETTE ---
+const C_OUTLINE      := Color(0.04, 0.05, 0.07)
+const C_STEEL_DARK   := Color(0.12, 0.14, 0.18)
+const C_STEEL_MID    := Color(0.24, 0.28, 0.35)
+const C_STEEL_LIGHT  := Color(0.44, 0.50, 0.58)
+const C_MARS_DARK    := Color(0.28, 0.05, 0.05)
+const C_MARS_RED     := Color(0.68, 0.16, 0.14)
+const C_MARS_LIGHT   := Color(0.85, 0.25, 0.20)
+const C_WHITE_TRIM   := Color(0.92, 0.92, 0.88)
+const C_BRASS        := Color(0.82, 0.62, 0.24)
+const C_BRASS_LIGHT  := Color(0.96, 0.82, 0.45)
+const C_COPPER       := Color(0.82, 0.44, 0.18)
+const C_CYAN         := Color(0.20, 0.88, 1.00)
+const C_RAD_GREEN    := Color(0.25, 0.95, 0.35)
+const C_IVORY        := Color(0.90, 0.86, 0.76)
+const C_PARCHMENT    := Color(0.88, 0.84, 0.72)
+const C_SEAL_WAX     := Color(0.78, 0.08, 0.08)
+
+const C_SOB_ARMOR    := Color(0.11, 0.12, 0.15)
+const C_SOB_TABARD   := Color(0.68, 0.10, 0.12) # <-- ADD THIS LINE
+const C_SOB_HAIR     := Color(0.92, 0.92, 0.95)
+const C_GOLD_HOLY    := Color(1.00, 0.88, 0.25)
+const C_FLAME_CORE   := Color(1.00, 0.92, 0.40)
+const C_FLAME_BURST  := Color(1.00, 0.52, 0.15, 0.75)
 
 func _ready() -> void:
 	_setup_glow_layer()
 	queue_redraw()
 
-## Updates facing based on target world angle
 func update_facing(target_world_pos: Vector2) -> void:
 	var to_target = (target_world_pos - global_position).normalized()
 	aim_vector = to_target
@@ -70,13 +81,12 @@ func update_facing(target_world_pos: Vector2) -> void:
 	var deg = rad_to_deg(aim_angle)
 	if deg < 0: deg += 360.0
 
-	# Cardinal facing angular slices
 	if deg >= 40.0 and deg <= 140.0:
-		current_facing = BodyFacing.FRONT  # Aiming Down
+		current_facing = BodyFacing.FRONT
 	elif deg >= 220.0 and deg <= 320.0:
-		current_facing = BodyFacing.BACK   # Aiming Up
+		current_facing = BodyFacing.BACK
 	else:
-		current_facing = BodyFacing.SIDE   # Aiming Left / Right
+		current_facing = BodyFacing.SIDE
 
 	queue_redraw()
 	if is_instance_valid(glow_layer):
@@ -110,6 +120,13 @@ func _process(delta: float) -> void:
 	
 	var bob = sin(anim_time * (4.5 + movement * 0.015)) * (minf(movement / 300.0, 1.0) * 1.5)
 	position.y = bob
+
+	# Sync states from parent if available
+	if parent_node:
+		if "flamer_active" in parent_node:
+			is_flamer_firing = parent_node.flamer_active
+		if "is_celestine_ascended" in parent_node:
+			is_celestine_ascended = parent_node.is_celestine_ascended
 	
 	if is_instance_valid(glow_layer):
 		glow_layer.queue_redraw()
@@ -130,13 +147,13 @@ func _draw() -> void:
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2(-1.0 if is_facing_left else 1.0, 1.0))
 
 	var aiming_up = (current_facing == BodyFacing.BACK)
-	var is_special = (unit_type == UnitType.ADMECH_TECHPRIEST or unit_type == UnitType.SERVO_SKULL or unit_type == UnitType.SICARIAN_RUSTSTALKER)
+	var is_special = (unit_type == UnitType.ADMECH_TECHPRIEST or unit_type == UnitType.SERVO_SKULL or unit_type == UnitType.SICARIAN_RUSTSTALKER or unit_type == UnitType.SISTER_OF_BATTLE)
 
 	# 1. Ranged weapon behind body layer (when aiming UP)
 	if aiming_up and not is_special:
 		_draw_ranged_weapon_layer()
 
-	# 2. Character Body (Front, Back, or Side)
+	# 2. Character Body
 	match unit_type:
 		UnitType.ADMECH_TECHPRIEST:    _draw_tech_priest()
 		UnitType.SKITARII_MARSHAL:     _draw_marshal_body()
@@ -144,8 +161,9 @@ func _draw() -> void:
 		UnitType.SERVO_SKULL:          _draw_servo_skull()
 		UnitType.SKITARII_RANGER:      _draw_ranger_body()
 		UnitType.SICARIAN_RUSTSTALKER: _draw_sicarian_body()
+		UnitType.SISTER_OF_BATTLE:     _draw_sister_of_battle()
 
-	# 3. Ranged weapon in front of body layer (when aiming FRONT or SIDE)
+	# 3. Ranged weapon in front of body layer
 	if not aiming_up and not is_special:
 		_draw_ranged_weapon_layer()
 
@@ -166,7 +184,7 @@ func _draw_tech_priest():
 			var s_t = (t - 0.2) / 0.55
 			mecha_lunge = Vector2(sin(s_t * PI) * 8.0, 0.0)
 
-	# Left & Right Mechadendrites
+	# Mechadendrites
 	draw_polyline(PackedVector2Array([Vector2(-4, -6), Vector2(-11, -16) - mecha_lunge * 0.5, Vector2(-5, -24) + mecha_lunge]), C_STEEL_MID, 3.5)
 	draw_polyline(PackedVector2Array([Vector2(4, -6), Vector2(11, -16) - mecha_lunge * 0.5, Vector2(5, -24) + mecha_lunge]), C_STEEL_MID, 3.5)
 	draw_circle(Vector2(-5, -24) + mecha_lunge, 2.2, C_BRASS)
@@ -255,7 +273,166 @@ func _draw_axe_cleave_strike():
 	draw_polyline(blade_pts, Color.WHITE, 1.2)
 
 # ==============================================================================
-# RANGED WEAPONS (MARSHAL, VANGUARD, RANGER - NO MECHADENDRITES)
+# 2. SISTER SUPERIOR (ADEPTA SORORITAS & SAINT CELESTINE)
+# ==============================================================================
+func _draw_sister_of_battle():
+	# Ground Contact Shadow
+	draw_set_transform(Vector2.ZERO, 0, Vector2(1.0, 0.45))
+	draw_circle(Vector2(0, 10), 10.0, Color(0.02, 0.02, 0.04, 0.45))
+	draw_set_transform(Vector2.ZERO, 0, Vector2(-1.0 if is_facing_left else 1.0, 1.0))
+
+	var parent_node = get_parent()
+	var is_dashing_now = parent_node.get("is_dashing") == true if parent_node else false
+	var is_moving = parent_node.get("velocity").length() > 20.0 if parent_node and "velocity" in parent_node else false
+
+	# 1. Saint Celestine Angelic Wings & Divine Aureola
+	if is_celestine_ascended:
+		var flap = sin(anim_time * 8.0) * 6.0
+		var l_wing = PackedVector2Array([
+			Vector2(-4, -6), Vector2(-30, -28 + flap), Vector2(-38, -14 + flap), Vector2(-18, 4)
+		])
+		draw_colored_polygon(l_wing, C_GOLD_HOLY)
+		draw_polyline(l_wing, Color.WHITE, 1.4)
+
+		var r_wing = PackedVector2Array([
+			Vector2(4, -6), Vector2(30, -28 + flap), Vector2(38, -14 + flap), Vector2(18, 4)
+		])
+		draw_colored_polygon(r_wing, C_GOLD_HOLY)
+		draw_polyline(r_wing, Color.WHITE, 1.4)
+
+		# Golden Halo Aureola
+		draw_arc(Vector2(0, -18), 8.5, 0, TAU, 16, C_GOLD_HOLY, 1.6)
+		draw_circle(Vector2(0, -18), 1.5, Color.WHITE)
+
+	var armor_base = C_SOB_ARMOR if not is_celestine_ascended else Color(0.85, 0.72, 0.22)
+
+	# 2. Seraphim Jump Pack (Worn on shoulders with active thrusters)
+	_draw_seraphim_jump_pack(is_dashing_now, is_moving)
+
+	# 3. Power Armor Body & Corset (Short battle tabard instead of cape)
+	match current_facing:
+		BodyFacing.BACK:
+			var tabard_b = PackedVector2Array([Vector2(-6, 2), Vector2(6, 2), Vector2(7, 12), Vector2(-7, 12)])
+			draw_colored_polygon(tabard_b, C_SOB_TABARD)
+			draw_polyline(tabard_b, C_OUTLINE, 1.2)
+
+			draw_line(Vector2(-4, 6), Vector2(-4, 14), armor_base, 2.8)
+			draw_line(Vector2(4, 6), Vector2(4, 14), armor_base, 2.8)
+			draw_circle(Vector2(0, -8), 5.5, C_SOB_HAIR)
+
+		BodyFacing.FRONT:
+			var tabard_f = PackedVector2Array([Vector2(-5, 2), Vector2(5, 2), Vector2(6, 12), Vector2(-6, 12)])
+			draw_colored_polygon(tabard_f, C_SOB_TABARD)
+			draw_polyline(tabard_f, C_OUTLINE, 1.2)
+			draw_line(Vector2(-5, 11), Vector2(5, 11), C_WHITE_TRIM, 1.5)
+
+			draw_rect(Rect2(-6, -5, 12, 11), armor_base)
+			draw_rect(Rect2(-6, -5, 12, 11), C_BRASS, false, 1.0)
+			draw_circle(Vector2(0, -1), 2.2, Color.WHITE)
+			draw_line(Vector2(-3, -1), Vector2(3, -1), Color.WHITE, 1.0)
+			draw_purity_seal(Vector2(-5, 1), 6.0)
+
+			draw_line(Vector2(-3.5, 7), Vector2(-3.5, 14), armor_base, 2.8)
+			draw_line(Vector2(3.5, 7), Vector2(3.5, 14), armor_base, 2.8)
+
+			draw_circle(Vector2(0, -7), 5.8, C_SOB_HAIR)
+			draw_circle(Vector2(0, -6), 4.2, Color(0.92, 0.82, 0.72))
+			draw_circle(Vector2(-1.8, -7), 1.2, C_CYAN if not is_celestine_ascended else C_GOLD_HOLY)
+			draw_circle(Vector2(1.8, -7), 1.2, C_CYAN if not is_celestine_ascended else C_GOLD_HOLY)
+
+		BodyFacing.SIDE:
+			var tabard_s = PackedVector2Array([Vector2(2, 2), Vector2(-5, 2), Vector2(-4, 11), Vector2(3, 9)])
+			draw_colored_polygon(tabard_s, C_SOB_TABARD)
+			draw_polyline(tabard_s, C_OUTLINE, 1.2)
+
+			draw_rect(Rect2(-3, -5, 7, 11), armor_base)
+			draw_line(Vector2(-2, 7), Vector2(-2, 14), armor_base, 2.8)
+			draw_line(Vector2(2, 7), Vector2(2, 14), armor_base, 2.8)
+
+			draw_circle(Vector2(0, -7), 5.5, C_SOB_HAIR)
+			draw_circle(Vector2(2.0, -7), 1.2, C_CYAN if not is_celestine_ascended else C_GOLD_HOLY)
+
+	# 4. Flamer / Multi-Melta Weapon Mount
+	_draw_sister_weapon_mount()
+
+func _draw_seraphim_jump_pack(is_dashing_now: bool, is_moving: bool):
+	var flame_intensity = 1.0 if is_dashing_now else (0.45 if is_moving else 0.15)
+	var jet_l = randf_range(16.0, 28.0) * flame_intensity if is_dashing_now else randf_range(5.0, 9.0) * flame_intensity
+
+	# Jump Pack Body Housing
+	draw_rect(Rect2(-9, -12, 18, 9), C_STEEL_DARK)
+	draw_rect(Rect2(-9, -12, 18, 9), C_BRASS, false, 1.0)
+	
+	# Twin Left & Right Thruster Turbine Intakes
+	draw_circle(Vector2(-8, -8), 3.2, C_BRASS)
+	draw_circle(Vector2(8, -8), 3.2, C_BRASS)
+
+	# Angled Stabilizer Winglets
+	draw_line(Vector2(-9, -10), Vector2(-16, -16), C_SOB_ARMOR, 2.2)
+	draw_line(Vector2(-9, -10), Vector2(-16, -16), C_BRASS, 1.0)
+	draw_line(Vector2(9, -10), Vector2(16, -16), C_SOB_ARMOR, 2.2)
+	draw_line(Vector2(9, -10), Vector2(16, -16), C_BRASS, 1.0)
+
+	# Downward Rocket Exhaust Bells
+	draw_line(Vector2(-7, -4), Vector2(-7, 1), C_COPPER, 2.5)
+	draw_line(Vector2(7, -4), Vector2(7, 1), C_COPPER, 2.5)
+
+	# Active Rocket Thruster Plumes
+	if flame_intensity > 0.1:
+		for noz_x in [-7.0, 7.0]:
+			var noz_pos = Vector2(noz_x, 1.0)
+			var flame_end = noz_pos + Vector2(0, jet_l)
+			draw_line(noz_pos, flame_end, Color(1.0, 0.52, 0.15, 0.85), 3.8 if is_dashing_now else 2.2)
+			draw_line(noz_pos, noz_pos + Vector2(0, jet_l * 0.6), Color(1.0, 0.95, 0.4, 0.95), 1.8 if is_dashing_now else 1.0)
+			draw_circle(noz_pos, 2.0 if is_dashing_now else 1.2, Color.WHITE)
+
+func _draw_sister_weapon_mount():
+	var shoulder = Vector2(4, -2) if current_facing != BodyFacing.SIDE else Vector2(2, -2)
+	var rel_angle = aim_angle
+	if is_facing_left: rel_angle = PI - aim_angle
+	var arm_dir = Vector2.RIGHT.rotated(rel_angle)
+
+	# Two-handed Flamer / Melta Casing
+	var w_root = shoulder - (arm_dir * 2.0)
+	var w_tip = shoulder + (arm_dir * 18.0)
+
+	draw_line(w_root, w_tip, C_SOB_ARMOR, 3.8)
+	draw_line(w_root + arm_dir * 4.0, w_tip, C_BRASS, 1.6)
+
+	# Brass Fuel Canister & Pilot Flame Igniter
+	var canister_pos = w_root + arm_dir * 6.0 - arm_dir.orthogonal() * 2.5
+	draw_circle(canister_pos, 2.0, C_BRASS)
+	draw_circle(w_tip, 1.4, Color(1.0, 0.7, 0.2)) # Pilot light
+
+	# Hands Gripping Weapon
+	draw_circle(shoulder, 1.8, C_STEEL_LIGHT)
+	draw_circle(w_root + arm_dir * 8.0, 1.6, C_STEEL_LIGHT)
+
+	# 4. Active Flamer Promethium Cone FX
+	if is_flamer_firing:
+		var flame_len = randf_range(120.0, 175.0)
+		var perp = arm_dir.orthogonal()
+		var spread_w = 48.0
+
+		var cone_poly = PackedVector2Array([
+			w_tip,
+			w_tip + (arm_dir * flame_len) - (perp * spread_w * 0.5),
+			w_tip + (arm_dir * flame_len * 1.12),
+			w_tip + (arm_dir * flame_len) + (perp * spread_w * 0.5)
+		])
+		draw_colored_polygon(cone_poly, C_FLAME_BURST)
+		
+		# Inner Intense White-Hot Core
+		var core_poly = PackedVector2Array([
+			w_tip,
+			w_tip + (arm_dir * flame_len * 0.6) - (perp * spread_w * 0.25),
+			w_tip + (arm_dir * flame_len * 0.7),
+			w_tip + (arm_dir * flame_len * 0.6) + (perp * spread_w * 0.25)
+		])
+		draw_colored_polygon(core_poly, Color(1.0, 0.95, 0.6, 0.85))
+
+# ==============================================================================
+# RANGED WEAPONS (MARSHAL, VANGUARD, RANGER)
 # ==============================================================================
 func _draw_ranged_weapon_layer():
 	var shoulder = Vector2(4, -4) if current_facing != BodyFacing.SIDE else Vector2(2, -4)
@@ -273,23 +450,14 @@ func _draw_ranged_weapon_layer():
 			draw_circle(shoulder, 1.8, C_STEEL_LIGHT)
 
 		UnitType.SKITARII_VANGUARD:
-			# Detailed Two-Handed Radium Carbine
 			var r_root = shoulder - arm_dir * 3.0
 			var r_tip = shoulder + arm_dir * 17.0
-
-			# 1. Dark Steel Receiver & Barrel
 			draw_line(r_root, r_tip, C_STEEL_DARK, 3.4)
 			draw_line(r_root + arm_dir * 4.0, r_tip, C_BRASS, 1.5)
-
-			# 2. Slotted Heat Shroud Muzzle
 			draw_rect(Rect2(r_tip - arm_dir * 3.0 - Vector2(1, 1), Vector2(3, 3)), C_STEEL_LIGHT)
-
-			# 3. Glowing Green Isotope Power Cylinder
 			var cyl_pos = r_root + arm_dir * 8.0 - arm_dir.orthogonal() * 2.0
 			draw_rect(Rect2(cyl_pos - Vector2(2, 1.5), Vector2(4, 3)), C_RAD_GREEN)
 			draw_circle(cyl_pos, 1.0, Color.WHITE)
-
-			# 4. Skitarii Hands Gripping the Weapon
 			draw_circle(shoulder, 1.8, C_STEEL_LIGHT)
 			draw_circle(r_root + arm_dir * 7.0, 1.6, C_STEEL_LIGHT)
 
@@ -304,7 +472,7 @@ func _draw_ranged_weapon_layer():
 			draw_circle(shoulder + arm_dir * 8.0, 1.6, C_STEEL_LIGHT)
 
 # ==============================================================================
-# 2. SKITARII MARSHAL
+# 3. SKITARII MARSHAL
 # ==============================================================================
 func _draw_marshal_body():
 	draw_set_transform(Vector2.ZERO, 0, Vector2(1.0, 0.45))
@@ -342,99 +510,60 @@ func _draw_marshal_body():
 			draw_circle(Vector2(4, -6), 1.8, C_CYAN)
 
 # ==============================================================================
-# 3. SKITARII VANGUARD (RAD-SHOCK TROOPER - FRONT, BACK, SIDE)
+# 4. SKITARII VANGUARD
 # ==============================================================================
 func _draw_vanguard_body():
-	# Ground Shadow
 	draw_set_transform(Vector2.ZERO, 0, Vector2(1.0, 0.45))
 	draw_circle(Vector2(0, 10), 9.0, Color(0.02, 0.02, 0.04, 0.45))
 	draw_set_transform(Vector2.ZERO, 0, Vector2(-1.0 if is_facing_left else 1.0, 1.0))
 
 	match current_facing:
 		BodyFacing.BACK:
-			# Greatcoat Back with White Cog-Tooth Hem
 			var coat_b = PackedVector2Array([Vector2(-7, -5), Vector2(7, -5), Vector2(10, 11), Vector2(-10, 11)])
 			draw_colored_polygon(coat_b, C_MARS_RED)
 			draw_polyline(coat_b, C_OUTLINE, 1.2)
-			for i in range(4):
-				draw_rect(Rect2(-8 + i * 4.5, 9, 2.5, 2), C_IVORY)
-
-			# Bionic Legs
+			for i in range(4): draw_rect(Rect2(-8 + i * 4.5, 9, 2.5, 2), C_IVORY)
 			draw_line(Vector2(-4, 9), Vector2(-4, 16), C_STEEL_MID, 2.2)
 			draw_line(Vector2(4, 9), Vector2(4, 16), C_STEEL_MID, 2.2)
-
-			# Heavy Rad-Filtration Backpack with Twin Exhaust Chimneys
 			draw_rect(Rect2(-5, -11, 10, 8), C_STEEL_DARK)
 			draw_rect(Rect2(-5, -11, 10, 8), C_BRASS, false, 1.0)
-			draw_line(Vector2(-3, -11), Vector2(-3, -16), C_COPPER, 2.0) # Left exhaust
-			draw_line(Vector2(3, -11), Vector2(3, -16), C_COPPER, 2.0)  # Right exhaust
+			draw_line(Vector2(-3, -11), Vector2(-3, -16), C_COPPER, 2.0)
+			draw_line(Vector2(3, -11), Vector2(3, -16), C_COPPER, 2.0)
 			draw_circle(Vector2(-3, -16), 1.0, C_RAD_GREEN)
 			draw_circle(Vector2(3, -16), 1.0, C_RAD_GREEN)
-
-			# Enclosed Armored Helmet (Back Dome)
 			draw_circle(Vector2(0, -7), 6.0, C_MARS_RED)
-			draw_arc(Vector2(0, -7), 6.0, PI, TAU, 12, C_BRASS, 1.2)
 
 		BodyFacing.FRONT:
-			# Greatcoat Front with White Cog-Tooth Hem
 			var coat_f = PackedVector2Array([Vector2(-7, -4), Vector2(7, -4), Vector2(9, 11), Vector2(-9, 11)])
 			draw_colored_polygon(coat_f, C_MARS_RED)
 			draw_polyline(coat_f, C_OUTLINE, 1.2)
-			for i in range(4):
-				draw_rect(Rect2(-8 + i * 4.5, 9, 2.5, 2), C_IVORY)
-
-			# Bionic Legs
+			for i in range(4): draw_rect(Rect2(-8 + i * 4.5, 9, 2.5, 2), C_IVORY)
 			draw_line(Vector2(-4, 9), Vector2(-4, 16), C_STEEL_MID, 2.2)
 			draw_line(Vector2(4, 9), Vector2(4, 16), C_STEEL_MID, 2.2)
-
-			# Radiation-Shielded Chest Rig & Purity Seal
 			draw_rect(Rect2(-4, -3, 8, 7), C_STEEL_DARK)
 			draw_rect(Rect2(-4, -3, 8, 7), C_BRASS, false, 1.0)
 			draw_circle(Vector2(0, 0), 1.8, C_BRASS)
 			draw_purity_seal(Vector2(-5, 0), 6.0)
-
-			# Armored Helmet with Copper Rebreather Grille
 			draw_circle(Vector2(0, -7), 6.0, C_MARS_RED)
-			draw_arc(Vector2(0, -7), 6.0, 0, TAU, 16, C_BRASS, 1.0)
-			
-			# Triangular Respirator Mask
 			var mask = PackedVector2Array([Vector2(-2.5, -5), Vector2(2.5, -5), Vector2(0, -2)])
 			draw_colored_polygon(mask, C_COPPER)
-			draw_polyline(mask, C_OUTLINE, 1.0)
-
-			# Twin Radioactive Green Visor Optics
-			draw_circle(Vector2(-2.2, -7), 1.8, Color(0.10, 0.12, 0.16))
-			draw_circle(Vector2(2.2, -7), 1.8, Color(0.10, 0.12, 0.16))
 			draw_circle(Vector2(-2.2, -7), 1.2, C_RAD_GREEN)
 			draw_circle(Vector2(2.2, -7), 1.2, C_RAD_GREEN)
-			draw_circle(Vector2(-2.2, -7), 0.5, Color.WHITE)
-			draw_circle(Vector2(2.2, -7), 0.5, Color.WHITE)
 
 		BodyFacing.SIDE:
-			# Greatcoat Side Profile with Cog Trim
 			var coat_s = PackedVector2Array([Vector2(3, -5), Vector2(-8, -6), Vector2(-6, 11), Vector2(4, 8)])
 			draw_colored_polygon(coat_s, C_MARS_RED)
 			draw_polyline(coat_s, C_OUTLINE, 1.2)
-			for i in range(3):
-				draw_rect(Rect2(-6 + i * 4.0, 9, 2.5, 2), C_IVORY)
-
-			# Bionic Legs
 			draw_line(Vector2(-3, 9), Vector2(-3, 16), C_STEEL_MID, 2.2)
 			draw_line(Vector2(3, 9), Vector2(3, 16), C_STEEL_MID, 2.2)
-
-			# Side Profile Helmet & Snout Gas Mask
 			draw_circle(Vector2(0, -7), 5.8, C_MARS_RED)
-			draw_rect(Rect2(2, -6, 3.5, 4), C_COPPER) # Respirator canister snout
-			draw_circle(Vector2(2.2, -7), 1.8, Color(0.10, 0.12, 0.16))
+			draw_rect(Rect2(2, -6, 3.5, 4), C_COPPER)
 			draw_circle(Vector2(2.2, -7), 1.2, C_RAD_GREEN)
-
-			# Backpack Rad Exhaust & Small Aerial
 			draw_rect(Rect2(-7, -10, 4, 8), C_STEEL_DARK)
 			draw_line(Vector2(-5, -10), Vector2(-5, -15), C_COPPER, 1.8)
-			draw_circle(Vector2(-5, -15), 1.0, C_RAD_GREEN)
 
 # ==============================================================================
-# 4. SKITARII RANGER (HOODED COWL & SNIPER - FRONT, BACK, SIDE)
+# 5. SKITARII RANGER
 # ==============================================================================
 func _draw_ranger_body():
 	draw_set_transform(Vector2.ZERO, 0, Vector2(1.0, 0.45))
@@ -443,59 +572,33 @@ func _draw_ranger_body():
 
 	match current_facing:
 		BodyFacing.BACK:
-			# Greatcoat from behind
 			var coat_b = PackedVector2Array([Vector2(-7, -5), Vector2(7, -5), Vector2(10, 11), Vector2(-10, 11)])
 			draw_colored_polygon(coat_b, C_MARS_RED)
 			draw_polyline(coat_b, C_OUTLINE, 1.2)
-			for i in range(4):
-				draw_rect(Rect2(-8 + i * 4.5, 9, 2.5, 2), C_IVORY)
-
-			# Backpack Power Generator & Antenna
 			draw_rect(Rect2(-4, -10, 8, 8), C_STEEL_DARK)
 			draw_line(Vector2(3, -10), Vector2(3, -22), C_STEEL_MID, 1.5)
-			draw_circle(Vector2(3, -22), 1.5, C_BRASS)
-			# Hood from back (no eyes)
 			draw_circle(Vector2(0, -7), 6.2, C_MARS_RED)
 
 		BodyFacing.FRONT:
-			# Greatcoat front
 			var coat_f = PackedVector2Array([Vector2(-7, -4), Vector2(7, -4), Vector2(9, 11), Vector2(-9, 11)])
 			draw_colored_polygon(coat_f, C_MARS_RED)
 			draw_polyline(coat_f, C_OUTLINE, 1.2)
-			for i in range(4):
-				draw_rect(Rect2(-8 + i * 4.5, 9, 2.5, 2), C_IVORY)
-
-			# Bionic Chest Rig & Purity Seal
 			draw_rect(Rect2(-4, -3, 8, 7), C_STEEL_DARK)
-			draw_rect(Rect2(-4, -3, 8, 7), C_BRASS, false, 1.0)
 			draw_purity_seal(Vector2(-5, 0), 6.0)
-
-			# Hooded Cowl & Auspex Monocle
 			draw_circle(Vector2(0, -7), 6.5, C_MARS_RED)
-			draw_circle(Vector2(0, -7), 2.2, Color(0.10, 0.12, 0.16))
 			draw_circle(Vector2(0, -7), 1.2, C_CYAN)
 
 		BodyFacing.SIDE:
 			var coat_s = PackedVector2Array([Vector2(3, -5), Vector2(-8, -6), Vector2(-6, 11), Vector2(4, 8)])
 			draw_colored_polygon(coat_s, C_MARS_RED)
 			draw_polyline(coat_s, C_OUTLINE, 1.2)
-			for i in range(3):
-				draw_rect(Rect2(-6 + i * 4.0, 9, 2.5, 2), C_IVORY)
-
-			# Side Hood & Optic
 			draw_circle(Vector2(0, -7), 6.0, C_MARS_RED)
-			draw_circle(Vector2(3.0, -7), 2.0, Color(0.10, 0.12, 0.16))
 			draw_circle(Vector2(3.0, -7), 1.2, C_CYAN)
 
-			# Backpack antenna
-			draw_line(Vector2(-4, -6), Vector2(-8, -20), C_STEEL_MID, 1.5)
-			draw_circle(Vector2(-8, -20), 1.5, C_BRASS)
-
 # ==============================================================================
-# 5. SICARIAN RUSTSTALKER (CYAN BLADES - FRONT, BACK, SIDE)
+# 6. SICARIAN RUSTSTALKER
 # ==============================================================================
 func _draw_sicarian_body():
-	# 1. Ground Contact Shadow
 	draw_set_transform(Vector2.ZERO, 0, Vector2(1.0, 0.45))
 	draw_circle(Vector2(0, 10), 10.0, Color(0.02, 0.02, 0.04, 0.45))
 	draw_set_transform(Vector2.ZERO, 0, Vector2(-1.0 if is_facing_left else 1.0, 1.0))
@@ -505,137 +608,62 @@ func _draw_sicarian_body():
 
 	match current_facing:
 		BodyFacing.BACK:
-			# Digitigrade Bionic Stilt Legs (Grounded at feet)
 			draw_polyline(PackedVector2Array([Vector2(-4, 4), Vector2(-7, 9), Vector2(-4, 14)]), C_STEEL_MID, 2.2)
 			draw_polyline(PackedVector2Array([Vector2(4, 4), Vector2(7, 9), Vector2(4, 14)]), C_STEEL_MID, 2.2)
-			draw_line(Vector2(-7, 14), Vector2(-3, 14), C_STEEL_DARK, 2.0)
-			draw_line(Vector2(3, 14), Vector2(7, 14), C_STEEL_DARK, 2.0)
-
-			# Mars Red Split Waist Tabard (Back view)
 			var tabard_b = PackedVector2Array([Vector2(-5, 2), Vector2(5, 2), Vector2(6, 11), Vector2(-6, 11)])
 			draw_colored_polygon(tabard_b, C_MARS_DARK)
-			draw_polyline(tabard_b, C_OUTLINE, 1.2)
-
-			# Armored Spine & Copper Heat-Sink Radiators
-			var torso_b = PackedVector2Array([Vector2(-6, -4), Vector2(6, -4), Vector2(5, 3), Vector2(-5, 3)])
-			draw_colored_polygon(torso_b, C_STEEL_DARK)
-			draw_polyline(torso_b, C_OUTLINE, 1.2)
-			for i in range(3):
-				draw_line(Vector2(-3, -3 + i * 2), Vector2(3, -3 + i * 2), C_COPPER, 1.4)
-
-			# Back of Dome Sensor Helmet
 			draw_circle(Vector2(0, -7), 5.5, C_STEEL_DARK)
-			draw_arc(Vector2(0, -7), 5.5, 0, TAU, 16, C_BRASS, 1.0)
-
-			# Twin Cyan Transonic Blades (Raised behind body)
 			if is_slashing:
 				_draw_transonic_blade(Vector2(-7, -2), Vector2(-12, -22 - swing))
 				_draw_transonic_blade(Vector2(7, -2), Vector2(12, -22 - swing))
-				draw_arc(Vector2(0, -14), 16.0, PI + 0.2, TAU - 0.2, 12, Color(C_CYAN.r, C_CYAN.g, C_CYAN.b, 0.65), 3.0)
-				draw_arc(Vector2(0, -14), 16.0, PI + 0.2, TAU - 0.2, 12, Color.WHITE, 1.2)
 			else:
 				_draw_transonic_blade(Vector2(-7, -2), Vector2(-14, -18))
 				_draw_transonic_blade(Vector2(7, -2), Vector2(14, -18))
 
 		BodyFacing.FRONT:
-			# Legs
 			draw_polyline(PackedVector2Array([Vector2(-5, 4), Vector2(-8, 9), Vector2(-5, 14)]), C_STEEL_MID, 2.2)
 			draw_polyline(PackedVector2Array([Vector2(5, 4), Vector2(8, 9), Vector2(5, 14)]), C_STEEL_MID, 2.2)
-			draw_line(Vector2(-7, 14), Vector2(-3, 14), C_STEEL_DARK, 2.0)
-			draw_line(Vector2(3, 14), Vector2(7, 14), C_STEEL_DARK, 2.0)
-
-			# Mars Tabard
 			var tabard_f = PackedVector2Array([Vector2(-5, 2), Vector2(5, 2), Vector2(6, 11), Vector2(-6, 11)])
 			draw_colored_polygon(tabard_f, C_MARS_RED)
-			draw_polyline(tabard_f, C_OUTLINE, 1.2)
-			draw_line(Vector2(-4, 11), Vector2(4, 11), C_WHITE_TRIM, 1.5)
-
-			# Torso
-			var torso_f = PackedVector2Array([Vector2(-6, -4), Vector2(6, -4), Vector2(5, 3), Vector2(-5, 3)])
-			draw_colored_polygon(torso_f, C_STEEL_DARK)
-			draw_polyline(torso_f, C_BRASS, 1.0)
-			draw_circle(Vector2(0, 0), 1.8, C_BRASS)
-
-			# Helmet & Visor
 			draw_circle(Vector2(0, -7), 5.5, C_STEEL_DARK)
 			draw_line(Vector2(-3.5, -7), Vector2(3.5, -7), C_CYAN, 2.0)
-			draw_circle(Vector2(0, -7), 1.0, Color.WHITE)
-
 			if is_slashing:
-				# Scissor Cross-Slash Stance
 				_draw_transonic_blade(Vector2(-7, 1), Vector2(8, 12 + swing))
 				_draw_transonic_blade(Vector2(7, 1), Vector2(-8, 12 + swing))
-				draw_arc(Vector2(0, 8), 16.0, 0.2, PI - 0.2, 12, Color(C_CYAN.r, C_CYAN.g, C_CYAN.b, 0.65), 3.0)
-				draw_arc(Vector2(0, 8), 16.0, 0.2, PI - 0.2, 12, Color.WHITE, 1.2)
 			else:
-				# Ready Stance
 				_draw_transonic_blade(Vector2(-7, 1), Vector2(-15, 11))
 				_draw_transonic_blade(Vector2(7, 1), Vector2(15, 11))
 
 		BodyFacing.SIDE:
-			# Side Profile Stride
 			draw_polyline(PackedVector2Array([Vector2(-3, 4), Vector2(-7, 9), Vector2(-4, 14)]), C_STEEL_MID, 2.2)
 			draw_polyline(PackedVector2Array([Vector2(3, 4), Vector2(7, 9), Vector2(4, 14)]), C_STEEL_MID, 2.2)
-			draw_line(Vector2(-6, 14), Vector2(-2, 14), C_STEEL_DARK, 2.0)
-			draw_line(Vector2(2, 14), Vector2(6, 14), C_STEEL_DARK, 2.0)
-
-			# Tabard & Torso
-			var tabard_s = PackedVector2Array([Vector2(2, 2), Vector2(-5, 2), Vector2(-4, 11), Vector2(3, 9)])
-			draw_colored_polygon(tabard_s, C_MARS_RED)
-			draw_polyline(tabard_s, C_OUTLINE, 1.2)
-
-			var torso_s = PackedVector2Array([Vector2(3, -4), Vector2(-5, -4), Vector2(-4, 3), Vector2(4, 3)])
-			draw_colored_polygon(torso_s, C_STEEL_DARK)
-			draw_polyline(torso_s, C_OUTLINE, 1.2)
-
-			# Visor
 			draw_circle(Vector2(0, -7), 5.2, C_STEEL_DARK)
 			draw_line(Vector2(0, -7), Vector2(4, -7), C_CYAN, 2.0)
-
-			# Dynamic Lunge Slash
 			if is_slashing:
 				_draw_transonic_blade(Vector2(-2, 1), Vector2(22, 2 + swing))
 				_draw_transonic_blade(Vector2(2, 3), Vector2(20, -10 - swing))
-				draw_arc(Vector2(8, 0), 15.0, -PI * 0.4, PI * 0.4, 8, Color(C_CYAN.r, C_CYAN.g, C_CYAN.b, 0.7), 2.5)
 			else:
 				_draw_transonic_blade(Vector2(-2, 1), Vector2(16, -6))
 				_draw_transonic_blade(Vector2(2, 3), Vector2(18, 3))
 
-## Helper to draw an AdMech Transonic Power Blade with hilt, emitter, and energized cyan edge
 func _draw_transonic_blade(hand_pos: Vector2, tip_pos: Vector2) -> void:
 	var blade_dir = (tip_pos - hand_pos).normalized()
 	var hilt_end = hand_pos - blade_dir * 3.0
-
-	# 1. Steel / Brass Hilt & Pommel
 	draw_line(hilt_end, hand_pos, C_STEEL_DARK, 2.5)
 	draw_circle(hilt_end, 1.2, C_BRASS)
-
-	# 2. Power Emitter Crossguard
-	var perp = blade_dir.orthogonal()
-	draw_line(hand_pos - perp * 2.5, hand_pos + perp * 2.5, C_BRASS, 2.0)
-
-	# 3. Energized Cyan Power Blade (Outer glow + pure white cutting core)
 	draw_line(hand_pos, tip_pos, C_CYAN, 3.2)
 	draw_line(hand_pos, tip_pos, Color.WHITE, 1.2)
-	draw_circle(tip_pos, 1.0, Color.WHITE)
-
-	# 4. Skitarii Bionic Hand
 	draw_circle(hand_pos, 1.6, C_STEEL_LIGHT)
 
 # ==============================================================================
-# 6. SERVO-SKULL
+# 7. SERVO-SKULL
 # ==============================================================================
 func _draw_servo_skull():
 	draw_rect(Rect2(-3, -11, 6, 4), C_STEEL_DARK)
 	draw_line(Vector2(0, -11), Vector2(0, -14), C_BRASS, 1.5)
 	draw_circle(Vector2.ZERO, 7.0, C_IVORY)
 	draw_circle(Vector2.ZERO, 7.0, C_OUTLINE, false, 1.2)
-	draw_arc(Vector2.ZERO, 6.4, -PI * 0.75, PI * 0.25, 8, C_BRASS, 2.0)
-	draw_circle(Vector2(2.5, -1), 2.8, C_STEEL_DARK)
 	draw_circle(Vector2(2.5, -1), 1.8, C_CYAN)
-	draw_circle(Vector2(3.0, -1.5), 0.7, Color.WHITE)
-	draw_rect(Rect2(1, 3, 4, 3), C_STEEL_DARK)
-	draw_line(Vector2(5, 4), Vector2(11, 4), C_BRASS, 1.8)
 	draw_purity_seal(Vector2(-3, 4), 7.0)
 
 # ==============================================================================
@@ -652,31 +680,39 @@ class UnitGlowRenderer extends Node2D:
 		var parent_node = p.get_parent()
 		if parent_node and parent_node.is_in_group("players"):
 			var aura = 0.55 + sin(p.anim_time * 3.0) * 0.2
-			draw_arc(Vector2.ZERO, 16.0, 0, TAU, 24, Color(0.20, 0.88, 1.0, 0.45 * aura), 1.5)
+			var aura_col = Color(0.20, 0.88, 1.0, 0.45 * aura)
+			if p.unit_type == 2:
+				aura_col = Color(1.0, 0.85, 0.2, 0.55 * aura) if p.is_celestine_ascended else Color(0.9, 0.3, 0.15, 0.35 * aura)
+			draw_arc(Vector2.ZERO, 16.0, 0, TAU, 24, aura_col, 1.5)
 
 		match p.unit_type:
-			0: # Tech-Priest Optic
+			0: # Tech-Priest
 				if p.current_facing != BodyFacing.BACK:
 					var ep = Vector2(3.5, -7) if p.current_facing == BodyFacing.SIDE else Vector2(0, -8)
 					draw_circle(ep, 2.2, Color(0.20, 0.88, 1.0, 0.9))
-					draw_circle(ep, 4.0, Color(0.20, 0.88, 1.0, 0.35))
-			1: # Marshal Visor
+			1: # Marshal
 				if p.current_facing != BodyFacing.BACK:
 					var vp = Vector2(4, -6) if p.current_facing == BodyFacing.SIDE else Vector2(0, -7)
 					draw_circle(vp, 2.0, Color(0.20, 0.88, 1.0, 0.9))
-			2: # Vanguard Rebreather Optics
+			2: # Vanguard
 				if p.current_facing != BodyFacing.BACK:
 					var gp = Vector2(3, -6) if p.current_facing == BodyFacing.SIDE else Vector2(0, -6)
 					draw_circle(gp, 2.2, Color(0.25, 0.95, 0.35, 0.9))
-			3: # Servo-Skull Eye
+			3: # Servo-Skull
 				draw_circle(Vector2(2.5, -1), 2.0, Color(0.20, 0.88, 1.0, 0.9))
-			4: # Ranger Sniper Monocle
+			4: # Ranger
 				if p.current_facing != BodyFacing.BACK:
 					var rp = Vector2(3.0, -7) if p.current_facing == BodyFacing.SIDE else Vector2(0, -7)
 					draw_circle(rp, 1.8, Color(0.20, 0.88, 1.0, 0.9))
-			5: # Sicarian Sensor Visor
+			5: # Sicarian
 				if p.current_facing != BodyFacing.BACK:
 					var sp = Vector2(3.0, -7) if p.current_facing == BodyFacing.SIDE else Vector2(0, -7)
 					draw_circle(sp, 2.5, Color(0.20, 0.88, 1.0, 0.8))
+			6: # Sister of Battle (Halo & Flamer Glow)
+				if p.is_celestine_ascended:
+					draw_arc(Vector2(0, -18), 8.0, 0, TAU, 16, Color(1.0, 0.9, 0.3, 0.9), 1.8)
+					draw_circle(Vector2(0, -18), 2.0, Color.WHITE)
+				if p.is_flamer_firing:
+					draw_circle(Vector2(18, -2), 6.0, Color(1.0, 0.6, 0.1, 0.85))
 
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)

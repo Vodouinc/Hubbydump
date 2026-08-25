@@ -1,6 +1,6 @@
 extends CharacterBody2D
 
-enum PlayerClass { MELEE, RANGED }
+enum PlayerClass { MELEE = 0, RANGED = 1, SISTER_OF_BATTLE = 2 }
 enum Doctrina { CONQUEROR, PROTECTOR }
 
 @export var current_class: PlayerClass = PlayerClass.MELEE
@@ -52,6 +52,64 @@ var hovered_interact_building: Node2D = null
 const GRID_SIZE: float = 32.0
 const WALL_LINK_RANGE: float = 95.0
 
+# --- SISTER OF BATTLE PROGRESSION & MIRACLE POINTS ---
+var current_level: int = 1
+const MAX_SISTER_LEVEL: int = 6
+var current_exp: int = 0
+var exp_to_next_level: int = 80
+var miracle_points: int = 1
+var faith_shield_max: float = 80.0
+var faith_shield_current: float = 80.0
+var faith_shield_regen_rate: float = 12.0
+var faith_dodge_chance: float = 0.15
+
+# Ability Ranks (0 = Locked, 1 to 3 = Unlocked & Scaling)
+var rank_dash: int = 1
+var rank_intervention: int = 0
+var rank_grenade: int = 0
+var rank_shield: int = 0
+var rank_ultimate: int = 0
+
+var holy_intervention_cooldown: float = 0.0
+const HOLY_INTERVENTION_COOLDOWN_MAX: float = 14.0
+
+const EXP_REQUIREMENTS: Array[int] = [0, 80, 200, 420, 750, 1200]
+
+var flamer_active: bool = false
+var flamer_cooldown_timer: float = 0.0
+var flamer_tick_timer: float = 0.0
+const FLAMER_TICK_RATE: float = 0.08
+const FLAMER_DAMAGE: int = 14
+const FLAMER_CONE_ANGLE: float = 48.0
+const FLAMER_RANGE: float = 185.0
+
+var melta_cooldown_timer: float = 0.0
+const MELTA_COOLDOWN: float = 1.6
+const MELTA_DAMAGE: int = 110
+
+var dash_cooldown_timer: float = 0.0
+const DASH_COOLDOWN: float = 4.0
+var is_dashing: bool = false
+var dash_duration: float = 0.22
+var dash_timer: float = 0.0
+var dash_dir: Vector2 = Vector2.ZERO
+var dash_scorch_spawn_timer: float = 0.0
+
+var holy_grenade_cooldown: float = 0.0
+const HOLY_GRENADE_COOLDOWN_MAX: float = 10.0
+
+var miracle_act_cooldown: float = 0.0
+const MIRACLE_COOLDOWN_MAX: float = 12.0
+
+var sister_ultimate_cooldown: float = 0.0
+const SISTER_ULTIMATE_COOLDOWN_MAX: float = 35.0
+var is_ultimate_active: bool = false
+var ultimate_duration_left: float = 0.0
+
+var is_celestine_ascended: bool = false
+var has_used_celestine_revive: bool = false
+var celestine_glow_timer: float = 0.0
+
 # RTS Controller Engine
 var rts_selected_units: Array[Node2D] = []
 var is_box_selecting: bool = false
@@ -93,6 +151,8 @@ func _enter_tree():
 		set_multiplayer_authority(id)
 
 func _is_local_authority() -> bool:
+	if not is_inside_tree() or multiplayer == null:
+		return true
 	if not multiplayer.has_multiplayer_peer():
 		return true
 	return is_multiplayer_authority()
@@ -106,11 +166,8 @@ func _ready():
 	set_process_unhandled_input(_is_local_authority())
 	
 	if _is_local_authority():
-		z_index = 88 # Render hero and selection box above shadows and atmospheric dust
-		
-		# Prevent Godot from culling the selection box when Marshal is off-screen
+		z_index = 88
 		RenderingServer.canvas_item_set_custom_rect(get_canvas_item(), true, Rect2(-2000, -2000, 4000, 4000))
-
 		DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_CONFINED)
 
 		_setup_tooltip_overlay()
@@ -126,6 +183,9 @@ func _ready():
 		var hud = get_tree().get_first_node_in_group("ability_hud")
 		if hud and hud.has_method("setup_hud_for_player"):
 			hud.setup_hud_for_player(self)
+			
+		# --- ADD THIS LINE HERE ---
+		AudioManager.switch_soundtrack_for_class(int(current_class))
 	else:
 		if camera:
 			camera.enabled = false
@@ -134,41 +194,118 @@ func set_player_class(new_class: int):
 	current_class = new_class as PlayerClass
 	apply_class_stats()
 	
-	if camera and _is_local_authority():
-		if current_class == PlayerClass.RANGED:
-			camera.top_level = true
-			camera.global_position = global_position
-		else:
-			camera.top_level = false
-			camera.position = Vector2.ZERO
+	if is_inside_tree() and _is_local_authority():
+		AudioManager.switch_soundtrack_for_class(int(current_class))
+		if camera:
+			if current_class == PlayerClass.RANGED:
+				camera.top_level = true
+				camera.global_position = global_position
+			else:
+				camera.top_level = false
+				camera.position = Vector2.ZERO
 
 func apply_class_stats():
-	var is_techpriest = (current_class == PlayerClass.MELEE)
-	var active_data = tech_priest_data if is_techpriest else skitarii_marshal_data
-	
-	if active_data:
-		speed = active_data.movement_speed
-		max_health = active_data.max_health
-		attack_cooldown = active_data.attack_cooldown
-		bullet_damage = active_data.base_damage
-		attack_anim_duration = active_data.attack_anim_duration
-	else:
-		speed = 250.0 if is_techpriest else 340.0
-		max_health = 150 if is_techpriest else 90
+	if current_class == PlayerClass.MELEE:
+		speed = 250.0
+		max_health = 150
 		bullet_damage = 25
+		if visual_sprite: visual_sprite.unit_type = UnitSprite.UnitType.ADMECH_TECHPRIEST
+	elif current_class == PlayerClass.RANGED:
+		speed = 340.0
+		max_health = 90
+		bullet_damage = 20
+		if visual_sprite: visual_sprite.unit_type = UnitSprite.UnitType.SKITARII_MARSHAL
+	elif current_class == PlayerClass.SISTER_OF_BATTLE:
+		if visual_sprite: visual_sprite.unit_type = UnitSprite.UnitType.SISTER_OF_BATTLE
+		apply_sister_level_stats() # FIXED: Removed duplicate elif so Level 1 stats apply cleanly
 
-	# Explicitly assign unit_type so VisualSprite draws the correct model
-	if visual_sprite:
-		visual_sprite.unit_type = 0 if is_techpriest else 1
-		if visual_sprite.has_method("queue_redraw"):
-			visual_sprite.queue_redraw()
-
-	if shadow_node and shadow_node.has_method("update_shadow_size"):
-		shadow_node.update_shadow_size()
+	if visual_sprite and visual_sprite.has_method("queue_redraw"):
+		visual_sprite.queue_redraw()
 
 	current_health = max_health
 	if health_bar and health_bar.has_method("setup"):
 		health_bar.setup(current_health, max_health)
+
+func apply_sister_level_stats():
+	var lvl_idx = current_level - 1
+	max_health = 95 + (lvl_idx * 12)
+	speed = 265.0 + (lvl_idx * 10.0)
+	bullet_damage = 14 + (lvl_idx * 3)
+	
+	# Faith Shield scales with both character level and [3] Miracle Shield rank
+	faith_shield_max = 40.0 + (lvl_idx * 10.0) + (rank_shield * 25.0)
+	faith_shield_regen_rate = 10.0 + (rank_shield * 6.0)
+	faith_dodge_chance = 0.15 + (rank_shield * 0.05) # +5% dodge per rank
+	
+	current_health = max_health
+	faith_shield_current = faith_shield_max
+	
+	if health_bar and health_bar.has_method("setup"):
+		health_bar.setup(current_health, max_health)
+		if health_bar.has_method("update_shield"):
+			health_bar.update_shield(int(faith_shield_current), int(faith_shield_max))
+
+@rpc("any_peer", "call_local", "reliable")
+func gain_exp(amount: int):
+	if current_class != PlayerClass.SISTER_OF_BATTLE or current_level >= MAX_SISTER_LEVEL:
+		return
+	
+	current_exp += amount
+	while current_level < MAX_SISTER_LEVEL and current_exp >= exp_to_next_level:
+		current_exp -= exp_to_next_level
+		current_level += 1
+		miracle_points += 1
+		
+		exp_to_next_level = EXP_REQUIREMENTS[current_level] if current_level < MAX_SISTER_LEVEL else 999999
+		apply_sister_level_stats()
+		
+		# Level Up Audio & Banner FX
+		AudioManager.play_sfx("binary_canticle", global_position, 3.0, 1.2)
+		add_camera_trauma(0.35)
+		
+		var label = Label.new()
+		label.script = load("res://DamageNumber.gd")
+		label.global_position = global_position + Vector2(-50, -45)
+		get_parent().add_child(label)
+		if current_level == MAX_SISTER_LEVEL:
+			label.text = "⚡ LEVEL 6 MAX: SAINT CELESTINE UNLOCKED! ⚡"
+			label.label_settings = LabelSettings.new()
+			label.label_settings.font_color = Color(1.0, 0.88, 0.25)
+			label.label_settings.font_size = 15
+		else:
+			label.text = "✨ LEVEL %d! (+1 MIRACLE POINT) ✨" % current_level
+			label.label_settings = LabelSettings.new()
+			label.label_settings.font_color = Color(0.35, 0.95, 0.45)
+			label.label_settings.font_size = 14
+
+@rpc("any_peer", "call_local", "reliable")
+func request_upgrade_sister_ability(ability_id: int):
+	if miracle_points <= 0: return
+	
+	match ability_id:
+		0: # [1] Holy Intervention (Max Rank 3)
+			if rank_intervention < 3:
+				rank_intervention += 1
+				miracle_points -= 1
+		1: # [2] Holy Hand Grenade (Max Rank 3)
+			if rank_grenade < 3:
+				rank_grenade += 1
+				miracle_points -= 1
+		2: # [3] Miracle Shield (Max Rank 3)
+			if rank_shield < 3:
+				rank_shield += 1
+				miracle_points -= 1
+				apply_sister_level_stats()
+		3: # [4] Righteous Pyre Ultimate (Req. Level 3+, Max Rank 2)
+			if current_level >= 3 and rank_ultimate < 2:
+				rank_ultimate += 1
+				miracle_points -= 1
+		4: # [SPACE] Seraphim Dash Upgrade (Max Rank 3)
+			if rank_dash < 3:
+				rank_dash += 1
+				miracle_points -= 1
+
+	AudioManager.play_sfx("building_place", global_position, 1.0, 1.5)
 
 # ------------------------------------------------------------------------------
 # DAMAGE & HEALTH HANDLING
@@ -178,19 +315,39 @@ func take_damage(amount: int, _knockback: Vector2 = Vector2.ZERO):
 	if is_dead: return
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
 
-	var actual_damage = float(amount)
+	# 1. Sister Passive Holy Dodge
+	if current_class == PlayerClass.SISTER_OF_BATTLE and randf() < faith_dodge_chance:
+		AudioManager.play_sfx("axe_swing", global_position, -4.0, 1.8)
+		return
+
+	var dmg_left = float(amount)
 	
 	if current_class == PlayerClass.RANGED:
 		if active_doctrina == Doctrina.PROTECTOR:
-			actual_damage *= 0.65
+			dmg_left *= 0.65
 		elif active_doctrina == Doctrina.CONQUEROR:
-			actual_damage *= 1.20
+			dmg_left *= 1.20
 
-	var new_health = max(0, current_health - int(actual_damage))
-	if multiplayer.has_multiplayer_peer():
-		rpc("sync_health", new_health)
-	else:
-		sync_health(new_health)
+	# 2. Sister Faith Shield Absorption
+	if current_class == PlayerClass.SISTER_OF_BATTLE and faith_shield_current > 0.0:
+		var absorbed = minf(faith_shield_current, dmg_left)
+		faith_shield_current -= absorbed
+		dmg_left -= absorbed
+		if health_bar and health_bar.has_method("update_shield"):
+			health_bar.update_shield(int(faith_shield_current), int(faith_shield_max))
+
+	if dmg_left > 0.0:
+		var new_health = max(0, current_health - int(dmg_left))
+
+# 3. Saint Celestine Martyrdom Rebirth (Unlocked at Level 6)
+		if new_health <= 0 and current_class == PlayerClass.SISTER_OF_BATTLE and current_level >= MAX_SISTER_LEVEL and not has_used_celestine_revive:
+			_trigger_celestine_ascension()
+			return
+
+		if multiplayer.has_multiplayer_peer():
+			rpc("sync_health", new_health)
+		else:
+			sync_health(new_health)
 
 @rpc("call_local", "reliable")
 func sync_health(new_hp: int):
@@ -207,9 +364,38 @@ func sync_health(new_hp: int):
 			if cam_dist > 450.0:
 				AudioManager.play_sfx("klaxon_alert", camera.global_position, 2.0, 1.5)
 
-	# Enter Cybernetic Reboot Stasis
 	if current_health <= 0 and not is_dead:
 		_handle_player_death_stasis()
+
+func _trigger_celestine_ascension():
+	has_used_celestine_revive = true
+	is_celestine_ascended = true
+	current_health = max_health
+	faith_shield_current = faith_shield_max
+	rpc("sync_celestine_state", true)
+
+	AudioManager.play_sfx("orbital_strike", global_position, 4.0, 1.3)
+	add_camera_trauma(0.70)
+
+	var space = get_world_2d().direct_space_state
+	var shape = CircleShape2D.new()
+	shape.radius = 180.0
+	var q = PhysicsShapeQueryParameters2D.new()
+	q.shape = shape
+	q.transform = Transform2D(0.0, global_position)
+	q.collide_with_bodies = true
+	for hit in space.intersect_shape(q, 32):
+		var b = hit.collider
+		if is_instance_valid(b) and (b.is_in_group("enemies") or b.is_in_group("objectives")):
+			if b.has_method("take_damage"):
+				b.take_damage(90, (b.global_position - global_position).normalized() * 400.0)
+
+@rpc("call_local", "reliable")
+func sync_celestine_state(is_saint: bool):
+	is_celestine_ascended = is_saint
+	if visual_sprite and "is_celestine_ascended" in visual_sprite:
+		visual_sprite.is_celestine_ascended = is_saint
+		visual_sprite.queue_redraw()
 
 func _handle_player_death_stasis():
 	is_dead = true
@@ -218,8 +404,8 @@ func _handle_player_death_stasis():
 	is_building_mode = false
 	is_box_selecting = false
 	is_attack_move_queued = false
+	flamer_active = false
 
-	# Disable collisions and hide sprite during reboot
 	collision_layer = 0
 	collision_mask = 0
 	if visual_sprite: visual_sprite.visible = false
@@ -230,7 +416,6 @@ func _handle_player_death_stasis():
 		add_camera_trauma(0.60)
 		AudioManager.play_sfx("orbital_strike", global_position, -2.0, 1.6)
 
-		# Pan camera back to the Main Sanctum so player watches the base
 		var base_node = get_tree().get_first_node_in_group("base")
 		if is_instance_valid(base_node) and is_instance_valid(camera):
 			var tween = create_tween()
@@ -250,9 +435,11 @@ func sync_respawn(respawn_pos: Vector2):
 	is_dead = false
 	respawn_timer = 0.0
 	current_health = max_health
+	faith_shield_current = faith_shield_max
+	is_celestine_ascended = false
+	has_used_celestine_revive = false
 	global_position = respawn_pos
 
-	# Re-enable collision & visuals
 	collision_layer = 1
 	collision_mask = 1
 	if visual_sprite: visual_sprite.visible = true
@@ -261,7 +448,6 @@ func sync_respawn(respawn_pos: Vector2):
 		health_bar.update_health(current_health, max_health)
 	if shadow_node: shadow_node.visible = true
 
-	# Resurrect sound & camera focus
 	AudioManager.play_sfx("volkite_beam", global_position, 2.0, 1.4)
 	
 	if _is_local_authority():
@@ -271,21 +457,171 @@ func sync_respawn(respawn_pos: Vector2):
 			_add_unit_to_selection(self)
 
 # ------------------------------------------------------------------------------
+# SISTER OF BATTLE VISUAL EFFECTS (MELTA, PYRE, DASH BURST, SCORCH TRAIL)
+# ------------------------------------------------------------------------------
+
+class MeltaBeamFX extends Node2D:
+	var start_pos: Vector2 = Vector2.ZERO
+	var end_pos: Vector2 = Vector2.ZERO
+	var elapsed: float = 0.0
+	var duration: float = 0.28
+
+	func _ready() -> void:
+		z_index = 90
+		var mat = CanvasItemMaterial.new()
+		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+		material = mat
+
+	func _process(delta: float) -> void:
+		elapsed += delta
+		queue_redraw()
+		if elapsed >= duration:
+			queue_free()
+
+	func _draw() -> void:
+		var t = elapsed / duration
+		var alpha = 1.0 - t
+		var corona_w = lerpf(18.0, 32.0, t)
+		draw_line(start_pos, end_pos, Color(1.0, 0.35, 0.1, alpha * 0.45), corona_w)
+		
+		var beam_w = lerpf(8.0, 14.0, t)
+		draw_line(start_pos, end_pos, Color(1.0, 0.70, 0.2, alpha * 0.85), beam_w)
+		draw_line(start_pos, end_pos, Color.WHITE, 3.5)
+
+		draw_circle(start_pos, 14.0 * (1.0 - t), Color(1.0, 0.85, 0.3, alpha))
+		draw_circle(end_pos, 16.0 * (1.0 - t), Color(1.0, 0.5, 0.15, alpha))
+		draw_circle(end_pos, 8.0 * (1.0 - t), Color.WHITE)
+
+class RighteousPyreFX extends Node2D:
+	var target_pos: Vector2 = Vector2.ZERO
+	var elapsed: float = 0.0
+	var duration: float = 1.5
+	var max_radius: float = 240.0
+
+	func _ready() -> void:
+		z_index = 95
+		var mat = CanvasItemMaterial.new()
+		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+		material = mat
+
+	func _process(delta: float) -> void:
+		elapsed += delta
+		queue_redraw()
+		if elapsed >= duration:
+			queue_free()
+
+	func _draw() -> void:
+		var t = clampf(elapsed / duration, 0.0, 1.0)
+		var alpha = 1.0 - t
+		var pulse = 0.7 + sin(elapsed * 18.0) * 0.3
+
+		# 1. Divine Vertical Heaven-to-Ground Cathedral Pillar
+		var pillar_w = lerpf(110.0, 0.0, pow(t, 0.5))
+		var sky_start = target_pos + Vector2(0, -900)
+		draw_line(sky_start, target_pos, Color(1.0, 0.88, 0.3, alpha * 0.55 * pulse), pillar_w)
+		draw_line(sky_start, target_pos, Color(1.0, 0.95, 0.8, alpha * 0.85), pillar_w * 0.45)
+		draw_line(sky_start, target_pos, Color.WHITE, pillar_w * 0.15)
+
+		# 2. Consecrated Ground Blast Zone & Expanding Holy Shockwaves
+		var curr_r = max_radius * (1.0 - pow(1.0 - t, 3.0))
+		draw_circle(target_pos, curr_r, Color(1.0, 0.85, 0.25, 0.18 * alpha))
+		draw_arc(target_pos, curr_r, 0, TAU, 32, Color(1.0, 0.90, 0.3, alpha * pulse), 2.5)
+		draw_arc(target_pos, curr_r * 0.65, 0, TAU, 24, Color(1.0, 0.6, 0.15, alpha * 0.8), 1.8)
+
+		# 3. Rotating Golden Sunburst Crosshair Glyph
+		var rot = elapsed * 3.0
+		for i in range(8):
+			var a = (float(i) * TAU / 8.0) + rot
+			var p1 = target_pos + Vector2(cos(a), sin(a)) * (curr_r * 0.3)
+			var p2 = target_pos + Vector2(cos(a), sin(a)) * (curr_r * 0.9)
+			draw_line(p1, p2, Color(1.0, 0.85, 0.2, alpha * 0.7), 1.8)
+
+class DashIgnitionBurstFX extends Node2D:
+	var start_pos: Vector2 = Vector2.ZERO
+	var dash_dir: Vector2 = Vector2.ZERO
+	var elapsed: float = 0.0
+	var duration: float = 0.3
+
+	func _ready() -> void:
+		z_index = 86
+		var mat = CanvasItemMaterial.new()
+		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+		material = mat
+
+	func _process(delta: float) -> void:
+		elapsed += delta
+		queue_redraw()
+		if elapsed >= duration:
+			queue_free()
+
+	func _draw() -> void:
+		var t = elapsed / duration
+		var alpha = 1.0 - t
+		var opp = -dash_dir
+		var r = lerpf(8.0, 26.0, t)
+
+		draw_circle(start_pos + (opp * 10.0), r, Color(1.0, 0.55, 0.15, alpha * 0.65))
+		draw_circle(start_pos + (opp * 6.0), r * 0.6, Color(1.0, 0.90, 0.3, alpha * 0.9))
+		draw_circle(start_pos + (opp * 2.0), r * 0.25, Color.WHITE)
+
+class DashScorchDecalFX extends Node2D:
+	var elapsed: float = 0.0
+	var lifetime: float = 0.85
+	var size_r: float = 8.0
+
+	func _ready() -> void:
+		z_index = -5
+		var mat = CanvasItemMaterial.new()
+		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+		material = mat
+		size_r = randf_range(6.0, 11.0)
+
+	func _process(delta: float) -> void:
+		elapsed += delta
+		queue_redraw()
+		if elapsed >= lifetime:
+			queue_free()
+
+	func _draw() -> void:
+		var t = elapsed / lifetime
+		var alpha = 1.0 - t
+		draw_circle(Vector2.ZERO, size_r, Color(0.10, 0.08, 0.06, alpha * 0.6))
+		draw_circle(Vector2.ZERO, size_r * 0.6, Color(1.0, 0.45, 0.1, alpha * 0.5))
+		draw_circle(Vector2.ZERO, size_r * 0.25, Color(1.0, 0.85, 0.2, alpha * 0.7))
+
+# ------------------------------------------------------------------------------
 # MOVEMENT & PHYSICS
 # ------------------------------------------------------------------------------
 
 func _physics_process(delta: float) -> void:
-	if is_dead: return # Halt all physics movement while dead
+	if is_dead: return
 
-	if current_class == PlayerClass.MELEE:
-		_process_techpriest_movement(delta)
+	if current_class == PlayerClass.MELEE or current_class == PlayerClass.SISTER_OF_BATTLE:
+		_process_wasd_movement(delta)
 	else:
 		_process_marshal_rts_movement(delta)
 		if _is_local_authority():
 			_broadcast_marshal_doctrina_aura()
 
-func _process_techpriest_movement(delta: float) -> void:
+func _process_wasd_movement(delta: float) -> void:
 	if not _is_local_authority(): return
+
+	if is_dashing:
+		dash_timer -= delta
+		velocity = dash_dir * (speed * 2.8)
+		
+		# Spawn burning scorch patches along the jetpack dash trail
+		dash_scorch_spawn_timer += delta
+		if dash_scorch_spawn_timer >= 0.04:
+			dash_scorch_spawn_timer = 0.0
+			var scorch = DashScorchDecalFX.new()
+			scorch.global_position = global_position
+			get_parent().add_child(scorch)
+			
+		move_and_slide()
+		if dash_timer <= 0.0:
+			is_dashing = false
+		return
 
 	var direction = Vector2.ZERO
 	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT): direction.x -= 1
@@ -293,22 +629,20 @@ func _process_techpriest_movement(delta: float) -> void:
 	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP): direction.y -= 1
 	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN): direction.y += 1
 
+	var current_move_speed = speed
+	if is_ultimate_active: current_move_speed *= 1.35
+	if is_celestine_ascended: current_move_speed *= 1.45
+
 	if direction != Vector2.ZERO:
-		# If camera was detached to peek at the map, re-attach it when you move
-		if camera and camera.top_level:
+		if camera and camera.top_level and current_class != PlayerClass.RANGED:
 			camera.top_level = false
 			camera.position = Vector2.ZERO
 
 		direction = direction.normalized()
 		var corner_nudge = _calculate_corner_nudge(direction)
-		velocity = (direction + corner_nudge).normalized() * speed
-
-	if direction != Vector2.ZERO:
-		direction = direction.normalized()
-		var corner_nudge = _calculate_corner_nudge(direction)
-		velocity = (direction + corner_nudge).normalized() * speed
+		velocity = (direction + corner_nudge).normalized() * current_move_speed
 	else:
-		velocity = velocity.move_toward(Vector2.ZERO, speed * 12.0 * delta)
+		velocity = velocity.move_toward(Vector2.ZERO, current_move_speed * 12.0 * delta)
 
 	velocity += _calculate_friendly_separation() * 60.0
 	move_and_slide()
@@ -431,7 +765,6 @@ func request_interact_nearby_structure() -> void:
 
 	var closest = _get_closest_interactable_structure()
 	if is_instance_valid(closest):
-		# --- STC ARCHEOTECH VAULT INTERACTION ---
 		if closest.is_in_group("stc_vaults") and closest.has_method("interact_relic"):
 			closest.interact_relic(self)
 			return
@@ -473,19 +806,16 @@ func _get_closest_interactable_structure() -> Node2D:
 	var candidates: Array[Node2D] = []
 	var mouse_world = get_global_mouse_position()
 
-	# 1. Check Base Core (Within 80px reach)
 	var base_node = get_tree().get_first_node_in_group("base")
 	if is_instance_valid(base_node):
 		if global_position.distance_to(base_node.global_position) <= 80.0:
 			candidates.append(base_node)
 
-	# 2. Check STC Vaults (Within 75px reach)
 	for vault in get_tree().get_nodes_in_group("stc_vaults"):
 		if is_instance_valid(vault) and not vault.get("is_cleansed"):
 			if global_position.distance_to(vault.global_position) <= 75.0:
 				candidates.append(vault)
 
-	# 3. Check Player Buildings (Within 75px reach)
 	for building in get_tree().get_nodes_in_group("buildings"):
 		if is_instance_valid(building) and not building.get("is_preview") and ("building_type" in building):
 			if global_position.distance_to(building.global_position) <= 75.0:
@@ -494,22 +824,16 @@ func _get_closest_interactable_structure() -> Node2D:
 	if candidates.is_empty():
 		return null
 
-	# If only one structure is in range, select it directly
 	if candidates.size() == 1:
 		return candidates[0]
 
-	# --- MOUSE-FOCUS REDUNDANCY ---
-	# If multiple structures are in range, pick the one the player is aiming at with the cursor
 	var best_candidate: Node2D = null
 	var best_score: float = 999999.0
 
 	for c in candidates:
 		var dist_to_mouse = mouse_world.distance_to(c.global_position)
 		var dist_to_player = global_position.distance_to(c.global_position)
-
-		# 75% priority to mouse aim direction, 25% to player proximity
 		var score = (dist_to_mouse * 0.75) + (dist_to_player * 0.25)
-
 		if score < best_score:
 			best_score = score
 			best_candidate = c
@@ -517,11 +841,10 @@ func _get_closest_interactable_structure() -> Node2D:
 	return best_candidate
 
 # ------------------------------------------------------------------------------
-# PROCESS & REAL-TIME PREVIEW
+# PROCESS & SISTER MOBA SYSTEMS
 # ------------------------------------------------------------------------------
 
 func _process(delta: float):
-# Handle Cybernetic Reboot Countdown
 	if is_dead:
 		if (not multiplayer.has_multiplayer_peer()) or multiplayer.is_server():
 			respawn_timer -= delta
@@ -533,10 +856,12 @@ func _process(delta: float):
 		hovered_interact_building = _get_closest_interactable_structure()
 		_process_camera_shake(delta)
 
+		if current_class == PlayerClass.SISTER_OF_BATTLE:
+			_process_sister_systems(delta)
+
 		if is_box_selecting:
 			box_select_current_world = get_global_mouse_position()
 			queue_redraw()
-
 
 	if orbital_strike_cooldown > 0.0:
 		orbital_strike_cooldown = maxf(0.0, orbital_strike_cooldown - delta)
@@ -570,8 +895,31 @@ func _process(delta: float):
 		if visual_sprite and visual_sprite.has_method("update_facing"):
 			visual_sprite.update_facing(mouse_pos)
 
-	if is_box_selecting:
-		queue_redraw()
+func _process_sister_systems(delta: float):
+	if dash_cooldown_timer > 0.0: dash_cooldown_timer = maxf(0.0, dash_cooldown_timer - delta)
+	if melta_cooldown_timer > 0.0: melta_cooldown_timer = maxf(0.0, melta_cooldown_timer - delta)
+	if holy_grenade_cooldown > 0.0: holy_grenade_cooldown = maxf(0.0, holy_grenade_cooldown - delta)
+	if miracle_act_cooldown > 0.0: miracle_act_cooldown = maxf(0.0, miracle_act_cooldown - delta)
+	if sister_ultimate_cooldown > 0.0: sister_ultimate_cooldown = maxf(0.0, sister_ultimate_cooldown - delta)
+	if holy_intervention_cooldown > 0.0: holy_intervention_cooldown = maxf(0.0, holy_intervention_cooldown - delta)
+
+	if is_ultimate_active:
+		ultimate_duration_left -= delta
+		if ultimate_duration_left <= 0.0:
+			is_ultimate_active = false
+
+	# Passive Faith Shield Regeneration
+	if faith_shield_current < faith_shield_max and not is_dead:
+		faith_shield_current = minf(faith_shield_max, faith_shield_current + faith_shield_regen_rate * delta)
+		if health_bar and health_bar.has_method("update_shield"):
+			health_bar.update_shield(int(faith_shield_current), int(faith_shield_max))
+
+	# Continuous Flamer Streaming
+	if flamer_active and _is_local_authority():
+		flamer_tick_timer -= delta
+		if flamer_tick_timer <= 0.0:
+			flamer_tick_timer = FLAMER_TICK_RATE
+			_execute_flamer_cone_tick()
 
 func _update_building_preview_position():
 	if not is_instance_valid(preview_instance):
@@ -592,7 +940,6 @@ func _update_building_preview_position():
 			snapped_pos = nearest_dep.global_position
 
 	preview_instance.global_position = snapped_pos
-
 	preview_validation_info = _validate_structure_placement(snapped_pos, selected_building_type)
 	preview_is_valid = preview_validation_info.valid
 
@@ -601,6 +948,17 @@ func _update_building_preview_position():
 	else:
 		preview_instance.modulate = Color(0.92, 0.22, 0.18, 0.55)
 
+@rpc("any_peer", "call_local", "reliable")
+func perform_holy_intervention(target_pos: Vector2):
+	var cd = 14.0 - (rank_intervention * 2.0) # 12s -> 10s -> 8s
+	holy_intervention_cooldown = cd
+	AudioManager.play_sfx("binary_canticle", target_pos, 2.0, 1.0)
+	
+	var relic = HolyRelicSanctuary.new()
+	relic.global_position = target_pos
+	relic.max_absorption = 150 + (rank_intervention * 100) # 250 -> 350 -> 450 DMG
+	get_parent().add_child(relic)
+	
 func _validate_structure_placement(target_pos: Vector2, b_type: int) -> Dictionary:
 	var info = GameData.STRUCTURE_INFO.get(b_type, {})
 	if info.is_empty():
@@ -700,7 +1058,6 @@ func _draw_rts_selection_box():
 	draw_rect(select_rect, col_fill, true)
 	draw_rect(select_rect, col_edge, false, 1.5)
 
-	# Corner bracket crosshairs on the selection box
 	var c = 6.0
 	draw_line(select_rect.position, select_rect.position + Vector2(c, 0), col_edge, 2.0)
 	draw_line(select_rect.position, select_rect.position + Vector2(0, c), col_edge, 2.0)
@@ -864,7 +1221,7 @@ func _draw_cursor_status_badge(snap_local: Vector2, badge_color: Color):
 	draw_string(font, badge_pos + Vector2(8, 12), text_str, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, badge_color)
 
 # ------------------------------------------------------------------------------
-# CAMERA, RTS INPUT & SELECTION
+# CAMERA, INPUT ROUTING & SELECTION
 # ------------------------------------------------------------------------------
 
 func _process_rts_camera_panning(delta: float):
@@ -900,13 +1257,11 @@ func _unhandled_input(event: InputEvent):
 	if not _is_local_authority(): return
 
 	if event is InputEventKey and event.pressed and not event.echo:
-		# 1. Close open UI / Map with ESC
 		if event.keycode == KEY_ESCAPE:
 			if _handle_modal_esc_close():
 				get_viewport().set_input_as_handled()
 				return
 
-		# 2. Toggle Fullscreen Tactical Map with 'M'
 		if event.keycode == KEY_M and not is_dead:
 			var m_ui = get_tree().get_first_node_in_group("minimap_ui")
 			if m_ui and m_ui.has_method("toggle_fullscreen_map"):
@@ -919,6 +1274,8 @@ func _unhandled_input(event: InputEvent):
 
 	if current_class == PlayerClass.RANGED:
 		_handle_rts_commander_input(event)
+	elif current_class == PlayerClass.SISTER_OF_BATTLE:
+		_handle_sister_input(event)
 	else:
 		_handle_techpriest_arpg_input(event)
 
@@ -926,6 +1283,205 @@ func set_building_type(type_id: int):
 	selected_building_type = type_id
 	if is_instance_valid(preview_instance):
 		preview_instance.building_type = type_id
+
+# ------------------------------------------------------------------------------
+# SISTER OF BATTLE INPUT & ABILITIES
+# ------------------------------------------------------------------------------
+
+func _handle_sister_input(event: InputEvent):
+	var mouse_world = get_global_mouse_position()
+
+	# LMB: Holy Flamer
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		flamer_active = event.pressed
+		rpc("sync_flamer_fx", flamer_active)
+		get_viewport().set_input_as_handled()
+		return
+
+	# RMB: Thermal Multi-Melta
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		if melta_cooldown_timer <= 0.0:
+			rpc("perform_melta_blast", mouse_world)
+		get_viewport().set_input_as_handled()
+		return
+
+	if event is InputEventKey and event.pressed:
+		# [SPACE] Seraphim Dash Mobility
+		if event.keycode == KEY_SPACE:
+			if rank_dash > 0 and dash_cooldown_timer <= 0.0:
+				var move_input = Vector2.ZERO
+				if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT): move_input.x -= 1
+				if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): move_input.x += 1
+				if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP): move_input.y -= 1
+				if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN): move_input.y += 1
+				var d_dir = move_input.normalized() if move_input != Vector2.ZERO else (mouse_world - global_position).normalized()
+				rpc("perform_seraphim_dash", d_dir)
+			get_viewport().set_input_as_handled()
+
+		# [1] Holy Intervention (Sanctuary Relic)
+		elif event.keycode in [KEY_1, KEY_KP_1]:
+			if rank_intervention > 0 and holy_intervention_cooldown <= 0.0:
+				rpc("perform_holy_intervention", mouse_world)
+			get_viewport().set_input_as_handled()
+
+		# [2] Holy Hand Grenade
+		elif event.keycode in [KEY_2, KEY_KP_2]:
+			if rank_grenade > 0 and holy_grenade_cooldown <= 0.0:
+				rpc("perform_holy_grenade", mouse_world)
+			get_viewport().set_input_as_handled()
+
+		# [3] Act of Faith
+		elif event.keycode in [KEY_3, KEY_KP_3]:
+			if rank_shield > 0 and miracle_act_cooldown <= 0.0:
+				rpc("perform_miracle_act")
+			get_viewport().set_input_as_handled()
+
+		# [4] Righteous Pyre Ultimate
+		elif event.keycode in [KEY_4, KEY_KP_4]:
+			if rank_ultimate > 0 and sister_ultimate_cooldown <= 0.0:
+				rpc("perform_sister_ultimate", mouse_world)
+			get_viewport().set_input_as_handled()
+
+		elif event.keycode == KEY_E:
+			request_interact_nearby_structure()
+			get_viewport().set_input_as_handled()
+
+@rpc("call_local", "unreliable")
+func sync_flamer_fx(is_firing: bool):
+	flamer_active = is_firing
+	if visual_sprite and "is_flamer_firing" in visual_sprite:
+		visual_sprite.is_flamer_firing = is_firing
+		visual_sprite.queue_redraw()
+
+func _execute_flamer_cone_tick():
+	AudioManager.play_sfx("radium_shot", global_position, -8.0, 0.6)
+	var mouse_world = get_global_mouse_position()
+	var aim_dir = (mouse_world - global_position).normalized()
+
+	var space = get_world_2d().direct_space_state
+	var shape = CircleShape2D.new()
+	shape.radius = FLAMER_RANGE
+	var q = PhysicsShapeQueryParameters2D.new()
+	q.shape = shape
+	q.transform = Transform2D(0.0, global_position)
+	q.collide_with_bodies = true
+	var results = space.intersect_shape(q, 32)
+
+	for hit in results:
+		var b = hit.collider
+		if is_instance_valid(b) and (b.is_in_group("enemies") or b.is_in_group("objectives")):
+			var to_enemy = (b.global_position - global_position).normalized()
+			if rad_to_deg(aim_dir.angle_to(to_enemy)) <= FLAMER_CONE_ANGLE * 0.5:
+				if b.has_method("take_damage"):
+					var dmg = FLAMER_DAMAGE if not is_ultimate_active else int(FLAMER_DAMAGE * 1.8)
+					b.take_damage(dmg, to_enemy * 45.0)
+
+@rpc("any_peer", "call_local", "reliable")
+func perform_melta_blast(target_pos: Vector2):
+	melta_cooldown_timer = MELTA_COOLDOWN
+	AudioManager.play_sfx("volkite_beam", global_position, 3.0, 0.75)
+	add_camera_trauma(0.40)
+
+	var dir = (target_pos - global_position).normalized()
+	var blast_end = global_position + (dir * 280.0)
+
+	# Spawn Melta Beam VFX
+	var m_fx = MeltaBeamFX.new()
+	m_fx.start_pos = global_position + Vector2(0, -2)
+	m_fx.end_pos = blast_end
+	get_parent().add_child(m_fx)
+
+	var space = get_world_2d().direct_space_state
+	var shape = SegmentShape2D.new()
+	shape.a = global_position
+	shape.b = blast_end
+	var q = PhysicsShapeQueryParameters2D.new()
+	q.shape = shape
+	q.collide_with_bodies = true
+	var hits = space.intersect_shape(q, 32)
+
+	for hit in hits:
+		var b = hit.collider
+		if is_instance_valid(b) and (b.is_in_group("enemies") or b.is_in_group("objectives")):
+			if b.has_method("take_damage"):
+				var dmg = MELTA_DAMAGE if not is_ultimate_active else int(MELTA_DAMAGE * 1.5)
+				b.take_damage(dmg, dir * 350.0)
+
+@rpc("any_peer", "call_local", "reliable")
+func perform_seraphim_dash(d_dir: Vector2):
+	# Cooldown scales with rank: 3.8s -> 3.1s -> 2.4s
+	dash_cooldown_timer = 4.5 - (rank_dash * 0.7)
+	is_dashing = true
+	dash_timer = dash_duration
+	dash_dir = d_dir
+	AudioManager.play_sfx("orbital_strike", global_position, -2.0, 2.0)
+	add_camera_trauma(0.25)
+
+	var burst_fx = DashIgnitionBurstFX.new()
+	burst_fx.start_pos = global_position
+	burst_fx.dash_dir = d_dir
+	get_parent().add_child(burst_fx)
+
+@rpc("any_peer", "call_local", "reliable")
+func perform_holy_grenade(target_pos: Vector2):
+	# Cooldown scales with rank: 10s -> 8.5s -> 7s
+	holy_grenade_cooldown = 11.5 - (rank_grenade * 1.5)
+	AudioManager.play_sfx("binary_canticle", target_pos, 2.0, 1.4)
+	
+	var hg = HolyGrenadeFX.new()
+	hg.start_pos = global_position
+	hg.target_pos = target_pos
+	# Blast radius and damage scale with rank
+	hg.blast_radius = 120.0 + (rank_grenade * 20.0) # 140px -> 160px -> 180px
+	hg.blast_damage = 120 + (rank_grenade * 50)      # 170 -> 220 -> 270 DMG
+	get_parent().add_child(hg)
+
+@rpc("any_peer", "call_local", "reliable")
+func perform_miracle_act():
+	miracle_act_cooldown = MIRACLE_COOLDOWN_MAX
+	faith_shield_current = faith_shield_max
+	AudioManager.play_sfx("binary_canticle", global_position, 2.0, 1.0)
+	var label = Label.new()
+	label.script = load("res://DamageNumber.gd")
+	label.global_position = global_position + Vector2(-30, -35)
+	get_parent().add_child(label)
+	label.text = "✨ ACT OF FAITH ✨"
+	label.label_settings = LabelSettings.new()
+	label.label_settings.font_color = Color(1.0, 0.85, 0.2)
+	label.label_settings.font_size = 14
+
+@rpc("any_peer", "call_local", "reliable")
+func perform_sister_ultimate(target_pos: Vector2):
+	# Cooldown scales with rank: 34s -> 28s
+	sister_ultimate_cooldown = 40.0 - (rank_ultimate * 6.0)
+	is_ultimate_active = true
+	ultimate_duration_left = 6.0
+	AudioManager.play_sfx("orbital_strike", target_pos, 4.0, 1.1)
+	add_camera_trauma(0.85)
+
+	var pyre_fx = RighteousPyreFX.new()
+	pyre_fx.target_pos = target_pos
+	get_parent().add_child(pyre_fx)
+
+	var ult_dmg = 220 + (rank_ultimate * 90) # Rank 1: 310 DMG, Rank 2: 400 DMG
+
+	var space = get_world_2d().direct_space_state
+	var shape = CircleShape2D.new()
+	shape.radius = 240.0
+	var q = PhysicsShapeQueryParameters2D.new()
+	q.shape = shape
+	q.transform = Transform2D(0.0, target_pos)
+	q.collide_with_bodies = true
+	var results = space.intersect_shape(q, 64)
+	for hit in results:
+		var b = hit.collider
+		if is_instance_valid(b) and (b.is_in_group("enemies") or b.is_in_group("objectives")):
+			if b.has_method("take_damage"):
+				b.take_damage(ult_dmg, (b.global_position - target_pos).normalized() * 500.0)
+
+# ------------------------------------------------------------------------------
+# RTS COMMANDER INPUT
+# ------------------------------------------------------------------------------
 
 func _handle_rts_commander_input(event: InputEvent):
 	var mouse_world = get_global_mouse_position()
@@ -1051,13 +1607,11 @@ func _toggle_doctrina_imperative() -> void:
 func _notification(what: int) -> void:
 	match what:
 		NOTIFICATION_APPLICATION_FOCUS_OUT:
-			# Instantly release cursor confinement to prevent AMD driver lockup
 			DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_VISIBLE)
 			is_box_selecting = false
 			is_mmb_dragging = false
 			
 		NOTIFICATION_APPLICATION_FOCUS_IN:
-			# Re-confine only if in an active match as Commander
 			if not is_dead and _is_local_authority():
 				var main_node = get_tree().get_first_node_in_group("main")
 				if main_node and main_node.get("match_started"):
@@ -1196,21 +1750,6 @@ func _issue_order_to_selection(target_pos: Vector2, is_attack_move: bool):
 	if multiplayer.has_multiplayer_peer():
 		rpc_id(1, "request_rts_move_order", unit_names, target_pos, is_attack_move)
 
-func _calculate_tactical_slot_offset(unit: Node2D, index: int, total_units: int, move_dir: Vector2) -> Vector2:
-	if total_units <= 1: return Vector2.ZERO
-
-	var perp = move_dir.orthogonal()
-	var col_spacing = 26.0
-	
-	var depth_offset = 0.0
-	if unit is KataphronUnit or unit is KastelanRobot:
-		depth_offset = 20.0
-	elif unit.get("unit_type") == GameData.CohortUnitType.RANGER:
-		depth_offset = -35.0
-
-	var lateral_slot = (index - (total_units * 0.5)) * col_spacing
-	return (perp * lateral_slot) + (move_dir * depth_offset)
-
 @rpc("any_peer", "call_local", "reliable")
 func request_rts_move_order(unit_names: Array, target_pos: Vector2, is_attack_move: bool):
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
@@ -1316,19 +1855,18 @@ func request_rts_hold_order(unit_names: Array):
 				elif "rts_is_moving" in candidate:
 					candidate.rts_is_moving = false
 				break
-# ==============================================================================
-# 1. RECRUIT BODYGUARD (MARSHAL: Z, X, C)
-# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# MARSHAL & TECH-PRIEST SPECIFIC RPCs
+# ------------------------------------------------------------------------------
+
 @rpc("any_peer", "call_local", "reliable")
 func request_recruit_bodyguard(role_id: int):
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
 		return
 
-	# Clean up any destroyed bodyguards from the list
 	active_bodyguards = active_bodyguards.filter(func(b): return is_instance_valid(b))
-
-	if active_bodyguards.size() >= GameData.MAX_BODYGUARDS:
-		return
+	if active_bodyguards.size() >= GameData.MAX_BODYGUARDS: return
 
 	var role_info = GameData.BODYGUARD_ROSTER.get(role_id, {})
 	if role_info.is_empty(): return
@@ -1341,7 +1879,6 @@ func request_recruit_bodyguard(role_id: int):
 		main_node = get_tree().get_first_node_in_group("main")
 	if not main_node: return
 
-	# Verify resources
 	if main_node.scrap_amount < scrap_cost or main_node.requisition_amount < req_cost:
 		return
 
@@ -1360,7 +1897,6 @@ func request_recruit_bodyguard(role_id: int):
 		"owner_id": int(name) if name.is_valid_int() else 1
 	}
 
-	# ONLY use MultiplayerSpawner if online; otherwise spawn locally via _custom_spawner
 	if main_node.spawner and multiplayer.has_multiplayer_peer():
 		main_node.spawner.spawn(bg_data)
 	else:
@@ -1604,27 +2140,6 @@ func sync_orbital_cooldown(new_cd: float):
 	orbital_strike_cooldown = new_cd
 
 @rpc("any_peer", "call_local", "reliable")
-func request_upgrade_bodyguards():
-	if multiplayer.is_server():
-		var main_node = get_parent()
-		if main_node and main_node.has_method("spend_requisition"):
-			if not main_node.spend_requisition(GameData.BODYGUARD_REQ_COST): return
-			bodyguard_level += 1
-			rpc("sync_bodyguard_level", bodyguard_level)
-			var offset = Vector2(35, 35) if active_bodyguards.size() > 0 else Vector2(-35, 0)
-			main_node.spawner.spawn({
-				"type": "bodyguard", "name": "Bodyguard_" + str(name) + "_" + str(randi()),
-				"position": global_position + offset, "owner_id": name.to_int()
-			})
-
-@rpc("any_peer", "call_local", "reliable")
-func sync_bodyguard_level(new_level: int):
-	bodyguard_level = new_level
-
-# ==============================================================================
-# 2. FABRICATE SERVO-SKULL (TECH-PRIEST: C)
-# ==============================================================================
-@rpc("any_peer", "call_local", "reliable")
 func request_spawn_servo_skull():
 	if current_class != PlayerClass.MELEE: return
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
@@ -1650,7 +2165,6 @@ func request_spawn_servo_skull():
 			"owner_id": int(name) if name.is_valid_int() else 1
 		}
 
-		# ONLY use MultiplayerSpawner if online; otherwise spawn locally via _custom_spawner
 		if main_node.spawner and multiplayer.has_multiplayer_peer():
 			main_node.spawner.spawn(skull_data)
 		else:
@@ -1661,37 +2175,6 @@ func request_spawn_servo_skull():
 		var hud = get_tree().get_first_node_in_group("ability_hud")
 		if hud and hud.has_method("refresh_hud_display"):
 			hud.refresh_hud_display()
-
-
-@rpc("any_peer", "call_local", "reliable")
-func request_upgrade_damage():
-	if multiplayer.is_server():
-		var main_node = get_parent()
-		if main_node and main_node.has_method("spend_requisition"):
-			if not main_node.spend_requisition(GameData.DAMAGE_UPGRADE_REQ_COST): return
-			damage_upgrade_level += 1
-			bullet_damage += 10
-			rpc("sync_damage_upgrade", damage_upgrade_level, bullet_damage)
-
-@rpc("any_peer", "call_local", "reliable")
-func sync_damage_upgrade(new_lvl: int, new_dmg: int):
-	damage_upgrade_level = new_lvl
-	bullet_damage = new_dmg
-
-@rpc("any_peer", "call_local", "reliable")
-func request_upgrade_speed():
-	if multiplayer.is_server():
-		var main_node = get_parent()
-		if main_node and main_node.has_method("spend_requisition"):
-			if not main_node.spend_requisition(GameData.SPEED_UPGRADE_REQ_COST): return
-			speed_upgrade_level += 1
-			speed += 35.0
-			rpc("sync_speed_upgrade", speed_upgrade_level, speed)
-
-@rpc("any_peer", "call_local", "reliable")
-func sync_speed_upgrade(new_lvl: int, new_spd: float):
-	speed_upgrade_level = new_lvl
-	speed = new_spd
 
 # ------------------------------------------------------------------------------
 # TOOLTIP & OVERLAY RENDERER
@@ -1721,19 +2204,16 @@ class TooltipOverlayRenderer extends Node2D:
 		var local_b_pos = b.global_position - p.global_position
 		var font = ThemeDB.fallback_font
 
-		# Determine if building has available upgrades or is at MAX tier
-		var is_interactive = true
 		var is_maxed = false
-
 		if b.is_in_group("stc_vaults"):
-			is_interactive = not b.get("is_cleansed")
+			pass
 		elif b.is_in_group("base") or ("building_type" in b and int(b.building_type) in [6, 7]):
-			is_interactive = true # Terminals always accessible
+			pass
 		elif "building_type" in b:
 			match int(b.building_type):
-				0: is_maxed = b.get("is_gate") # Gate is maxed
-				1, 3, 5: is_maxed = true       # Dynamos, Smelters, Antennas have no further upgrades
-				2: # Turret
+				0: is_maxed = b.get("is_gate")
+				1, 3, 5: is_maxed = true
+				2:
 					var lvl = b.get("turret_upgrade_level") if b.get("turret_upgrade_level") != null else 0
 					var spec = b.get("turret_spec") if b.get("turret_spec") != null else 0
 					is_maxed = (lvl >= 3 and spec != 0)
@@ -1745,21 +2225,17 @@ class TooltipOverlayRenderer extends Node2D:
 		elif "building_type" in b and int(b.building_type) in [1, 3, 6, 7]: ring_r = 34.0
 
 		if is_maxed:
-			# --- GREYED-OUT "MAX" BADGE ---
 			var grey_col = Color(0.42, 0.45, 0.50, 0.55)
 			draw_arc(local_b_pos, ring_r, 0.0, TAU, 24, grey_col, 1.0)
-			
 			var badge_pos = local_b_pos + Vector2(0, -ring_r - 8.0)
 			var badge_rect = Rect2(badge_pos - Vector2(12, 6), Vector2(24, 12))
 			draw_rect(badge_rect, Color(0.04, 0.05, 0.08, 0.90), true)
 			draw_rect(badge_rect, grey_col, false, 1.0)
 			draw_string(font, badge_pos + Vector2(-10, 3), "MAX", HORIZONTAL_ALIGNMENT_CENTER, 20, 7, grey_col)
 		else:
-			# --- ACTIVE CYAN RETICLE & [E] PROMPT ---
 			var ring_col = Color(0.20, 0.88, 1.0, 0.75 * pulse)
 			draw_arc(local_b_pos, ring_r, 0.0, TAU, 32, ring_col, 1.2)
 			draw_circle(local_b_pos, ring_r, Color(0.20, 0.88, 1.0, 0.05 * pulse))
-
 			for i in range(4):
 				var a = (float(i) * TAU / 4.0) + (Time.get_ticks_msec() * 0.001)
 				var pt = local_b_pos + Vector2(cos(a), sin(a)) * ring_r
@@ -1787,7 +2263,7 @@ class RTSWaypointMarker extends Node2D:
 	var elapsed: float = 0.0
 
 	func _ready() -> void:
-		z_index = 88 # Render hero and selection box above shadows and atmospheric dust
+		z_index = 88
 		var mat = CanvasItemMaterial.new()
 		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
 		material = mat
@@ -1830,3 +2306,164 @@ func _process_camera_shake(delta: float):
 	else:
 		camera.offset = Vector2.ZERO
 		camera.rotation = 0.0
+
+# ------------------------------------------------------------------------------
+# HOLY HAND GRENADE FX
+# ------------------------------------------------------------------------------
+
+class HolyGrenadeFX extends Node2D:
+	var start_pos: Vector2
+	var target_pos: Vector2
+	var elapsed: float = 0.0
+	var duration: float = 1.4
+	var has_exploded: bool = false
+	var spark_offsets: Array[Vector2] = []
+	var blast_radius: float = 140.0
+	var blast_damage: int = 180
+
+	func _ready() -> void:
+		z_index = 95
+		var mat = CanvasItemMaterial.new()
+		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+		material = mat
+		
+		for i in range(16):
+			var a = (float(i) * TAU / 16.0) + randf_range(-0.2, 0.2)
+			var spd = randf_range(110.0, 190.0)
+			spark_offsets.append(Vector2(cos(a), sin(a)) * spd)
+
+	func _process(delta: float) -> void:
+		elapsed += delta
+		queue_redraw()
+		if elapsed >= duration and not has_exploded:
+			has_exploded = true
+			_detonate()
+		elif elapsed >= duration + 0.65:
+			queue_free()
+
+	func _detonate():
+		AudioManager.play_sfx("orbital_strike", target_pos, 4.0, 1.25)
+		get_tree().call_group("players", "add_camera_trauma", 0.55)
+
+		var space = get_world_2d().direct_space_state
+		var shape = CircleShape2D.new()
+		shape.radius = blast_radius
+		var q = PhysicsShapeQueryParameters2D.new()
+		q.shape = shape
+		q.transform = Transform2D(0.0, target_pos)
+		q.collide_with_bodies = true
+		for hit in space.intersect_shape(q, 32):
+			var b = hit.collider
+			if is_instance_valid(b) and (b.is_in_group("enemies") or b.is_in_group("objectives")):
+				if b.has_method("take_damage"):
+					b.take_damage(blast_damage, (b.global_position - target_pos).normalized() * 480.0)
+
+	func _draw() -> void:
+		var t = clampf(elapsed / duration, 0.0, 1.0)
+		
+		if elapsed <= duration:
+			var ground_p = start_pos.lerp(target_pos, t)
+			var h = sin(t * PI) * 95.0
+			var grenade_p = ground_p + Vector2(0, -h)
+
+			draw_set_transform(ground_p, 0.0, Vector2(1.0, 0.5))
+			draw_circle(Vector2.ZERO, 5.0 * (1.0 - h / 95.0 * 0.5), Color(0.02, 0.03, 0.05, 0.4))
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+			draw_circle(grenade_p, 5.5, Color(0.85, 0.70, 0.20))
+			draw_circle(grenade_p, 3.2, Color(1.0, 0.90, 0.40))
+			draw_line(grenade_p + Vector2(-3, -8), grenade_p + Vector2(3, -8), Color.WHITE, 1.8)
+			draw_line(grenade_p + Vector2(0, -11), grenade_p + Vector2(0, -5), Color.WHITE, 1.8)
+
+			var pulse = 0.7 + sin(elapsed * 12.0) * 0.3
+			draw_arc(target_pos, blast_radius * (1.0 - t), 0, TAU, 24, Color(1.0, 0.88, 0.25, 0.7 * pulse), 1.4)
+			draw_circle(target_pos, 4.0, Color(1.0, 0.88, 0.25, 0.9 * pulse))
+		else:
+			var exp_t = clampf((elapsed - duration) / 0.65, 0.0, 1.0)
+			var exp_a = 1.0 - exp_t
+			var exp_r = blast_radius * (1.0 - pow(1.0 - exp_t, 3.0))
+
+			draw_circle(target_pos, exp_r * 1.1, Color(1.0, 0.55, 0.15, 0.25 * exp_a))
+			draw_circle(target_pos, exp_r * 0.75, Color(1.0, 0.88, 0.25, 0.60 * exp_a))
+			draw_circle(target_pos, exp_r * 0.35, Color(1.0, 1.0, 0.9, 0.95 * exp_a))
+
+			var cross_len = exp_r * 1.45
+			var cross_w = lerpf(18.0, 2.0, exp_t)
+			draw_line(target_pos - Vector2(cross_len, 0), target_pos + Vector2(cross_len, 0), Color(1.0, 0.95, 0.6, exp_a), cross_w)
+			draw_line(target_pos - Vector2(cross_len, 0), target_pos + Vector2(cross_len, 0), Color.WHITE, cross_w * 0.4)
+			draw_line(target_pos - Vector2(0, cross_len * 1.2), target_pos + Vector2(0, cross_len * 1.2), Color(1.0, 0.95, 0.6, exp_a), cross_w)
+			draw_line(target_pos - Vector2(0, cross_len * 1.2), target_pos + Vector2(0, cross_len * 1.2), Color.WHITE, cross_w * 0.4)
+
+			draw_arc(target_pos, exp_r, 0, TAU, 32, Color(1.0, 0.88, 0.25, exp_a), 2.2)
+			draw_arc(target_pos, exp_r * 0.65, 0, TAU, 24, Color(1.0, 1.0, 1.0, 0.8 * exp_a), 1.5)
+
+			for i in range(8):
+				var a = (float(i) * TAU / 8.0) + (exp_t * 1.2)
+				var p_in = target_pos + Vector2(cos(a), sin(a)) * (exp_r * 0.4)
+				var p_out = target_pos + Vector2(cos(a), sin(a)) * (exp_r * 0.95)
+				draw_line(p_in, p_out, Color(1.0, 0.88, 0.25, 0.8 * exp_a), 2.0)
+
+			for s_dir in spark_offsets:
+				var spark_pos = target_pos + (s_dir * exp_t)
+				draw_circle(spark_pos, lerpf(3.0, 0.5, exp_t), Color(1.0, 0.90, 0.35, exp_a))
+
+class HolyRelicSanctuary extends Node2D:
+	var duration: float = 6.0
+	var elapsed: float = 0.0
+	var max_absorption: int = 250
+	var current_absorbed: int = 0
+	var radius: float = 140.0
+	var has_detonated: bool = false
+
+	func _ready() -> void:
+		z_index = 85
+		var mat = CanvasItemMaterial.new()
+		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+		material = mat
+
+	func _process(delta: float) -> void:
+		elapsed += delta
+		
+		# Bullet Absorption (Checks both direct proximity & physics areas)
+		for bullet in get_tree().get_nodes_in_group("enemy_bullets"):
+			if is_instance_valid(bullet) and global_position.distance_to(bullet.global_position) <= radius:
+				var dmg = bullet.get("damage") if "damage" in bullet else 10
+				current_absorbed += dmg
+				bullet.queue_free()
+				AudioManager.play_sfx("hit", global_position, -4.0, 1.6)
+
+		if (elapsed >= duration or current_absorbed >= max_absorption) and not has_detonated:
+			has_detonated = true
+			_detonate()
+
+		queue_redraw()
+		if elapsed >= duration + 0.3:
+			queue_free()
+
+	func _detonate():
+		AudioManager.play_sfx("volkite_beam", global_position, 2.0, 1.2)
+		var space = get_world_2d().direct_space_state
+		var shape = CircleShape2D.new()
+		shape.radius = radius * 1.2
+		var q = PhysicsShapeQueryParameters2D.new()
+		q.shape = shape
+		q.transform = Transform2D(0.0, global_position)
+		q.collide_with_bodies = true
+		for hit in space.intersect_shape(q, 32):
+			var b = hit.collider
+			if is_instance_valid(b) and (b.is_in_group("enemies") or b.is_in_group("objectives")):
+				if b.has_method("take_damage"):
+					b.take_damage(80 + int(current_absorbed * 0.4), (b.global_position - global_position).normalized() * 300.0)
+
+	func _draw() -> void:
+		var pulse = 0.7 + sin(elapsed * 8.0) * 0.3
+		var alpha = clampf(1.0 - (float(current_absorbed) / float(max_absorption)), 0.2, 1.0)
+		
+		# Golden Shield Dome
+		draw_circle(Vector2.ZERO, radius, Color(1.0, 0.85, 0.2, 0.12 * alpha))
+		draw_arc(Vector2.ZERO, radius, 0, TAU, 32, Color(1.0, 0.88, 0.3, 0.75 * pulse * alpha), 1.8)
+		
+		# Holy Censer Relic at Center
+		draw_circle(Vector2.ZERO, 6.0, Color(0.82, 0.62, 0.24))
+		draw_line(Vector2(-4, 0), Vector2(4, 0), Color.WHITE, 1.5)
+		draw_line(Vector2(0, -6), Vector2(0, 4), Color.WHITE, 1.5)

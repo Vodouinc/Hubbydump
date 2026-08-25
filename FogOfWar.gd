@@ -67,7 +67,9 @@ func _setup_mesh_and_shader() -> void:
 	uniform vec4 color_shrouded : source_color = vec4(0.04, 0.05, 0.08, 0.72);
 
 	void fragment() {
-		vec4 f = texture(fog_texture, UV);
+		// Invert UV.y to match Godot 2D top-down grid orientation
+		vec2 fog_uv = vec2(UV.x, 1.0 - UV.y);
+		vec4 f = texture(fog_texture, fog_uv);
 		float active_vis = f.r; // Red channel = Live sight
 		float explored = f.g;   // Green channel = Explored memory
 
@@ -92,7 +94,9 @@ func _process(delta: float) -> void:
 		update_fog()
 
 func reset_fog() -> void:
-	_init_buffers()
+	raw_bytes.fill(0)
+	for i in range(GRID_SIZE * GRID_SIZE):
+		raw_bytes[i * 4 + 3] = 255
 	update_fog()
 
 func update_fog() -> void:
@@ -110,7 +114,7 @@ func update_fog() -> void:
 	if is_instance_valid(base_node):
 		_stamp_vision(base_node.global_position, VISION_RANGES["base"])
 
-	# 3. Stamp vision for Players (Follows player movement in real-time)
+	# 3. Stamp vision for Players
 	for p in get_tree().get_nodes_in_group("players"):
 		if is_instance_valid(p) and not p.get("is_dead"):
 			_stamp_vision(p.global_position, VISION_RANGES["player"])
@@ -130,7 +134,7 @@ func update_fog() -> void:
 		if is_instance_valid(unit) and not unit.is_in_group("players"):
 			_stamp_vision(unit.global_position, VISION_RANGES["scout"])
 
-	# 6. Re-create image from data and push update to GPU texture
+	# 6. Push buffer update to GPU texture
 	var img = Image.create_from_data(GRID_SIZE, GRID_SIZE, false, Image.FORMAT_RGBA8, raw_bytes)
 	fog_texture.update(img)
 

@@ -7,7 +7,8 @@ const DEFAULT_IP: String = "127.0.0.1"
 
 enum CharacterClass {
 	ADMECH_TECHPRIEST = 0,
-	SKITARII_MARSHAL = 1
+	SKITARII_MARSHAL = 1,
+	ADEPTA_SORORITAS = 2
 }
 
 const CLASS_DATA = {
@@ -19,7 +20,7 @@ const CLASS_DATA = {
 		"arsenal": "• Primary: Omnissian Power-Axe (Heavy Cleave & Armor Shred)\n• Secondary: Plasma Caliver (Auspex Target Lock & Telemetry)\n• Cybernetics: Autonomous Scrap-Harvesting Servo-Skulls\n• Fortifications: Barricades, Plasma Dynamos, Cognis Turrets, Foundries",
 		"stats": "🛡️ HP: 150   |   ⚡ SPD: 250   |   ⚙️ ROLE: Base-Builder & Frontline Tank",
 		"desc": "Master of the Machine Cult. Constructs interconnected Noospheric defense grids, energizes Aegis refractor shields, and purges heresy with heavy energised axe-strikes.",
-		"flavor": "\"There is no truth in flesh, only betrayal. There is no strength in flesh, only weakness. There is no constancy in flesh, only decay. There is no certainty in flesh but death.\"\n— The Hymn of Reforging"
+		"flavor": "\"There is no truth in flesh, only betrayal. There is no strength in flesh, only weakness.\"\n— The Hymn of Reforging"
 	},
 	CharacterClass.SKITARII_MARSHAL: {
 		"name": "Skitarii Marshal",
@@ -28,8 +29,18 @@ const CLASS_DATA = {
 		"unit_type_id": 1,
 		"arsenal": "• Primary: Radium Serpenta Carbine (Rapid Cellular Fallout)\n• Directives: Doctrina Imperative Auras (Conqueror DPS / Protector Armor)\n• Command: Priority Target Designation & Real-Time Cohort Control\n• Retinue: Galvanic Rangers, Sicarian Assassins, Vanguard Shock Troopers\n• Orbital: 220-DMG Fleet Telemetry Lance Strike",
 		"stats": "🛡️ HP: 90    |   ⚡ SPD: 340   |   🚩 ROLE: RTS Cohort Commander & Fleet Caller",
-		"desc": "Supreme battlefield cohort commander. Shifts sacred Doctrina canticles, coordinates squad movements, gathers combat telemetry for Requisition bounties, and calls down orbital bombardments.",
-		"flavor": "\"The Omnissiah guides our feet as He guides our guns. Let the binary canticle sing across the battlefield, and let our cohorts march unbroken through the fallout.\"\n— Marshal Directive 0101"
+		"desc": "Supreme battlefield cohort commander. Shifts sacred Doctrina canticles, coordinates squad movements, gathers combat telemetry, and calls down orbital bombardments.",
+		"flavor": "\"The Omnissiah guides our feet as He guides our guns.\"\n— Marshal Directive 0101"
+	},
+	CharacterClass.ADEPTA_SORORITAS: {
+		"name": "Sister Superior",
+		"faction": "Adepta Sororitas • Order of Our Martyred Lady",
+		"role": "One-Woman Army & Holy Pyre Juggernaut",
+		"unit_type_id": 6, # <-- Point to SISTER_OF_BATTLE in UnitSprite
+		"arsenal": "• Primary (LMB): Holy Promethium Flamer (Armor-Piercing Burn Cone)\n• Secondary (RMB): Thermal Multi-Melta (Instant Armor Liquefaction)\n• Ability [1]: Seraphim Rocket Dash (Thruster Jump & Fire Trail)\n• Ability [2]: Holy Hand Grenade (Cataclysmic Relic Blast)\n• Ability [3]: Act of Faith: Miracle Shield (Passive Dodge + Instant Regen)\n• Ultimate [4]: Righteous Pyre of Saint Katherine (Ascension Pillar)\n• Passive: Saint Celestine Martyrdom (Angelic Rebirth on Death)",
+		"stats": "🛡️ HP: 135   |   ⚡ SPD: 310   |   🔥 ROLE: MOBA Juggernaut & Swarm Melter",
+		"desc": "Zealous champion of the God-Emperor. Sweeps across the battlefield incinerating xenos swarms with promethium, shattering heavy armor with melta fire, and resurrecting as an angelic Living Saint.",
+		"flavor": "\"In the Emperor's name we cleanse with fire. Let none survive who defy His light.\"\n— Battle Hymn of the Martyred Lady"
 	}
 }
 
@@ -488,6 +499,13 @@ func _build_singleplayer_menu_ui():
 	sk_choice_btn.pressed.connect(func(): _select_sp_class(CharacterClass.SKITARII_MARSHAL))
 	left_card.add_child(sk_choice_btn)
 
+	var sob_choice_btn = Button.new()
+	sob_choice_btn.text = "SISTER SUPERIOR"
+	sob_choice_btn.custom_minimum_size = Vector2(0, 36)
+	sob_choice_btn.pressed.connect(func(): _select_sp_class(CharacterClass.ADEPTA_SORORITAS))
+	left_card.add_child(sob_choice_btn)
+
+
 	var preview_panel = PanelContainer.new()
 	preview_panel.custom_minimum_size = Vector2(250, 220)
 	preview_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -755,6 +773,11 @@ func _build_procedural_lobby_ui():
 	tp_btn.text = "TECH-PRIEST"
 	tp_btn.pressed.connect(func(): _select_class_local(CharacterClass.ADMECH_TECHPRIEST))
 	class_btn_hbox.add_child(tp_btn)
+
+	var sob_btn = Button.new()
+	sob_btn.text = "SISTER"
+	sob_btn.pressed.connect(func(): _select_class_local(CharacterClass.ADEPTA_SORORITAS))
+	class_btn_hbox.add_child(sob_btn)
 
 	var sk_btn = Button.new()
 	sk_btn.text = "MARSHAL"
@@ -1339,7 +1362,8 @@ func _custom_spawner(data) -> Node:
 			player.name = str(peer_id)
 			var chosen_class = data.get("class", CharacterClass.ADMECH_TECHPRIEST)
 			
-			player.current_class = 0 if chosen_class == CharacterClass.ADMECH_TECHPRIEST else 1
+			# Assign the selected class ID directly
+			player.current_class = int(chosen_class)
 			if player.has_method("set_player_class"):
 				player.set_player_class(player.current_class)
 			

@@ -348,48 +348,41 @@ const TECH_DATA: Array[Dictionary] = [
 		"name": "Aegis Refractor Shields",
 		"cost": 20,
 		"rune": "🛡️",
-		"desc": "Generates a regenerating blue energy shield (40% max HP) on all structures connected to the Noosphere. Recharges after 6s out of combat."
+		"desc": "Generates a regenerating blue energy shield (40% max HP) on all structures connected to the Noosphere."
 	},
 	{
 		"id": 1,
-		"name": "Cognis Laser Arrays",
-		"cost": 30,
-		"rune": "⚡",
-		"desc": "Connected Turrets emit a continuous 40 DPS cutting laser at priority targets in addition to standard munitions."
-	},
-	{
-		"id": 2,
 		"name": "Necro-Mechanic Nanobots",
-		"cost": 40,
+		"cost": 35,
 		"rune": "🔧",
 		"desc": "Sacred nanobot swarms slowly self-repair (3.5 HP/sec) all damaged Noosphere structures when out of combat."
 	},
 	{
-		"id": 3,
+		"id": 2,
 		"name": "Galvanic Scrap Siphon",
-		"cost": 25,
+		"cost": 20,
 		"rune": "🧲",
-		"desc": "Expands the magnetic scrap retrieval range of all Distributors & Antennas by +75% (220px -> 385px) and boosts pull velocity by +50%."
+		"desc": "Expands magnetic scrap retrieval range of Distributors & Antennas by +75% (220px -> 385px)."
 	},
 	{
-		"id": 4,
+		"id": 3,
 		"name": "Electrified Aegis Mesh",
 		"cost": 25,
 		"rune": "⚡",
-		"desc": "Noosphere-connected Barricades & Gates electrify with active arcs, shocking melee attackers for 12 DPS and applying a 30% movement slow."
+		"desc": "Noosphere-connected Barricades & Gates electrify with active arcs, shocking melee attackers for 12 DPS."
+	},
+	{
+		"id": 4,
+		"name": "Adamantine Spikes & Mantlets",
+		"cost": 25,
+		"rune": "⚔️",
+		"desc": "Barricades sprout recoil spikes (18 DMG to melee attackers) and grant -35% ranged damage reduction."
 	},
 	{
 		"id": 5,
-		"name": "Adamantine Spikes & Mantlets",
-		"cost": 20,
-		"rune": "⚔️",
-		"desc": "Barricades sprout recoil spikes (18 DMG to melee attackers) and grant -35% ranged damage reduction (Trench Cover) to nearby allies."
-	},
-	{
-		"id": 6,
 		"name": "Servitor Noosphere Targeting Uplink",
 		"cost": 30,
 		"rune": "👁️",
-		"desc": "Hardwires turret servitor implants into the live Noosphere grid. Batteries prioritize tactical targets per weapon role and immediately lock onto painted targets."
+		"desc": "Hardwires turret servitors into the Noosphere. Batteries prioritize priority targets and painted enemies."
 	}
 ]

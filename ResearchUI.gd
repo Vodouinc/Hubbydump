@@ -97,11 +97,11 @@ func _process(_delta: float):
 		var current_req = main_node.requisition_amount if main_node else 0
 		var current_unlocks = [
 			main_node.get("tech_shields_unlocked") if main_node else false,
-			main_node.get("tech_lasers_unlocked") if main_node else false,
 			main_node.get("tech_nanobots_unlocked") if main_node else false,
 			main_node.get("tech_magnet_unlocked") if main_node else false,
 			main_node.get("tech_electro_barricades_unlocked") if main_node else false,
-			main_node.get("tech_spikes_cover_unlocked") if main_node else false
+			main_node.get("tech_spikes_cover_unlocked") if main_node else false,
+			main_node.get("tech_targeting_uplink_unlocked") if main_node else false
 		]
 
 		if current_req != last_cached_req or current_unlocks != last_cached_unlocks:
@@ -123,11 +123,11 @@ func refresh_tech_cards():
 	var current_req = main_node.requisition_amount if main_node else 0
 	var unlocks = [
 		main_node.get("tech_shields_unlocked") if main_node else false,
-		main_node.get("tech_lasers_unlocked") if main_node else false,
 		main_node.get("tech_nanobots_unlocked") if main_node else false,
 		main_node.get("tech_magnet_unlocked") if main_node else false,
 		main_node.get("tech_electro_barricades_unlocked") if main_node else false,
-		main_node.get("tech_spikes_cover_unlocked") if main_node else false
+		main_node.get("tech_spikes_cover_unlocked") if main_node else false,
+		main_node.get("tech_targeting_uplink_unlocked") if main_node else false
 	]
 
 	for child in cards_grid.get_children():

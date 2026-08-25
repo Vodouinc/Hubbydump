@@ -55,6 +55,8 @@ var stc_aegis_unlocked: bool = false
 var stc_volkite_unlocked: bool = false
 var is_warboss_spawned: bool = false
 
+var stc_aegis_core_unlocked: bool = false # STC Vault 2
+
 var scrap_amount: int = 75
 var requisition_amount: int = 25 
 
@@ -63,6 +65,9 @@ var base_radar_level: int = 0
 var tech_waaagh_reader_unlocked: bool = false
 var wave_hud_node: Control = null
 var total_wave_enemies_cached: int = 0
+
+var wave_break_timer: float = 0.0
+var is_on_wave_break: bool = false
 
 var flanker_raid_timer: float = 30.0
 
@@ -194,6 +199,13 @@ func _process(delta: float) -> void:
 			if wave_prep_timer <= 0.0:
 				is_wave_preparing = false
 				_begin_wave_spawning()
+			_broadcast_wave_hud()
+
+		elif is_on_wave_break:
+			wave_break_timer -= delta
+			if wave_break_timer <= 0.0:
+				is_on_wave_break = false
+				start_next_wave()
 			_broadcast_wave_hud()
 
 		if is_wave_active:
@@ -581,13 +593,14 @@ func _select_sp_class(c_class: CharacterClass):
 		sp_sprite_preview.queue_redraw()
 
 func _start_singleplayer_game():
-	_safe_cleanup_peer()
-	player_classes.clear()
-	player_ready.clear()
+	# 1. Silently start the host server in the background
+	_on_host_pressed()
 
+	# 2. Lock in your chosen class and mark ready
 	player_classes[1] = my_selected_class
 	player_ready[1] = true
 
+	# 3. Skip the lobby entirely and launch straight onto the battlefield
 	_hide_all_menus()
 	_begin_match()
 
@@ -1560,11 +1573,11 @@ func _spawn_ork_mega_camp():
 
 	var dir_to_base = (base_pos - camp_pos).normalized()
 	
-	# Spawn 3 Strategic Satellite Camps around the Citadel
+	# 1. Spawn 3 Strategic Satellite Camps around the Citadel
 	var satellite_data = [
-		{"name": "SquigPit", "pos": camp_pos + dir_to_base.rotated(1.8) * 160.0, "type": "squig_pit"},
-		{"name": "StormboyPad", "pos": camp_pos + dir_to_base.rotated(-1.8) * 160.0, "type": "stormboy_pad"},
-		{"name": "MekFoundry", "pos": camp_pos - (dir_to_base * 160.0), "type": "mek_foundry"}
+		{"name": "SquigPit", "pos": camp_pos + dir_to_base.rotated(1.8) * 160.0, "type": "squig_pit", "guard_type": 1},
+		{"name": "StormboyPad", "pos": camp_pos + dir_to_base.rotated(-1.8) * 160.0, "type": "stormboy_pad", "guard_type": 3},
+		{"name": "MekFoundry", "pos": camp_pos - (dir_to_base * 160.0), "type": "mek_foundry", "guard_type": 4}
 	]
 
 	for sat in satellite_data:
@@ -1573,6 +1586,31 @@ func _spawn_ork_mega_camp():
 			"name": sat["name"],
 			"position": sat["pos"].snapped(Vector2(32, 32)),
 			"sub_type": sat["type"]
+		})
+		
+		# Spawn 2 dedicated guards per satellite camp
+		for g in range(2):
+			spawn_entity({
+				"type": "enemy",
+				"name": "SatGuard_" + str(randi()),
+				"enemy_type": sat["guard_type"],
+				"position": sat["pos"] + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(25.0, 60.0),
+				"is_objective_guard": true,
+				"guard_anchor": sat["pos"],
+				"counts_toward_wave": false
+			})
+
+	# 2. Spawn Heavy Citadel Core Warband Garrison (2 Nobz, 4 Boyz, 2 Squigs)
+	var citadel_garrison = [4, 4, 2, 2, 2, 2, 1, 1]
+	for g_type in citadel_garrison:
+		spawn_entity({
+			"type": "enemy",
+			"name": "CitadelGarrison_" + str(randi()),
+			"enemy_type": g_type,
+			"position": camp_pos + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(40.0, 110.0),
+			"is_objective_guard": true,
+			"guard_anchor": camp_pos,
+			"counts_toward_wave": false
 		})
 
 	# Register on Minimap
@@ -1613,6 +1651,21 @@ func start_next_wave():
 			rpc("sync_incoming_threat_lanes", [])
 		else:
 			sync_incoming_threat_lanes([])
+
+func get_waaagh_speed_multiplier() -> float:
+	var totems = get_active_totem_count()
+	# Each active WAAAGH! totem increases all Ork speed by +10%
+	return 1.0 + (totems * 0.10)
+
+func get_waaagh_damage_multiplier() -> float:
+	var totems = get_active_totem_count()
+	# Each active WAAAGH! totem increases all Ork damage by +12%
+	return 1.0 + (totems * 0.12)
+
+func get_waaagh_intensity_pct() -> float:
+	var totems = get_active_totem_count()
+	# 0 to 100% based on active totems + current wave escalation
+	return clampf((totems * 0.25) + (float(current_wave) / float(max_waves)) * 0.35, 0.0, 1.0)
 
 # Dynamic TAB Break Pacing (Breather vs High-Tension)
 func _get_wave_break_duration(wave: int) -> float:
@@ -1673,34 +1726,32 @@ func _spawn_tactical_squad(squad: Dictionary):
 	var base_node = get_tree().get_first_node_in_group("base")
 	var base_pos = base_node.global_position if base_node else Vector2(500, 500)
 	
-	# Spawn origin is always at the Ork Citadel (or fallback edge)
 	var spawn_origin = citadel.global_position if is_instance_valid(citadel) else (base_pos + Vector2(2200, 0))
 	var squad_center = spawn_origin + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(20.0, 60.0)
 
-	# --- FLANKING WAYPOINT CALCULATION ---
+	# Pick lane angle
 	var assigned_lane_angle = spawn_lane_angles.pick_random() if not spawn_lane_angles.is_empty() else randf() * TAU
 	var citadel_angle = (spawn_origin - base_pos).angle()
 	var angle_diff = fposmod(assigned_lane_angle - citadel_angle + PI, TAU) - PI
 	
 	var waypoints: Array[Vector2] = []
 	
-	# If the assigned lane is on a different side of the map, route around the perimeter
-	if abs(angle_diff) > 0.45:
-		# Mid-orbit waypoint along the wilderness rim
+	# Only generate intermediate waypoint if lane is significantly on the other side
+	if abs(angle_diff) > 0.6:
 		var mid_angle = citadel_angle + (angle_diff * 0.5)
-		waypoints.append(base_pos + Vector2.RIGHT.rotated(mid_angle) * 2350.0)
-		# Lane entry staging waypoint
-		waypoints.append(base_pos + Vector2.RIGHT.rotated(assigned_lane_angle) * 1550.0)
+		waypoints.append(base_pos + Vector2.RIGHT.rotated(mid_angle) * 2100.0)
+		waypoints.append(base_pos + Vector2.RIGHT.rotated(assigned_lane_angle) * 1400.0)
+	else:
+		# Direct corridor to assigned staging
+		waypoints.append(base_pos + Vector2.RIGHT.rotated(assigned_lane_angle) * 1400.0)
 
-	# --- SPAWN SQUAD ---
 	for unit_type in units:
-		# Check if satellite destruction removes this unit type
 		var final_type = unit_type
-		if unit_type == 1 and not has_squig_pit: final_type = 0     # No Squigs -> Gretchin
-		if unit_type == 3 and not has_stormboy_pad: final_type = 2  # No Stormboyz -> Boyz
+		if unit_type == 1 and not has_squig_pit: final_type = 0
+		if unit_type == 3 and not has_stormboy_pad: final_type = 2
 
 		enemy_count += 1
-		var spawn_pos = squad_center + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(15.0, 50.0)
+		var spawn_pos = squad_center + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(15.0, 45.0)
 		
 		var enemy_node = spawn_entity({
 			"type": "enemy",
@@ -1711,7 +1762,7 @@ func _spawn_tactical_squad(squad: Dictionary):
 			"counts_toward_wave": true
 		})
 
-		if is_instance_valid(enemy_node) and "march_waypoints" in enemy_node:
+		if is_instance_valid(enemy_node):
 			enemy_node.march_waypoints = waypoints.duplicate()
 			if enemy_node.has_method("_update_nav_target"):
 				enemy_node._update_nav_target()
@@ -1846,6 +1897,10 @@ func _announce_tactical_update(text_msg: String):
 func notify_enemy_defeated():
 	if (not multiplayer.has_multiplayer_peer()) or multiplayer.is_server():
 		active_enemies = max(0, active_enemies - 1)
+		
+		# IMMEDIATELY REFRESH HUD SO TOP BAR TICKS DOWN IN REAL TIME
+		_broadcast_wave_hud()
+
 		if enemies_left_to_spawn <= 0 and active_enemies == 0 and is_wave_active:
 			is_wave_active = false
 			if multiplayer.has_multiplayer_peer():
@@ -1853,17 +1908,17 @@ func notify_enemy_defeated():
 			else:
 				sync_incoming_threat_lanes([])
 			
-			# --- WAVE COMPLETION TITHE BONUS ---
+			# Wave Clear Resource Bounty
 			var wave_scrap_bounty = 20 + (current_wave * 6)
 			var wave_req_bounty = 6 + (current_wave * 2)
 			add_scrap(wave_scrap_bounty)
 			add_requisition(wave_req_bounty)
-			# -----------------------------------
 
+			# Start Break Countdown
 			var break_duration = _get_wave_break_duration(current_wave)
-			var break_tween = create_tween()
-			break_tween.tween_interval(break_duration)
-			break_tween.tween_callback(start_next_wave)
+			wave_break_timer = break_duration
+			is_on_wave_break = true
+			_broadcast_wave_hud()
 
 func _build_spawn_lanes(wave: int, player_count: int) -> Array[float]:
 	var lanes: Array[float] = []
@@ -2046,17 +2101,21 @@ func get_active_totem_count() -> int:
 
 func _broadcast_wave_hud():
 	var title = WAVE_NARRATIVE_TITLES[clampi(current_wave - 1, 0, WAVE_NARRATIVE_TITLES.size() - 1)]
+	var contacts_remaining = active_enemies + enemies_left_to_spawn
+
 	if multiplayer.has_multiplayer_peer() and multiplayer.is_server():
 		rpc("sync_wave_telemetry",
-			current_wave, max_waves, title, is_wave_preparing, wave_prep_timer,
-			(not is_wave_active and not is_wave_preparing), 0.0,
-			active_enemies + enemies_left_to_spawn, total_wave_enemies_cached
+			current_wave, max_waves, title, 
+			is_wave_preparing, wave_prep_timer,
+			is_on_wave_break, wave_break_timer,
+			contacts_remaining, total_wave_enemies_cached
 		)
 	else:
 		sync_wave_telemetry(
-			current_wave, max_waves, title, is_wave_preparing, wave_prep_timer,
-			(not is_wave_active and not is_wave_preparing), 0.0,
-			active_enemies + enemies_left_to_spawn, total_wave_enemies_cached
+			current_wave, max_waves, title, 
+			is_wave_preparing, wave_prep_timer,
+			is_on_wave_break, wave_break_timer,
+			contacts_remaining, total_wave_enemies_cached
 		)
 
 @rpc("any_peer", "call_local", "reliable")
@@ -2136,27 +2195,38 @@ func sync_sanctum_tech(radar_lvl: int, waaagh_reader: bool):
 func unlock_tech(tech_index: int):
 	match tech_index:
 		0: tech_shields_unlocked = true
-		1: tech_lasers_unlocked = true
-		2: tech_nanobots_unlocked = true
-		3: tech_magnet_unlocked = true
-		4: tech_electro_barricades_unlocked = true
-		5: tech_spikes_cover_unlocked = true
-		6: tech_targeting_uplink_unlocked = true
+		1: tech_nanobots_unlocked = true
+		2: tech_magnet_unlocked = true
+		3: tech_electro_barricades_unlocked = true
+		4: tech_spikes_cover_unlocked = true
+		5: tech_targeting_uplink_unlocked = true
+		6: tech_lasers_unlocked = true        # STC Vault 1: Cutting Lasers
+		7: stc_aegis_core_unlocked = true      # STC Vault 2: Master Aegis Core
 		
 	if multiplayer.has_multiplayer_peer():
-		rpc("sync_tech_tree", tech_shields_unlocked, tech_lasers_unlocked, tech_nanobots_unlocked, tech_magnet_unlocked, tech_electro_barricades_unlocked, tech_spikes_cover_unlocked, tech_targeting_uplink_unlocked)
+		rpc("sync_tech_tree", tech_shields_unlocked, tech_nanobots_unlocked, tech_magnet_unlocked, tech_electro_barricades_unlocked, tech_spikes_cover_unlocked, tech_targeting_uplink_unlocked, tech_lasers_unlocked, stc_aegis_core_unlocked)
 	else:
-		sync_tech_tree(tech_shields_unlocked, tech_lasers_unlocked, tech_nanobots_unlocked, tech_magnet_unlocked, tech_electro_barricades_unlocked, tech_spikes_cover_unlocked, tech_targeting_uplink_unlocked)
+		sync_tech_tree(tech_shields_unlocked, tech_nanobots_unlocked, tech_magnet_unlocked, tech_electro_barricades_unlocked, tech_spikes_cover_unlocked, tech_targeting_uplink_unlocked, tech_lasers_unlocked, stc_aegis_core_unlocked)
 
 @rpc("call_local", "reliable")
-func sync_tech_tree(shields: bool, lasers: bool, nanobots: bool, magnet: bool, electro_walls: bool, spikes_cover: bool, targeting: bool = false):
+func sync_tech_tree(
+	shields: bool = false, 
+	nanobots: bool = false, 
+	magnet: bool = false, 
+	electro_walls: bool = false, 
+	spikes_cover: bool = false, 
+	targeting: bool = false, 
+	lasers: bool = false, 
+	stc_core: bool = false
+):
 	tech_shields_unlocked = shields
-	tech_lasers_unlocked = lasers
 	tech_nanobots_unlocked = nanobots
 	tech_magnet_unlocked = magnet
 	tech_electro_barricades_unlocked = electro_walls
 	tech_spikes_cover_unlocked = spikes_cover
 	tech_targeting_uplink_unlocked = targeting
+	tech_lasers_unlocked = lasers
+	stc_aegis_core_unlocked = stc_core
 	get_tree().call_group("buildings", "_apply_tech_stats")
 	get_tree().call_group("research_ui", "refresh_tech_cards")
 
@@ -2421,11 +2491,11 @@ class STCVault extends StaticBody2D:
 		
 		var col = CollisionShape2D.new()
 		var shape = CircleShape2D.new()
-		shape.radius = 28.0
+		shape.radius = 32.0
 		col.shape = shape
 		add_child(col)
 
-	func interact_relic(player_node: Node2D) -> void:
+	func interact_relic(_player_node: Node2D) -> void:
 		if is_cleansed: return
 		is_cleansed = true
 		AudioManager.play_sfx("volkite_beam", global_position, 3.0, 1.2)
@@ -2433,20 +2503,27 @@ class STCVault extends StaticBody2D:
 		var main_node = get_tree().get_first_node_in_group("main")
 		if main_node:
 			if relic_id == 0:
-				main_node.unlock_tech(0) # Aegis Overcharge
-				main_node._announce_tactical_update("⚡ STC RECOVERED: AEGIS REFRACTOR SHIELDS ONLINE!")
+				main_node.unlock_tech(6) # Unlocks Cutting Lasers (ID 6)
+				main_node._announce_tactical_update("⚡ STC RECOVERED: COGNIS THERMAL LASER ARRAYS ONLINE!")
 			else:
-				main_node.unlock_tech(1) # Volkite Array
-				main_node._announce_tactical_update("⚡ STC RECOVERED: VOLKITE BEAM TURRETS UNLOCKED!")
+				main_node.unlock_tech(7) # Unlocks Master Aegis Core (ID 7)
+				main_node._announce_tactical_update("⚡ STC RECOVERED: MASTER AEGIS FORTRESS CORE ONLINE (+75 WALL HP)!")
 		queue_redraw()
 
 	func _draw() -> void:
 		var pulse = 0.7 + sin(Time.get_ticks_msec() * 0.005) * 0.3
 		var col = Color(0.20, 0.88, 1.0, 0.9 * pulse) if not is_cleansed else Color(0.35, 0.95, 0.45)
+		
+		# Ancient Sanctified Plinth
 		draw_rect(Rect2(-24, -24, 48, 48), Color(0.08, 0.10, 0.14), true)
 		draw_rect(Rect2(-24, -24, 48, 48), col, false, 2.0)
 		draw_circle(Vector2.ZERO, 12.0, col)
 		draw_arc(Vector2.ZERO, 20.0, 0, TAU, 16, col, 1.2)
+		
+		# Floating Hologram Prompt if unclaimed
+		if not is_cleansed:
+			var font = ThemeDB.fallback_font
+			draw_string(font, Vector2(-36, -32), "[E] CLAIM STC", HORIZONTAL_ALIGNMENT_CENTER, 72, 8, Color(0.20, 0.88, 1.0))
 
 
 class OrkSatelliteCamp extends StaticBody2D:

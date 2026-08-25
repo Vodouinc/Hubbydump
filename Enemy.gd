@@ -94,17 +94,13 @@ func _on_nav_map_changed(_map_rid: RID) -> void:
 func _update_nav_target() -> void:
 	if not nav_agent: return
 
-	# 1. If currently marching along perimeter waypoints toward an assigned lane
-	if not march_waypoints.is_empty():
+	# 1. Advance through perimeter march waypoints
+	while not march_waypoints.is_empty():
 		var target_pt = march_waypoints[0]
-		if global_position.distance_to(target_pt) <= 120.0:
+		# If within 220px of waypoint or nav is finished, advance to next waypoint
+		if global_position.distance_to(target_pt) <= 220.0 or (nav_agent.is_navigation_finished() and global_position.distance_to(target_pt) <= 400.0):
 			march_waypoints.pop_front()
-			if not march_waypoints.is_empty():
-				target_pt = march_waypoints[0]
-			else:
-				target_pt = Vector2.ZERO
-
-		if target_pt != Vector2.ZERO:
+		else:
 			nav_agent.target_position = target_pt
 			return
 
@@ -281,25 +277,27 @@ func _physics_process(delta: float) -> void:
 			_execute_stormboy_jump(to_base)
 			return
 
-	# --- 1. GRETCHIN ORGANIC AI (Panic, Scurry, Meatshield Cover) ---
+
+	# --- PERIODIC REPATHING (Runs for ALL enemies to advance waypoints) ---
+	repath_timer += delta
+	if repath_timer >= 0.5:
+		repath_timer = randf_range(-0.1, 0.1)
+		if not is_objective_guard:
+			_update_nav_target()
+
+	# --- 1. GRETCHIN ORGANIC AI ---
 	if type == EnemyType.GRETCHIN:
 		var target_vel = _process_organic_gretchin_steering(delta, current_speed)
 		velocity = velocity.lerp(target_vel, 7.5 * delta)
 
-	# --- 2. STANDARD HORDE PATHFINDING (Boyz, Squigs, Nobz, Stormboyz) ---
+	# --- 2. STANDARD HORDE PATHFINDING (Boyz, Squigs, Nobz, Stormboyz, Warboss) ---
 	else:
-		# Periodic path refresh to stay on track around winding mountains
-		repath_timer += delta
-		if repath_timer >= 0.6:
-			repath_timer = randf_range(-0.1, 0.1)
-			_update_nav_target()
-
 		var move_dir = Vector2.ZERO
 		if nav_agent and not nav_agent.is_navigation_finished():
 			var next_path = nav_agent.get_next_path_position()
 			move_dir = global_position.direction_to(next_path)
 			if global_position.distance_to(next_path) < 12.0:
-				move_dir = global_position.direction_to(base_node.global_position)
+				move_dir = global_position.direction_to(base_node.global_position if is_instance_valid(base_node) else global_position)
 		else:
 			var blocking_wall = _find_nearest_building_in_range(110.0)
 			if is_instance_valid(blocking_wall):
@@ -309,7 +307,7 @@ func _physics_process(delta: float) -> void:
 					perform_attack(blocking_wall)
 					return
 			else:
-				move_dir = global_position.direction_to(base_node.global_position)
+				move_dir = global_position.direction_to(base_node.global_position if is_instance_valid(base_node) else global_position)
 
 		var lateral_offset = move_dir.orthogonal() * sin(Time.get_ticks_msec() * 0.003 + lateral_fanning_seed) * 0.18
 		move_dir = (move_dir + lateral_offset).normalized()

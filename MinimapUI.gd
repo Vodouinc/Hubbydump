@@ -9,6 +9,7 @@ var is_fullscreen: bool = false
 var base_position: Vector2 = Vector2(500, 500)
 var citadel_cached_pos: Vector2 = Vector2.ZERO
 var has_citadel_pos: bool = false
+var is_dragging_minimap: bool = false
 
 # Palette Constants
 const COL_BG = Color(0.04, 0.05, 0.08, 0.92)
@@ -20,7 +21,7 @@ const COL_SCRAP = Color(1.00, 0.82, 0.20, 0.85)
 const COL_ENEMY = Color(0.92, 0.22, 0.18, 0.90)
 const COL_CITADEL = Color(1.0, 0.15, 0.15, 1.0)
 const COL_TOTEM = Color(0.25, 0.95, 0.55, 1.0)
-const COL_CAM_BOX = Color(1.0, 1.0, 1.0, 0.45)
+const COL_CAM_BOX = Color(1.0, 1.0, 1.0, 0.65)
 const COL_OFFLINE = Color(0.92, 0.22, 0.18, 0.85)
 
 func _ready() -> void:
@@ -37,6 +38,7 @@ func _process(_delta: float) -> void:
 
 func toggle_fullscreen_map() -> void:
 	is_fullscreen = not is_fullscreen
+	is_dragging_minimap = false
 	queue_redraw()
 
 func register_citadel_position(pos: Vector2) -> void:
@@ -44,12 +46,68 @@ func register_citadel_position(pos: Vector2) -> void:
 	has_citadel_pos = true
 	queue_redraw()
 
+# Convert world coordinates into Minimap pixel coordinates
 func _world_to_map(world_pos: Vector2, map_center: Vector2, map_radius_px: float) -> Vector2:
 	var delta_pos = world_pos - base_position
 	var norm_x = clampf(delta_pos.x / world_radius, -1.0, 1.0)
 	var norm_y = clampf(delta_pos.y / world_radius, -1.0, 1.0)
 	return map_center + Vector2(norm_x, norm_y) * map_radius_px
 
+# Convert Minimap pixel coordinates back into World coordinates
+func _map_to_world(map_pos: Vector2, map_center: Vector2, map_radius_px: float) -> Vector2:
+	var offset = map_pos - map_center
+	var norm_x = clampf(offset.x / map_radius_px, -1.0, 1.0)
+	var norm_y = clampf(offset.y / map_radius_px, -1.0, 1.0)
+	return base_position + Vector2(norm_x * world_radius, norm_y * world_radius)
+
+# ==============================================================================
+# RELIABLE GLOBAL INPUT HANDLING (Bypasses Control Sizing Limits)
+# ==============================================================================
+func _input(event: InputEvent) -> void:
+	var vp_size = get_viewport_rect().size
+	var map_rect: Rect2
+	var map_center: Vector2
+	var map_rad_px: float
+
+	if is_fullscreen:
+		map_rect = Rect2((vp_size - fullscreen_map_size) * 0.5, fullscreen_map_size)
+		map_center = map_rect.position + (fullscreen_map_size * 0.5)
+		map_rad_px = fullscreen_map_size.x * 0.48
+	else:
+		var margin = 24.0 # Match the 24px margin
+		map_rect = Rect2(vp_size.x - corner_map_size.x - margin, vp_size.y - corner_map_size.y - margin, corner_map_size.x, corner_map_size.y)
+		map_center = map_rect.position + (corner_map_size * 0.5)
+		map_rad_px = corner_map_size.x * 0.48
+
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			if map_rect.has_point(event.position):
+				is_dragging_minimap = true
+				_pan_camera_to_map_pos(event.position, map_center, map_rad_px)
+				get_viewport().set_input_as_handled()
+		else:
+			if is_dragging_minimap:
+				is_dragging_minimap = false
+				get_viewport().set_input_as_handled()
+
+	elif event is InputEventMouseMotion and is_dragging_minimap:
+		_pan_camera_to_map_pos(event.position, map_center, map_rad_px)
+		get_viewport().set_input_as_handled()
+
+func _pan_camera_to_map_pos(map_pos: Vector2, map_center: Vector2, map_rad_px: float) -> void:
+	var target_world_pos = _map_to_world(map_pos, map_center, map_rad_px)
+	
+	for p in get_tree().get_nodes_in_group("players"):
+		if is_instance_valid(p) and ((not multiplayer.has_multiplayer_peer()) or p.is_multiplayer_authority()):
+			var cam = p.get_node_or_null("Camera2D") as Camera2D
+			if is_instance_valid(cam):
+				cam.top_level = true # Detach so camera can freely peek anywhere
+				cam.global_position = target_world_pos
+				break
+
+# ==============================================================================
+# VISUAL RENDERING
+# ==============================================================================
 func _draw() -> void:
 	var vp_size = get_viewport_rect().size
 	var base_node = get_tree().get_first_node_in_group("base")
@@ -64,11 +122,8 @@ func _draw() -> void:
 	else:
 		_draw_corner_radar_minimap(vp_size, radar_lvl)
 
-# ==============================================================================
-# 1. CORNER MINIMAP (BOTTOM-RIGHT)
-# ==============================================================================
 func _draw_corner_radar_minimap(vp_size: Vector2, radar_lvl: int) -> void:
-	var margin = 16.0
+	var margin = 24.0 # Increased from 16.0 for clean screen padding
 	var map_rect = Rect2(vp_size.x - corner_map_size.x - margin, vp_size.y - corner_map_size.y - margin, corner_map_size.x, corner_map_size.y)
 	var map_center = map_rect.position + (corner_map_size * 0.5)
 	var map_rad_px = corner_map_size.x * 0.48
@@ -83,18 +138,15 @@ func _draw_corner_radar_minimap(vp_size: Vector2, radar_lvl: int) -> void:
 		var pulse = 0.6 + sin(Time.get_ticks_msec() * 0.008) * 0.4
 		draw_rect(map_rect, Color(0.92, 0.22, 0.18, 0.08 * pulse), true)
 		
-		# Draw basic crosshair
 		draw_line(Vector2(map_rect.position.x, map_center.y), Vector2(map_rect.end.x, map_center.y), Color(0.92, 0.22, 0.18, 0.25), 1.0)
 		draw_line(Vector2(map_center.x, map_rect.position.y), Vector2(map_center.x, map_rect.end.y), Color(0.92, 0.22, 0.18, 0.25), 1.0)
 		
-		# Only draw base & player in local proximity
 		var base_p = _world_to_map(base_position, map_center, map_rad_px)
 		draw_circle(base_p, 3.5, COL_BASE)
 		for p in get_tree().get_nodes_in_group("players"):
 			if is_instance_valid(p):
 				draw_circle(_world_to_map(p.global_position, map_center, map_rad_px), 2.5, COL_PLAYER)
 
-		# Offline warning text
 		draw_string(font, map_rect.position + Vector2(10, map_rect.size.y * 0.45), "⚠️ AUSPEX OFFLINE", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.92, 0.22, 0.18, 0.9 * pulse))
 		draw_string(font, map_rect.position + Vector2(10, map_rect.size.y * 0.58), "Upgrade Base [E]", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.85, 0.75, 0.65, 0.8))
 		return
@@ -106,16 +158,11 @@ func _draw_corner_radar_minimap(vp_size: Vector2, radar_lvl: int) -> void:
 	draw_line(Vector2(map_rect.position.x, map_center.y), Vector2(map_rect.end.x, map_center.y), COL_GRID, 1.0)
 	draw_line(Vector2(map_center.x, map_rect.position.y), Vector2(map_center.x, map_rect.end.y), COL_GRID, 1.0)
 
-	# Draw entities gated by radar level
 	_draw_map_entities(map_center, map_rad_px, 1.0, radar_lvl)
 
-	# Status text
 	var status_str = "LVL %d AUSPEX [M]" % radar_lvl
 	draw_string(font, map_rect.position + Vector2(6, 14), status_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 8, Color(0.82, 0.62, 0.24, 0.85))
 
-# ==============================================================================
-# 2. FULLSCREEN TACTICAL WAR-ROOM MAP (PRESS 'M')
-# ==============================================================================
 func _draw_fullscreen_tactical_map(vp_size: Vector2, radar_lvl: int) -> void:
 	draw_rect(Rect2(Vector2.ZERO, vp_size), Color(0.02, 0.03, 0.05, 0.90), true)
 
@@ -149,32 +196,24 @@ func _draw_fullscreen_tactical_map(vp_size: Vector2, radar_lvl: int) -> void:
 
 	_draw_map_entities(map_center, map_rad_px, 2.4, radar_lvl)
 
-	# Header & Dynamic Legend
 	var header_txt = "◆ OMNISSIAN TACTICAL HOLO-AUSPEX (RADAR LVL %d) ◆ [M / ESC TO CLOSE]" % radar_lvl
 	draw_string(font, map_rect.position + Vector2(16, 24), header_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.20, 0.88, 1.0))
 
 	var legend_txt = "🔵 SANCTUM  |  🟢 CADRE  |  🟡 SCRAP"
-	if radar_lvl >= 2:
-		legend_txt += "  |  🔴 ENEMY BLIPS"
-	if radar_lvl >= 3:
-		legend_txt += "  |  💀 ORK CITADEL  |  💎 WAAAGH! IDOLS"
+	if radar_lvl >= 2: legend_txt += "  |  🔴 ENEMY BLIPS"
+	if radar_lvl >= 3: legend_txt += "  |  💀 ORK CITADEL  |  💎 WAAAGH! IDOLS"
 	draw_string(font, map_rect.position + Vector2(16, map_rect.size.y - 12), legend_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.82, 0.75, 0.60))
 
-# ==============================================================================
-# 3. GATED ENTITY RENDERING
-# ==============================================================================
 func _draw_map_entities(map_center: Vector2, map_rad_px: float, scale_mult: float, radar_lvl: int) -> void:
 	# -------------------------------------------------------------------------
 	# RADAR LEVEL 1+: Resource Deposits, Friendly Buildings, Base, Players
 	# -------------------------------------------------------------------------
 	if radar_lvl >= 1:
-		# 1. Scrap Deposits
 		for dep in get_tree().get_nodes_in_group("scrap_deposits"):
 			if is_instance_valid(dep):
 				var p = _world_to_map(dep.global_position, map_center, map_rad_px)
 				draw_circle(p, 2.2 * scale_mult, COL_SCRAP)
 
-		# 2. Player Barricades & Buildings
 		for b in get_tree().get_nodes_in_group("buildings"):
 			if is_instance_valid(b) and not b.get("is_preview"):
 				var p = _world_to_map(b.global_position, map_center, map_rad_px)
@@ -187,18 +226,18 @@ func _draw_map_entities(map_center: Vector2, map_rad_px: float, scale_mult: floa
 	draw_circle(base_p, 4.0 * scale_mult, COL_BASE)
 	draw_arc(base_p, 6.0 * scale_mult, 0, TAU, 16, COL_BASE, 1.2)
 
-	# Players & Camera Frustum Box
+	# Players & Camera Viewport Box
 	for p in get_tree().get_nodes_in_group("players"):
 		if is_instance_valid(p):
 			var pp = _world_to_map(p.global_position, map_center, map_rad_px)
 			draw_circle(pp, 3.2 * scale_mult, COL_PLAYER)
 			
-			var cam = p.get_node_or_null("Camera2D")
-			if is_instance_valid(cam) and cam.is_current() and radar_lvl >= 1:
+			var cam = p.get_node_or_null("Camera2D") as Camera2D
+			if is_instance_valid(cam) and radar_lvl >= 1:
 				var vp_half = (get_viewport_rect().size * (1.0 / cam.zoom.x)) * 0.5
 				var cam_p1 = _world_to_map(cam.global_position - vp_half, map_center, map_rad_px)
 				var cam_p2 = _world_to_map(cam.global_position + vp_half, map_center, map_rad_px)
-				draw_rect(Rect2(cam_p1, cam_p2 - cam_p1), COL_CAM_BOX, false, 1.2)
+				draw_rect(Rect2(cam_p1, cam_p2 - cam_p1), COL_CAM_BOX, false, 1.2 * scale_mult)
 
 	# -------------------------------------------------------------------------
 	# RADAR LEVEL 2+: Real-Time Enemy Horde Blips
@@ -213,7 +252,6 @@ func _draw_map_entities(map_center: Vector2, map_rad_px: float, scale_mult: floa
 	# RADAR LEVEL 3+: Global Threat Telemetry (Ork Citadel & WAAAGH! Totems)
 	# -------------------------------------------------------------------------
 	if radar_lvl >= 3:
-		# 1. WAAAGH! Totems / Idols
 		for idol in get_tree().get_nodes_in_group("waaagh_totems"):
 			if is_instance_valid(idol):
 				var p = _world_to_map(idol.global_position, map_center, map_rad_px)
@@ -225,7 +263,6 @@ func _draw_map_entities(map_center: Vector2, map_rad_px: float, scale_mult: floa
 				]
 				draw_colored_polygon(diamond, COL_TOTEM)
 
-		# 2. ORK CITADEL MEGA-CAMP
 		var cit = get_tree().get_first_node_in_group("ork_citadel")
 		var cit_pos = cit.global_position if is_instance_valid(cit) else citadel_cached_pos
 

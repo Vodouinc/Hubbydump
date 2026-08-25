@@ -388,6 +388,12 @@ func _apply_tech_stats():
 	var main_node = get_tree().get_first_node_in_group("main")
 	if not main_node: return
 
+	# STC Master-Core: +75 Bonus Fortification HP
+	if main_node.get("stc_aegis_core_unlocked"):
+		var info = GameData.STRUCTURE_INFO.get(int(building_type), null)
+		var base_hp = info["max_hp"] if info else 100
+		max_health = base_hp + 75
+
 	if is_noosphere_connected and main_node.get("tech_shields_unlocked"):
 		max_shield = max_health * 0.4
 		if current_shield <= 0.0:

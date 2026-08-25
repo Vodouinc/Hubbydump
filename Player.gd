@@ -294,6 +294,16 @@ func _process_techpriest_movement(delta: float) -> void:
 	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN): direction.y += 1
 
 	if direction != Vector2.ZERO:
+		# If camera was detached to peek at the map, re-attach it when you move
+		if camera and camera.top_level:
+			camera.top_level = false
+			camera.position = Vector2.ZERO
+
+		direction = direction.normalized()
+		var corner_nudge = _calculate_corner_nudge(direction)
+		velocity = (direction + corner_nudge).normalized() * speed
+
+	if direction != Vector2.ZERO:
 		direction = direction.normalized()
 		var corner_nudge = _calculate_corner_nudge(direction)
 		velocity = (direction + corner_nudge).normalized() * speed
@@ -421,6 +431,11 @@ func request_interact_nearby_structure() -> void:
 
 	var closest = _get_closest_interactable_structure()
 	if is_instance_valid(closest):
+		# --- STC ARCHEOTECH VAULT INTERACTION ---
+		if closest.is_in_group("stc_vaults") and closest.has_method("interact_relic"):
+			closest.interact_relic(self)
+			return
+
 		if closest.is_in_group("base"):
 			if b_ui: b_ui.open_terminal(closest)
 			return
@@ -455,24 +470,51 @@ func request_interact_nearby_structure() -> void:
 				if c_ui: c_ui.open_terminal(closest)
 
 func _get_closest_interactable_structure() -> Node2D:
-	var closest: Node2D = null
-	var closest_dist := 110.0
+	var candidates: Array[Node2D] = []
+	var mouse_world = get_global_mouse_position()
 
+	# 1. Check Base Core (Within 80px reach)
 	var base_node = get_tree().get_first_node_in_group("base")
 	if is_instance_valid(base_node):
-		var dist_to_base = global_position.distance_to(base_node.global_position)
-		if dist_to_base <= 90.0:
-			closest_dist = dist_to_base
-			closest = base_node
+		if global_position.distance_to(base_node.global_position) <= 80.0:
+			candidates.append(base_node)
 
+	# 2. Check STC Vaults (Within 75px reach)
+	for vault in get_tree().get_nodes_in_group("stc_vaults"):
+		if is_instance_valid(vault) and not vault.get("is_cleansed"):
+			if global_position.distance_to(vault.global_position) <= 75.0:
+				candidates.append(vault)
+
+	# 3. Check Player Buildings (Within 75px reach)
 	for building in get_tree().get_nodes_in_group("buildings"):
-		if not is_instance_valid(building) or not ("building_type" in building): continue
-		var dist = global_position.distance_to(building.global_position)
-		if dist < closest_dist:
-			closest_dist = dist
-			closest = building
-			
-	return closest
+		if is_instance_valid(building) and not building.get("is_preview") and ("building_type" in building):
+			if global_position.distance_to(building.global_position) <= 75.0:
+				candidates.append(building)
+
+	if candidates.is_empty():
+		return null
+
+	# If only one structure is in range, select it directly
+	if candidates.size() == 1:
+		return candidates[0]
+
+	# --- MOUSE-FOCUS REDUNDANCY ---
+	# If multiple structures are in range, pick the one the player is aiming at with the cursor
+	var best_candidate: Node2D = null
+	var best_score: float = 999999.0
+
+	for c in candidates:
+		var dist_to_mouse = mouse_world.distance_to(c.global_position)
+		var dist_to_player = global_position.distance_to(c.global_position)
+
+		# 75% priority to mouse aim direction, 25% to player proximity
+		var score = (dist_to_mouse * 0.75) + (dist_to_player * 0.25)
+
+		if score < best_score:
+			best_score = score
+			best_candidate = c
+
+	return best_candidate
 
 # ------------------------------------------------------------------------------
 # PROCESS & REAL-TIME PREVIEW
@@ -1677,28 +1719,57 @@ class TooltipOverlayRenderer extends Node2D:
 
 		var b = p.hovered_interact_building
 		var local_b_pos = b.global_position - p.global_position
+		var font = ThemeDB.fallback_font
+
+		# Determine if building has available upgrades or is at MAX tier
+		var is_interactive = true
+		var is_maxed = false
+
+		if b.is_in_group("stc_vaults"):
+			is_interactive = not b.get("is_cleansed")
+		elif b.is_in_group("base") or ("building_type" in b and int(b.building_type) in [6, 7]):
+			is_interactive = true # Terminals always accessible
+		elif "building_type" in b:
+			match int(b.building_type):
+				0: is_maxed = b.get("is_gate") # Gate is maxed
+				1, 3, 5: is_maxed = true       # Dynamos, Smelters, Antennas have no further upgrades
+				2: # Turret
+					var lvl = b.get("turret_upgrade_level") if b.get("turret_upgrade_level") != null else 0
+					var spec = b.get("turret_spec") if b.get("turret_spec") != null else 0
+					is_maxed = (lvl >= 3 and spec != 0)
+				4: is_maxed = false
 
 		var pulse = 0.7 + sin(Time.get_ticks_msec() * 0.007) * 0.3
-		var ring_col = Color(0.20, 0.88, 1.0, 0.65 * pulse)
-		var ring_r = 28.0
-		if b.is_in_group("base"): ring_r = 55.0
-		elif "building_type" in b and int(b.building_type) in [1, 3, 6, 7]: ring_r = 38.0
+		var ring_r = 26.0
+		if b.is_in_group("base"): ring_r = 52.0
+		elif "building_type" in b and int(b.building_type) in [1, 3, 6, 7]: ring_r = 34.0
 
-		draw_arc(local_b_pos, ring_r, 0.0, TAU, 32, ring_col, 1.2)
-		draw_circle(local_b_pos, ring_r, Color(0.20, 0.88, 1.0, 0.06 * pulse))
+		if is_maxed:
+			# --- GREYED-OUT "MAX" BADGE ---
+			var grey_col = Color(0.42, 0.45, 0.50, 0.55)
+			draw_arc(local_b_pos, ring_r, 0.0, TAU, 24, grey_col, 1.0)
+			
+			var badge_pos = local_b_pos + Vector2(0, -ring_r - 8.0)
+			var badge_rect = Rect2(badge_pos - Vector2(12, 6), Vector2(24, 12))
+			draw_rect(badge_rect, Color(0.04, 0.05, 0.08, 0.90), true)
+			draw_rect(badge_rect, grey_col, false, 1.0)
+			draw_string(font, badge_pos + Vector2(-10, 3), "MAX", HORIZONTAL_ALIGNMENT_CENTER, 20, 7, grey_col)
+		else:
+			# --- ACTIVE CYAN RETICLE & [E] PROMPT ---
+			var ring_col = Color(0.20, 0.88, 1.0, 0.75 * pulse)
+			draw_arc(local_b_pos, ring_r, 0.0, TAU, 32, ring_col, 1.2)
+			draw_circle(local_b_pos, ring_r, Color(0.20, 0.88, 1.0, 0.05 * pulse))
 
-		for i in range(4):
-			var a = (float(i) * TAU / 4.0) + (Time.get_ticks_msec() * 0.001)
-			var pt = local_b_pos + Vector2(cos(a), sin(a)) * ring_r
-			draw_circle(pt, 2.0, ring_col)
+			for i in range(4):
+				var a = (float(i) * TAU / 4.0) + (Time.get_ticks_msec() * 0.001)
+				var pt = local_b_pos + Vector2(cos(a), sin(a)) * ring_r
+				draw_circle(pt, 1.8, ring_col)
 
-		var icon_pos = local_b_pos + Vector2(0, -ring_r - 12.0)
-		var key_rect = Rect2(icon_pos - Vector2(10, 10), Vector2(20, 20))
-		draw_rect(key_rect, Color(0.04, 0.05, 0.08, 0.92), true)
-		draw_rect(key_rect, ring_col, false, 1.2)
-
-		var font = ThemeDB.fallback_font
-		draw_string(font, key_rect.position + Vector2(0, 14), "E", HORIZONTAL_ALIGNMENT_CENTER, 20, 10, ring_col)
+			var icon_pos = local_b_pos + Vector2(0, -ring_r - 10.0)
+			var key_rect = Rect2(icon_pos - Vector2(8, 8), Vector2(16, 16))
+			draw_rect(key_rect, Color(0.04, 0.05, 0.08, 0.92), true)
+			draw_rect(key_rect, ring_col, false, 1.0)
+			draw_string(font, key_rect.position + Vector2(0, 11), "E", HORIZONTAL_ALIGNMENT_CENTER, 16, 8, ring_col)
 
 # ------------------------------------------------------------------------------
 # RTS WAYPOINT MARKER & CAMERA SHAKE

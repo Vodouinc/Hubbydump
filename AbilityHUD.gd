@@ -217,23 +217,25 @@ func _build_context_interaction_banner():
 	context_banner = PanelContainer.new()
 	context_banner.name = "ContextInteractionBanner"
 	context_banner.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	context_banner.offset_left = -340
-	context_banner.offset_right = 340
-	context_banner.offset_top = -118
-	context_banner.offset_bottom = -88
+	context_banner.offset_left = -230
+	context_banner.offset_right = 230
+	context_banner.offset_top = -106
+	context_banner.offset_bottom = -82
 	context_banner.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	context_banner.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	context_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	
 	var sb = StyleBoxFlat.new()
-	sb.bg_color = Color(0.04, 0.05, 0.08, 0.95)
-	sb.border_color = Color(0.20, 0.88, 1.0)
+	sb.bg_color = Color(0.04, 0.05, 0.08, 0.94)
+	sb.border_color = Color(0.20, 0.88, 1.0, 0.8)
 	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(4)
-	sb.content_margin_left = 14
-	sb.content_margin_right = 14
-	sb.content_margin_top = 4
-	sb.content_margin_bottom = 4
+	sb.set_corner_radius_all(3)
+	sb.content_margin_left = 10
+	sb.content_margin_right = 10
+	sb.content_margin_top = 2
+	sb.content_margin_bottom = 2
+	sb.shadow_color = Color(0, 0, 0, 0.5)
+	sb.shadow_size = 4
 	context_banner.add_theme_stylebox_override("panel", sb)
 	add_child(context_banner)
 
@@ -242,7 +244,7 @@ func _build_context_interaction_banner():
 	context_label.text = ""
 	context_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	context_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	context_label.add_theme_font_size_override("font_size", 10)
+	context_label.add_theme_font_size_override("font_size", 8)
 	context_banner.add_child(context_label)
 	context_banner.hide()
 
@@ -251,42 +253,33 @@ func _build_top_left_resource_monitor():
 	top_panel.name = "TopLeftResourceMonitor"
 	top_panel.z_index = 100
 	top_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	top_panel.offset_left = 16
-	top_panel.offset_top = 12
-	top_panel.offset_right = 320
-	top_panel.offset_bottom = 56
+	top_panel.offset_left = 12
+	top_panel.offset_top = 8
+	top_panel.offset_right = 265
+	top_panel.offset_bottom = 36
 	top_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	
 	var sb = StyleBoxFlat.new()
-	sb.bg_color = Color(0.04, 0.05, 0.08, 0.96)
-	sb.border_color = Color(0.82, 0.62, 0.24)
+	sb.bg_color = Color(0.04, 0.05, 0.08, 0.92)
+	sb.border_color = Color(0.24, 0.28, 0.35)
 	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(4)
+	sb.set_corner_radius_all(3)
 	sb.content_margin_left = 10
 	sb.content_margin_right = 10
-	sb.content_margin_top = 6
-	sb.content_margin_bottom = 6
-	sb.shadow_color = Color(0, 0, 0, 0.6)
+	sb.content_margin_top = 2
+	sb.content_margin_bottom = 2
+	sb.shadow_color = Color(0, 0, 0, 0.5)
 	sb.shadow_size = 4
 	top_panel.add_theme_stylebox_override("panel", sb)
 	add_child(top_panel)
 
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 2)
-	top_panel.add_child(vbox)
-
-	var title_lbl = Label.new()
-	title_lbl.text = "◆ FORGE RESERVES & TELEMETRY ◆"
-	title_lbl.add_theme_font_size_override("font_size", 8)
-	title_lbl.add_theme_color_override("font_color", Color(0.82, 0.62, 0.24))
-	vbox.add_child(title_lbl)
-
 	global_res_label = Label.new()
 	global_res_label.name = "GlobalResLabel"
-	global_res_label.text = "⚙ 40 SCRAP   ⚡ 10 REQ   🤖 0/12"
-	global_res_label.add_theme_font_size_override("font_size", 11)
+	global_res_label.text = "⚙ 75 SCRAP   ⚡ 25 REQ   🤖 0/12"
+	global_res_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	global_res_label.add_theme_font_size_override("font_size", 9)
 	global_res_label.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
-	vbox.add_child(global_res_label)
+	top_panel.add_child(global_res_label)
 
 func _create_pod_panel(pod_name: String, parent_container: Container) -> PanelContainer:
 	var pc = PanelContainer.new()
@@ -565,51 +558,60 @@ func _update_context_banner_display(is_techpriest: bool, cur_scrap: int, cur_req
 
 	var prompt_text = ""
 	var can_afford = true
+	var is_maxed = false
 
-	if b.is_in_group("base"):
-		prompt_text = "◆ MAIN SANCTUM: PRESS [E] TO ACCESS AUSPEX PROTOCOLS ◆"
+	if b.is_in_group("stc_vaults"):
+		prompt_text = "◆ STC VAULT: PRESS [E] TO CLAIM ARCHEOTECH ◆"
+	elif b.is_in_group("base"):
+		prompt_text = "◆ SANCTUM: PRESS [E] TO ACCESS AUSPEX PROTOCOLS ◆"
 	else:
 		var b_type = int(b.building_type) if "building_type" in b else -1
 		match b_type:
 			0:
 				if b.get("is_gate"):
-					prompt_text = "◆ MOTORIZED GATE: PROXIMITY SENSOR OPERATIONAL ◆"
+					is_maxed = true
+					prompt_text = "◆ MOTORIZED GATE: OPERATIONAL ◆"
 				else:
 					can_afford = (cur_scrap >= 10 and cur_req >= 5)
-					prompt_text = "◆ BARRICADE: PRESS [E] TO UPGRADE TO MOTORIZED GATE (⚙ 10 SCRAP   ⚡ 5 REQ) ◆"
+					prompt_text = "◆ BARRICADE: [E] UPGRADE GATE (⚙ 10  ⚡ 5) ◆"
 			1:
-				prompt_text = "◆ PLASMA DYNAMO: GENERATING +2 REQUISITION / CYCLE ◆"
+				is_maxed = true
+				prompt_text = "◆ PLASMA DYNAMO: +2 REQ / CYCLE ◆"
 			2:
 				var lvl = b.turret_upgrade_level if "turret_upgrade_level" in b else 0
 				var spec = b.turret_spec if "turret_spec" in b else 0
 				if lvl < 3:
 					var cost = GameData.TURRET_UPGRADE_COSTS[lvl]
 					can_afford = (cur_req >= cost)
-					prompt_text = "◆ COGNIS BATTERY (TIER %d): PRESS [E] TO UPGRADE (⚡ %d REQ) ◆" % [lvl + 1, cost]
+					prompt_text = "◆ COGNIS (T%d): [E] UPGRADE (⚡ %d REQ) ◆" % [lvl + 1, cost]
 				elif spec == 0:
 					can_afford = (cur_req >= GameData.TURRET_SPEC_REQ_COST)
-					prompt_text = "◆ COGNIS BATTERY (MAX): PRESS [E] TO SANCTIFY WEAPON PROTOCOL (⚡ 35 REQ) ◆"
+					prompt_text = "◆ COGNIS (MAX): [E] SPECIALIZE (⚡ 35 REQ) ◆"
 				else:
+					is_maxed = true
 					var spec_info = GameData.TURRET_SPEC_INFO.get(spec, {})
-					prompt_text = "◆ %s: SPECIALIZATION ACTIVE ◆" % spec_info.get("name", "COGNIS BATTERY").to_upper()
+					prompt_text = "◆ %s: OPTIMAL ◆" % spec_info.get("name", "COGNIS").to_upper()
 			3:
-				prompt_text = "◆ PROMETHEUM SMELTER: EXTRACTING +5 SCRAP / CYCLE ◆"
+				is_maxed = true
+				prompt_text = "◆ SCRAP SMELTER: +5 SCRAP / CYCLE ◆"
 			4:
 				can_afford = (cur_req >= 15)
-				prompt_text = "◆ ELECTRO-RELAY: PRESS [E] TO UPGRADE TO ANTENNA MAST (⚡ 15 REQ) ◆"
+				prompt_text = "◆ ELECTRO-RELAY: [E] UPGRADE ANTENNA (⚡ 15) ◆"
 			5:
-				prompt_text = "◆ NOOSPHERE MAST: BROADCASTING MOTIVE FORCE GRID (240px) ◆"
+				is_maxed = true
+				prompt_text = "◆ NOOSPHERE ANTENNA: 240px GRID ACTIVE ◆"
 			6:
-				prompt_text = "◆ TECH SHRINE: PRESS [E] TO ACCESS NOOSPHERE RESEARCH ARCHIVES ◆"
+				prompt_text = "◆ TECH SHRINE: [E] RESEARCH ARCHIVES ◆"
 			7:
-				prompt_text = "◆ LEGIO CYBERNETICA: PRESS [E] TO ACCESS COHORT FABRICATION TERMINAL ◆"
+				prompt_text = "◆ CYBERNETICA: [E] FABRICATE COHORTS ◆"
 
 	if prompt_text.is_empty():
 		context_banner.hide()
 		return
 
 	context_label.text = prompt_text
-	context_label.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0) if can_afford else Color(0.92, 0.22, 0.18))
+	var text_col = Color(0.55, 0.60, 0.68) if is_maxed else (Color(0.20, 0.88, 1.0) if can_afford else Color(0.92, 0.22, 0.18))
+	context_label.add_theme_color_override("font_color", text_col)
 	context_banner.show()
 
 func _populate_slot(slot: Button, data: Dictionary, cur_scrap: int, cur_req: int):

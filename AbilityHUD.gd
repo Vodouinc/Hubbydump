@@ -356,25 +356,39 @@ func _on_slot_clicked(slot: Button):
 			else:
 				local_player.request_recruit_bodyguard(slot.slot_index)
 
-	# --- 3. SISTER OF BATTLE ACTIONS (FIXED ABILITY UPGRADE ROUTING) ---
+# --- 3. SISTER OF BATTLE ACTIONS (FIXED MULTIPLAYER ROUTING) ---
 	elif p_class == 2:
 		var pts = local_player.get("miracle_points") if "miracle_points" in local_player else 0
 		var s_lvl = local_player.get("current_level") if "current_level" in local_player else 1
 
 		# Upgrading abilities when miracle points are available
 		if pts > 0:
+			var target_upgrade_id: int = -1
 			if slot.category == "action":
 				var ability_id = slot.slot_index # 0: Intervention, 1: Grenade, 2: Miracle Shield, 3: Ultimate
 				if ability_id in [0, 1, 2]:
-					local_player.rpc("request_upgrade_sister_ability", ability_id)
-					return
+					target_upgrade_id = ability_id
 				elif ability_id == 3 and s_lvl >= 3 and local_player.get("rank_ultimate") < 2:
-					local_player.rpc("request_upgrade_sister_ability", 3)
-					return
+					target_upgrade_id = 3
 			elif slot.category == "weapon" and slot.slot_index == 2: # Weapon Slot 2 = SPACE Dash
 				if local_player.get("rank_dash") < 3:
-					local_player.rpc("request_upgrade_sister_ability", 4) # ID 4 = Dash Upgrade
-					return
+					target_upgrade_id = 4 # ID 4 = Dash Upgrade
+
+			if target_upgrade_id != -1:
+				var rpc_name := "request_quick_upgrade_sister_ability" if Input.is_key_pressed(KEY_CTRL) else "request_upgrade_sister_ability"
+				if multiplayer.has_multiplayer_peer():
+					local_player.rpc_id(1, rpc_name, target_upgrade_id)
+				else:
+					local_player.call(rpc_name, target_upgrade_id)
+				return
+
+			if target_upgrade_id != -1:
+				if multiplayer.has_multiplayer_peer():
+					local_player.rpc_id(1, "request_upgrade_sister_ability", target_upgrade_id)
+				else:
+					if local_player.has_method("request_upgrade_sister_ability"):
+						local_player.request_upgrade_sister_ability(target_upgrade_id)
+				return
 
 func _get_data_for_category(category: String, idx: int) -> Dictionary:
 	if not is_instance_valid(local_player): return {}
@@ -492,7 +506,13 @@ func refresh_hud_display():
 	if global_res_label:
 		if p_class == 2:
 			var s_pts = local_player.get("miracle_points") if "miracle_points" in local_player else 0
-			global_res_label.text = "⚙ %d SCRAP   ⚡ %d REQ   ✨ %d PTS" % [cur_scrap, cur_req, s_pts]
+			var s_lvl = local_player.get("current_level") if "current_level" in local_player else 1
+			var s_exp = local_player.get("current_exp") if "current_exp" in local_player else 0
+			var s_next = local_player.get("exp_to_next_level") if "exp_to_next_level" in local_player else 1
+			if s_lvl >= 6:
+				global_res_label.text = "LVL %d (MAX)   ✨ %d PTS" % [s_lvl, s_pts]
+			else:
+				global_res_label.text = "LVL %d   %d/%d XP   ✨ %d PTS" % [s_lvl, s_exp, s_next, s_pts]
 		else:
 			global_res_label.text = "⚙ %d SCRAP   ⚡ %d REQ   🤖 %d/%d" % [
 				cur_scrap, cur_req, cur_pop, GameData.BASE_COHORT_CAP
@@ -688,7 +708,7 @@ class CompactSlot extends Button:
 		var rect = Rect2(Vector2.ZERO, size)
 		var bg_color = Color(0.06, 0.07, 0.10, 0.95)
 		var border_color = Color(0.24, 0.28, 0.35)
-
+	
 		if can_upgrade:
 			var pulse = 0.6 + sin(Time.get_ticks_msec() * 0.01) * 0.4
 			border_color = Color(0.20, 0.88, 1.0, pulse)
@@ -699,6 +719,9 @@ class CompactSlot extends Button:
 			border_color = Color(1.0, 0.65, 0.15, 0.85)
 		elif is_selected:
 			border_color = Color(0.20, 0.88, 1.00, 1.0)
+		elif not can_afford and (scrap_cost > 0 or req_cost > 0):
+			border_color = Color(0.92, 0.22, 0.18, 0.65)
+			bg_color = Color(0.10, 0.04, 0.04, 0.90)
 		elif is_hovered():
 			border_color = Color(0.95, 0.78, 0.35)
 

@@ -62,6 +62,8 @@ var faith_shield_max: float = 80.0
 var faith_shield_current: float = 80.0
 var faith_shield_regen_rate: float = 12.0
 var faith_dodge_chance: float = 0.15
+var facing_sync_timer: float = 0.0
+const FACING_SYNC_INTERVAL: float = 0.05
 
 # Ability Ranks (0 = Locked, 1 to 3 = Unlocked & Scaling)
 var rank_dash: int = 1
@@ -190,6 +192,19 @@ func _ready():
 		if camera:
 			camera.enabled = false
 
+	if multiplayer.is_server() and current_class == PlayerClass.SISTER_OF_BATTLE:
+		# Wait one frame for all clients to be ready
+		await get_tree().process_frame
+		rpc("sync_full_sister_state", 
+			current_level, 
+			current_exp, 
+			miracle_points,
+			rank_dash,
+			rank_intervention,
+			rank_grenade,
+			rank_shield,
+			rank_ultimate)
+
 func set_player_class(new_class: int):
 	current_class = new_class as PlayerClass
 	apply_class_stats()
@@ -249,20 +264,26 @@ func apply_sister_level_stats():
 func gain_exp(amount: int):
 	if current_class != PlayerClass.SISTER_OF_BATTLE or current_level >= MAX_SISTER_LEVEL:
 		return
-	
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+		return
+
 	current_exp += amount
+	var leveled_up = false
 	while current_level < MAX_SISTER_LEVEL and current_exp >= exp_to_next_level:
 		current_exp -= exp_to_next_level
 		current_level += 1
 		miracle_points += 1
-		
 		exp_to_next_level = EXP_REQUIREMENTS[current_level] if current_level < MAX_SISTER_LEVEL else 999999
-		apply_sister_level_stats()
-		
-		# Level Up Audio & Banner FX
+		leveled_up = true
+
+	if multiplayer.has_multiplayer_peer():
+		rpc("sync_sister_progression", current_level, current_exp, exp_to_next_level, miracle_points)
+	else:
+		sync_sister_progression(current_level, current_exp, exp_to_next_level, miracle_points)
+
+	if leveled_up:
 		AudioManager.play_sfx("binary_canticle", global_position, 3.0, 1.2)
 		add_camera_trauma(0.35)
-		
 		var label = Label.new()
 		label.script = load("res://DamageNumber.gd")
 		label.global_position = global_position + Vector2(-50, -45)
@@ -279,33 +300,98 @@ func gain_exp(amount: int):
 			label.label_settings.font_size = 14
 
 @rpc("any_peer", "call_local", "reliable")
-func request_upgrade_sister_ability(ability_id: int):
-	if miracle_points <= 0: return
-	
+func sync_sister_progression(lvl: int, exp_val: int, next_exp: int, pts: int) -> void:
+	current_level = lvl
+	current_exp = exp_val
+	exp_to_next_level = next_exp
+	miracle_points = pts
+	apply_sister_level_stats()   # also fixes stats not recalculating on remote peers
+
+@rpc("any_peer", "call_local", "reliable")
+func request_upgrade_sister_ability(ability_id: int) -> void:
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+		return
+	if miracle_points <= 0:
+		return
+
+	var success = false
 	match ability_id:
-		0: # [1] Holy Intervention (Max Rank 3)
+		0:
 			if rank_intervention < 3:
 				rank_intervention += 1
-				miracle_points -= 1
-		1: # [2] Holy Hand Grenade (Max Rank 3)
+				success = true
+		1:
 			if rank_grenade < 3:
 				rank_grenade += 1
-				miracle_points -= 1
-		2: # [3] Miracle Shield (Max Rank 3)
+				success = true
+		2:
 			if rank_shield < 3:
 				rank_shield += 1
-				miracle_points -= 1
-				apply_sister_level_stats()
-		3: # [4] Righteous Pyre Ultimate (Req. Level 3+, Max Rank 2)
+				success = true
+		3:
 			if current_level >= 3 and rank_ultimate < 2:
 				rank_ultimate += 1
-				miracle_points -= 1
-		4: # [SPACE] Seraphim Dash Upgrade (Max Rank 3)
+				success = true
+		4:
 			if rank_dash < 3:
 				rank_dash += 1
-				miracle_points -= 1
+				success = true
 
-	AudioManager.play_sfx("building_place", global_position, 1.0, 1.5)
+	if success:
+		miracle_points -= 1
+		if multiplayer.has_multiplayer_peer():
+			rpc("sync_sister_ranks", rank_intervention, rank_grenade, rank_shield, rank_ultimate, rank_dash, miracle_points)
+		else:
+			sync_sister_ranks(rank_intervention, rank_grenade, rank_shield, rank_ultimate, rank_dash, miracle_points)
+
+@rpc("any_peer", "call_local", "reliable")
+func request_quick_upgrade_sister_ability(ability_id: int) -> void:
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+		return
+
+	var max_rank_for_ability = 2 if ability_id == 3 else 3
+	var upgraded = false
+
+	while miracle_points > 0:
+		var rank_now = _get_sister_ability_rank(ability_id)
+		if rank_now >= max_rank_for_ability:
+			break
+		if ability_id == 3 and current_level < 3:
+			break
+
+		match ability_id:
+			0: rank_intervention += 1
+			1: rank_grenade += 1
+			2: rank_shield += 1
+			3: rank_ultimate += 1
+			4: rank_dash += 1
+		miracle_points -= 1
+		upgraded = true
+
+	if upgraded:
+		if multiplayer.has_multiplayer_peer():
+			rpc("sync_sister_ranks", rank_intervention, rank_grenade, rank_shield, rank_ultimate, rank_dash, miracle_points)
+		else:
+			sync_sister_ranks(rank_intervention, rank_grenade, rank_shield, rank_ultimate, rank_dash, miracle_points)
+
+func _get_sister_ability_rank(ability_id: int) -> int:
+	match ability_id:
+		0: return rank_intervention
+		1: return rank_grenade
+		2: return rank_shield
+		3: return rank_ultimate
+		4: return rank_dash
+	return 0
+
+@rpc("any_peer", "call_local", "reliable")
+func sync_sister_ranks(r_int: int, r_gren: int, r_shld: int, r_ult: int, r_dash: int, pts: int) -> void:
+	rank_intervention = r_int
+	rank_grenade = r_gren
+	rank_shield = r_shld
+	rank_ultimate = r_ult
+	rank_dash = r_dash
+	miracle_points = pts
+	apply_sister_level_stats()   # rank_shield changes faith_shield_max/regen/dodge — recompute now
 
 # ------------------------------------------------------------------------------
 # DAMAGE & HEALTH HANDLING
@@ -892,8 +978,13 @@ func _process(delta: float):
 			queue_redraw()
 
 		var mouse_pos = get_global_mouse_position()
-		if visual_sprite and visual_sprite.has_method("update_facing"):
-			visual_sprite.update_facing(mouse_pos)
+		facing_sync_timer += delta
+		if facing_sync_timer >= FACING_SYNC_INTERVAL:
+			facing_sync_timer = 0.0
+			if multiplayer.has_multiplayer_peer():
+				rpc("sync_facing", mouse_pos)
+			else:
+				_apply_facing(mouse_pos)
 
 func _process_sister_systems(delta: float):
 	if dash_cooldown_timer > 0.0: dash_cooldown_timer = maxf(0.0, dash_cooldown_timer - delta)
@@ -919,7 +1010,11 @@ func _process_sister_systems(delta: float):
 		flamer_tick_timer -= delta
 		if flamer_tick_timer <= 0.0:
 			flamer_tick_timer = FLAMER_TICK_RATE
-			_execute_flamer_cone_tick()
+			var mouse_world = get_global_mouse_position()
+			if multiplayer.has_multiplayer_peer():
+				rpc("perform_flamer_tick", mouse_world)
+			else:
+				_execute_flamer_cone_tick(mouse_world)
 
 func _update_building_preview_position():
 	if not is_instance_valid(preview_instance):
@@ -947,6 +1042,14 @@ func _update_building_preview_position():
 		preview_instance.modulate = Color(0.20, 0.88, 1.00, 0.80)
 	else:
 		preview_instance.modulate = Color(0.92, 0.22, 0.18, 0.55)
+
+@rpc("any_peer", "call_local", "unreliable")
+func sync_facing(target_pos: Vector2):
+	_apply_facing(target_pos)
+
+func _apply_facing(target_pos: Vector2):
+	if visual_sprite and visual_sprite.has_method("update_facing"):
+		visual_sprite.update_facing(target_pos)
 
 @rpc("any_peer", "call_local", "reliable")
 func perform_holy_intervention(target_pos: Vector2):
@@ -1353,9 +1456,12 @@ func sync_flamer_fx(is_firing: bool):
 		visual_sprite.is_flamer_firing = is_firing
 		visual_sprite.queue_redraw()
 
-func _execute_flamer_cone_tick():
+@rpc("any_peer", "call_local", "unreliable")
+func perform_flamer_tick(mouse_world: Vector2):
+	_execute_flamer_cone_tick(mouse_world)
+
+func _execute_flamer_cone_tick(mouse_world: Vector2):
 	AudioManager.play_sfx("radium_shot", global_position, -8.0, 0.6)
-	var mouse_world = get_global_mouse_position()
 	var aim_dir = (mouse_world - global_position).normalized()
 
 	var space = get_world_2d().direct_space_state

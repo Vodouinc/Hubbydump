@@ -1117,8 +1117,10 @@ func _begin_match() -> void:
 	for id in _session_peer_ids():
 		spawn_player(id)
 		
+	_spawn_world_terrain()         # <-- Spawns mountains, trees, ruins
 	_spawn_map_scrap_deposits()
 	_spawn_ork_mega_camp()
+	request_navmesh_rebake()       # <-- Navmesh wraps around the mountains
 	start_next_wave()
 
 @rpc("authority", "call_local", "reliable")
@@ -1188,6 +1190,60 @@ func _refresh_lobby_roster():
 # ==============================================================================
 # 6. SPAWNER & ENTITY ROUTING
 # ==============================================================================
+func _spawn_world_terrain():
+	var base_node = get_tree().get_first_node_in_group("base")
+	var base_pos = base_node.global_position if base_node else Vector2(500, 500)
+	var obs_idx = 0
+
+	# 1. MOUNTAIN RIDGES (Create 6-8 natural winding chokepoint walls)
+	for ridge in range(7):
+		var ridge_angle = (float(ridge) * TAU / 7.0) + randf_range(-0.3, 0.3)
+		var ridge_start = base_pos + Vector2.RIGHT.rotated(ridge_angle) * randf_range(650.0, 1100.0)
+		var ridge_dir = Vector2.RIGHT.rotated(ridge_angle + randf_range(1.1, 1.8))
+		var segment_count = randi_range(6, 11)
+		var current_pos = ridge_start
+
+		for seg in range(segment_count):
+			obs_idx += 1
+			var r = randf_range(38.0, 56.0)
+			spawn_entity({
+				"type": "world_obstacle",
+				"name": "MountainRidge_" + str(obs_idx),
+				"position": current_pos.snapped(Vector2(24, 24)),
+				"obstacle_type": WorldObstacle.ObstacleType.MOUNTAIN_CRAG,
+				"radius": r
+			})
+			current_pos += ridge_dir * (r * 1.35) + Vector2.RIGHT.rotated(randf() * TAU) * 12.0
+
+	# 2. IRONWOOD FOREST GROVES (10 dense forest pockets)
+	for grove in range(10):
+		var grove_angle = randf() * TAU
+		var grove_center = base_pos + Vector2.RIGHT.rotated(grove_angle) * randf_range(600.0, 2200.0)
+		var tree_count = randi_range(7, 14)
+
+		for t in range(tree_count):
+			obs_idx += 1
+			var t_pos = grove_center + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(15.0, 120.0)
+			spawn_entity({
+				"type": "world_obstacle",
+				"name": "Tree_" + str(obs_idx),
+				"position": t_pos.snapped(Vector2(16, 16)),
+				"obstacle_type": WorldObstacle.ObstacleType.IRONWOOD_TREE,
+				"radius": randf_range(24.0, 36.0)
+			})
+
+	# 3. INDUSTRIAL SECTOR RUINS (Urban chokes on the perimeter)
+	for ruin in range(12):
+		obs_idx += 1
+		var ruin_pos = base_pos + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(750.0, 2100.0)
+		spawn_entity({
+			"type": "world_obstacle",
+			"name": "Ruin_" + str(obs_idx),
+			"position": ruin_pos.snapped(Vector2(32, 32)),
+			"obstacle_type": WorldObstacle.ObstacleType.INDUSTRIAL_RUIN,
+			"radius": randf_range(42.0, 60.0)
+		})
+
 func spawn_entity(data: Dictionary) -> Node:
 	if spawner and multiplayer.has_multiplayer_peer():
 		return spawner.spawn(data)
@@ -1230,6 +1286,14 @@ func _custom_spawner(data) -> Node:
 			var offset_x = -30.0 if peer_id == 1 else 30.0
 			player.position = base_pos + Vector2(offset_x, 80.0)
 			return player
+
+		"world_obstacle":
+			var obs = WorldObstacle.new()
+			obs.name = str(data["name"])
+			obs.position = data["position"]
+			obs.obstacle_type = data.get("obstacle_type", WorldObstacle.ObstacleType.MOUNTAIN_CRAG)
+			obs.radius = data.get("radius", 36.0)
+			return obs
 
 		"cohort_infantry":
 			var inf_script = load("res://SkitariiInfantry.gd")
@@ -1427,27 +1491,31 @@ func _spawn_map_scrap_deposits():
 	var base_node = get_tree().get_first_node_in_group("base")
 	var base_pos = base_node.global_position if base_node else Vector2(500, 500)
 
+	# 2 starter deposits right next to base
 	for i in range(2):
 		var angle = (PI * 0.75) if i == 0 else (-PI * 0.25)
 		spawn_entity({
 			"type": "scrap_deposit",
 			"name": "ScrapDeposit_Start_" + str(i + 1),
-			"position": (base_pos + Vector2.RIGHT.rotated(angle) * 240.0).snapped(Vector2(32, 32))
+			"position": (base_pos + Vector2.RIGHT.rotated(angle) * 260.0).snapped(Vector2(32, 32))
 		})
 
-	for i in range(5):
-		var angle = (float(i) * TAU / 5.0) + randf_range(-0.3, 0.3)
+	# 14 Wild expansion deposits scattered across the big map
+	for i in range(14):
+		var angle = (float(i) * TAU / 14.0) + randf_range(-0.25, 0.25)
+		var dist = randf_range(750.0, 2300.0)
 		spawn_entity({
 			"type": "scrap_deposit",
 			"name": "ScrapDeposit_Wild_" + str(i + 1),
-			"position": (base_pos + Vector2.RIGHT.rotated(angle) * randf_range(650.0, 1050.0)).snapped(Vector2(32, 32))
+			"position": (base_pos + Vector2.RIGHT.rotated(angle) * dist).snapped(Vector2(32, 32))
 		})
 
 func _spawn_ork_mega_camp():
 	var base_node = get_tree().get_first_node_in_group("base")
 	var base_pos = base_node.global_position if base_node else Vector2(500, 500)
 
-	var camp_pos = (base_pos + Vector2.RIGHT.rotated(randf_range(-PI, PI)) * 1450.0).snapped(Vector2(32, 32))
+	# Placed deep in the wilderness (2400 units away)
+	var camp_pos = (base_pos + Vector2.RIGHT.rotated(randf_range(-PI, PI)) * 2400.0).snapped(Vector2(32, 32))
 	spawn_entity({
 		"type": "ork_citadel",
 		"name": "OrkCitadel_Core",
@@ -1456,9 +1524,9 @@ func _spawn_ork_mega_camp():
 
 	var dir_to_base = (base_pos - camp_pos).normalized()
 	var heap_positions = [
-		camp_pos + dir_to_base.rotated(2.2) * 110.0,
-		camp_pos + dir_to_base.rotated(-2.2) * 110.0,
-		camp_pos - (dir_to_base * 110.0)
+		camp_pos + dir_to_base.rotated(2.2) * 140.0,
+		camp_pos + dir_to_base.rotated(-2.2) * 140.0,
+		camp_pos - (dir_to_base * 140.0)
 	]
 
 	for i in range(heap_positions.size()):
@@ -1504,10 +1572,47 @@ func start_next_wave():
 		else:
 			sync_incoming_threat_lanes([])
 
+# Dynamic TAB Break Pacing (Breather vs High-Tension)
+func _get_wave_break_duration(wave: int) -> float:
+	match wave:
+		4, 8, 11:
+			return 22.0 # Extended economic recovery / tech research window
+		5, 10, 14:
+			return 18.0 # Post-Climax repair window
+		_:
+			if wave >= 12:
+				return 10.0 # Rapid relentless pressure
+			return 14.0     # Standard break
+
+# TAB Procedural Horde Generator for Endless / Custom Waves
+func _generate_procedural_tab_horde(squads_array: Array[Dictionary], budget: int, player_count: int) -> void:
+	# 1. Fast Screen
+	var screen_count = clampi(int(budget * 0.25 / 2.0), 6, 24)
+	var screen_units = []
+	for i in range(screen_count):
+		screen_units.append(1 if i % 2 == 0 else 0)
+	_add_squad(squads_array, screen_units, player_count, 1.5)
+
+	# 2. Main Line & Air Support
+	var main_count = clampi(int(budget * 0.40 / 4.0), 4, 16)
+	var main_units = []
+	for i in range(main_count):
+		main_units.append(3 if i % 3 == 0 else 2)
+	_add_squad(squads_array, main_units, player_count, 3.0)
+
+	# 3. Nob Siege Vanguard
+	var nob_count = clampi(int(budget * 0.35 / 8.0), 2, 10)
+	var heavy_units = []
+	for i in range(nob_count):
+		heavy_units.append(4)
+		heavy_units.append(2)
+	_add_squad(squads_array, heavy_units, player_count, 4.5)
+
 func _spawn_flanker_raid():
 	var base_node = get_tree().get_first_node_in_group("base")
 	var base_pos = base_node.global_position if base_node else Vector2.ZERO
-	var edge_pos = base_pos + Vector2.RIGHT.rotated(randf() * TAU) * 1500.0
+	# Spawn from extreme map edge
+	var edge_pos = base_pos + Vector2.RIGHT.rotated(randf() * TAU) * 2600.0
 	
 	for t in [1, 1, 3]:
 		enemy_count += 1
@@ -1522,13 +1627,13 @@ func _spawn_flanker_raid():
 
 func _spawn_tactical_squad(squad: Dictionary):
 	var units: Array = squad["units"]
-	var citadel = get_tree().get_first_node_in_group("ork_citadel")
 	var base_node = get_tree().get_first_node_in_group("base")
 	var base_pos = base_node.global_position if base_node else Vector2.ZERO
 	
-	var spawn_origin = citadel.global_position if is_instance_valid(citadel) else (base_pos + Vector2(1200, 0))
-	var dir_to_base = (base_pos - spawn_origin).normalized()
-	var squad_center = spawn_origin + Vector2.RIGHT.rotated(dir_to_base.angle() + randf_range(-0.4, 0.4)) * 180.0
+	# Pick one of the active threat lane angles for this squad
+	var lane_angle = spawn_lane_angles.pick_random() if not spawn_lane_angles.is_empty() else randf() * TAU
+	var spawn_origin = base_pos + Vector2.RIGHT.rotated(lane_angle) * 1350.0
+	var squad_center = spawn_origin + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(10.0, 40.0)
 
 	for unit_type in units:
 		enemy_count += 1
@@ -1558,6 +1663,33 @@ func _begin_wave_spawning():
 	wave_timer.wait_time = 1.5
 	wave_timer.start()
 
+@rpc("any_peer", "call_local", "reliable")
+func request_call_wave_early():
+	# Ensure only host/server executes the state change in multiplayer
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+		return
+
+	if not is_wave_preparing or wave_prep_timer <= 1.0:
+		return
+	
+	# Calculate bounty for time skipped
+	var seconds_saved = wave_prep_timer
+	var bonus_scrap = int(seconds_saved * 1.5)
+	var bonus_req = int(seconds_saved * 0.5)
+
+	add_scrap(bonus_scrap)
+	add_requisition(bonus_req)
+
+	# Trigger wave immediately
+	wave_prep_timer = 0.0
+	is_wave_preparing = false
+	_begin_wave_spawning()
+
+	if multiplayer.has_multiplayer_peer():
+		rpc("trigger_wave_alert_sfx")
+	else:
+		trigger_wave_alert_sfx()
+
 func _spawn_squad_tick():
 	if not wave_squad_queue.is_empty():
 		var squad = wave_squad_queue.pop_front()
@@ -1579,29 +1711,148 @@ func notify_enemy_defeated():
 				rpc("sync_incoming_threat_lanes", [])
 			else:
 				sync_incoming_threat_lanes([])
+			
+			var break_duration = _get_wave_break_duration(current_wave)
 			var break_tween = create_tween()
-			break_tween.tween_interval(WAVE_BREAK_DURATION)
+			break_tween.tween_interval(break_duration)
 			break_tween.tween_callback(start_next_wave)
 
 func _build_spawn_lanes(wave: int, player_count: int) -> Array[float]:
-	var lanes: Array[float] = [randf() * TAU]
-	if wave >= 4: lanes.append(lanes[0] + randf_range(1.2, 2.0))
-	if wave >= 8: lanes.append(lanes[0] + PI + randf_range(-0.4, 0.4))
+	var lanes: Array[float] = []
+	var primary_angle: float = randf() * TAU
+	
+	if wave == 15 or wave == max_waves:
+		# FINAL CATACLYSM: 4-Way Compass Siege (North, East, South, West)
+		for i in range(4):
+			lanes.append(fmod(primary_angle + (float(i) * (TAU / 4.0)), TAU))
+	elif wave in [10, 12, 14]:
+		# 3-Front Pincer Convergence
+		for i in range(3):
+			lanes.append(fmod(primary_angle + (float(i) * (TAU / 3.0)) + randf_range(-0.2, 0.2), TAU))
+	elif wave in [4, 7, 8, 9, 13]:
+		# 2-Front Flank Assault
+		lanes.append(primary_angle)
+		lanes.append(fmod(primary_angle + PI + randf_range(-0.4, 0.4), TAU))
+	else:
+		# Single-Front Concentrated Push
+		lanes.append(primary_angle)
+
 	return lanes
 
 func _build_wave_squads(wave: int, player_count: int) -> Array[Dictionary]:
-	var threat_budget = int(round((14.0 + pow(wave, 1.36) * 6.2) * (1.0 + 0.65 * (player_count - 1))))
 	var squads: Array[Dictionary] = []
-	while threat_budget > 0:
-		var templates = _get_available_squad_templates(wave)
-		var affordable: Array[Dictionary] = []
-		for t in templates:
-			if t["cost"] <= threat_budget: affordable.append(t)
-		if affordable.is_empty(): break
-		var chosen = affordable.pick_random()
-		squads.append({"units": chosen["units"].duplicate(), "delay": chosen["delay"]})
-		threat_budget -= chosen["cost"]
+	
+	# TAB Co-Op Multiplier (Base 1.0x -> 2P: 1.65x -> 3P: 2.3x -> 4P: 2.95x)
+	var co_op_mult: float = 1.0 + 0.65 * max(0, player_count - 1)
+	
+	# Exponential TAB Threat Budget
+	var threat_budget: int = int(round((20.0 + pow(wave, 1.45) * 8.5) * co_op_mult))
+	
+	match wave:
+		# --- TIER 1: EARLY PROBING (Waves 1-4) ---
+		1: # Probing Gretchin Line
+			_add_squad(squads, [0, 0, 0, 0], 2.0, player_count)
+			_add_squad(squads, [0, 0, 0, 0, 0], 3.0, player_count)
+
+		2: # Squig Vanguard + Boyz
+			_add_squad(squads, [1, 1, 1], 1.5, player_count)          # Vanguard screen
+			_add_squad(squads, [0, 0, 0, 0, 1, 1], 3.0, player_count) # Main push
+
+		3: # Heavy Choppa Boyz Introduction
+			_add_squad(squads, [1, 1, 1, 0, 0], 2.0, player_count)
+			_add_squad(squads, [2, 2, 0, 0], 3.5, player_count)       # First armored line
+
+		4: # [BREATHER WAVE] - High Scrap Swarm
+			_add_squad(squads, [0, 0, 0, 0, 0, 0, 0], 1.8, player_count)
+			_add_squad(squads, [1, 1, 1, 1, 0, 0], 2.5, player_count)
+
+		# --- TIER 2: SPECIALIZED TACTICAL INCURSIONS (Waves 5-9) ---
+		5: # [CLIMAX 1] Stormboy Airborne Blitz (Bypasses frontline chokes)
+			_add_squad(squads, [1, 1, 1, 1], 1.5, player_count)
+			_add_squad(squads, [3, 3, 3], 2.0, player_count)          # Stormboy air team 1
+			_add_squad(squads, [3, 3, 3, 2, 2], 3.5, player_count)    # Stormboy air team 2 + Shootas
+
+		6: # Stikkbomb Artillery & Line Screen
+			_add_squad(squads, [0, 0, 0, 0, 0, 0], 1.5, player_count)
+			_add_squad(squads, [2, 2, 2, 2], 3.0, player_count)
+			_add_squad(squads, [2, 2, 1, 1, 1], 4.0, player_count)
+
+		7: # First Nob Breachers (Fortress Cracking Test)
+			_add_squad(squads, [1, 1, 1, 1, 1], 1.5, player_count)
+			_add_squad(squads, [4, 2, 2, 0, 0], 3.5, player_count)    # Nob + Escort
+			_add_squad(squads, [4, 3, 3, 1], 4.5, player_count)       # Nob + Stormboy flank
+
+		8: # [BREATHER WAVE] - Fast Pincer Harass
+			_add_squad(squads, [1, 1, 1, 1, 1, 1], 1.5, player_count)
+			_add_squad(squads, [0, 0, 0, 0, 0, 0, 0, 0], 2.5, player_count)
+			_add_squad(squads, [2, 2, 2, 2], 3.5, player_count)
+
+		9: # Combined Arms Siege Push
+			_add_squad(squads, [1, 1, 1, 1, 0, 0], 1.5, player_count)
+			_add_squad(squads, [3, 3, 3, 3], 2.5, player_count)
+			_add_squad(squads, [4, 4, 2, 2], 4.0, player_count)       # Double Nob Breaker line
+
+		# --- TIER 3: LATE-GAME MEGA HORDE (Waves 10-15) ---
+		10: # [CLIMAX 2] Armored Warband Convergence
+			_add_squad(squads, [1, 1, 1, 1, 1, 1], 1.5, player_count) # Fast screen
+			_add_squad(squads, [3, 3, 3, 3, 3], 2.5, player_count)    # Air drop
+			_add_squad(squads, [4, 4, 2, 2, 2], 4.0, player_count)    # Nob Heavy Vanguard
+			_add_squad(squads, [4, 4, 4, 2, 2], 5.5, player_count)    # Nob Breacher Main
+
+		11: # [BREATHER WAVE] - High Volume Scrap Bounty
+			_add_squad(squads, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1.5, player_count)
+			_add_squad(squads, [1, 1, 1, 1, 1, 1, 1, 1], 2.5, player_count)
+			_add_squad(squads, [2, 2, 2, 2, 2, 2], 3.5, player_count)
+
+		12: # Heavy Air Blitz & Breachers
+			_add_squad(squads, [3, 3, 3, 3, 3, 3], 2.0, player_count)
+			_add_squad(squads, [4, 4, 4, 2, 2], 3.5, player_count)
+			_add_squad(squads, [4, 4, 3, 3, 1, 1], 4.5, player_count)
+
+		13: # 3-Front Overwhelm Assault
+			_add_squad(squads, [1, 1, 1, 1, 1, 1, 1, 1], 1.5, player_count)
+			_add_squad(squads, [4, 4, 2, 2, 2, 2], 3.0, player_count)
+			_add_squad(squads, [3, 3, 3, 3, 3, 3], 4.0, player_count)
+			_add_squad(squads, [4, 4, 4, 4, 2, 2], 5.5, player_count)
+
+		14: # Citadel Vanguard Siege
+			_add_squad(squads, [0, 0, 0, 0, 1, 1, 1, 1, 1, 1], 1.5, player_count)
+			_add_squad(squads, [3, 3, 3, 3, 3, 3, 3], 2.5, player_count)
+			_add_squad(squads, [4, 4, 4, 4, 2, 2, 2], 4.0, player_count)
+			_add_squad(squads, [4, 4, 4, 4, 4, 2, 2], 5.5, player_count)
+
+		15: # [THE FINAL WAAAGH! - TOTAL CATACLYSM]
+			# Echelon 1: The Flood Screen
+			_add_squad(squads, [1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0], 1.5, player_count)
+			# Echelon 2: Sky Incursion (Jump Troops to distract turrets)
+			_add_squad(squads, [3, 3, 3, 3, 3, 3, 3, 3], 2.5, player_count)
+			# Echelon 3: Armored Nob Citadel Breakers
+			_add_squad(squads, [4, 4, 4, 4, 4, 2, 2, 2, 2], 4.0, player_count)
+			# Echelon 4: Heavy Ranged Bombardment Line
+			_add_squad(squads, [2, 2, 2, 2, 2, 2, 2, 2], 5.0, player_count)
+			# Echelon 5: The Final Warlord Hammer
+			_add_squad(squads, [4, 4, 4, 4, 4, 4, 3, 3, 3], 6.5, player_count)
+
+		_: # Procedural Fallback scaling beyond Wave 15 (Endless / Sandbox)
+			_generate_procedural_tab_horde(squads, threat_budget, player_count)
+
 	return squads
+
+# Helper to scale squads dynamically when playing with 2, 3, or 4 players
+func _add_squad(squads_array: Array[Dictionary], base_units: Array, player_count: int, delay: float = 3.0) -> void:
+	var final_units = base_units.duplicate()
+	
+	# Add extra screening/line units per additional player
+	if player_count > 1:
+		var bonus_count = int(base_units.size() * 0.45 * (player_count - 1))
+		for i in range(bonus_count):
+			final_units.append(base_units[i % base_units.size()])
+			
+	squads_array.append({
+		"units": final_units,
+		"delay": delay
+	})
+
 
 func _get_available_squad_templates(wave: int) -> Array[Dictionary]:
 	var t: Array[Dictionary] = [{"cost": 6, "units": [0, 0, 0, 0, 0], "delay": 3.5}]
@@ -1615,7 +1866,11 @@ func spawn_waaagh_idol():
 	objective_count += 1
 	var base_node = get_tree().get_first_node_in_group("base")
 	var center = base_node.global_position if base_node else Vector2(500, 500)
-	var camp_pos = center + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(720.0, 1020.0)
+	
+	var min_dist = 1100.0 + (current_wave * 45.0)
+	var max_dist = 1450.0 + (current_wave * 55.0)
+	var spawn_distance = randf_range(min_dist, max_dist)
+	var camp_pos = center + Vector2.RIGHT.rotated(randf() * TAU) * spawn_distance
 
 	spawn_entity({
 		"type": "waaagh_idol",
@@ -1623,6 +1878,7 @@ func spawn_waaagh_idol():
 		"position": camp_pos
 	})
 
+	# Spawn guarding retinue around the idol
 	for i in range(6):
 		spawn_entity({
 			"type": "enemy",
@@ -1944,6 +2200,7 @@ func execute_rematch():
 		for dep in get_tree().get_nodes_in_group("scrap_deposits"): dep.queue_free()
 		for cit in get_tree().get_nodes_in_group("ork_citadel"): cit.queue_free()
 		for heap in get_tree().get_nodes_in_group("ork_structures"): heap.queue_free()
+		for obs in get_tree().get_nodes_in_group("world_obstacles"): obs.queue_free()
 
 		var base = get_tree().get_first_node_in_group("base")
 		if base and base.has_method("sync_base_health"):

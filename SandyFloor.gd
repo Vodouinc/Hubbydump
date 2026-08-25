@@ -3,7 +3,7 @@ extends Node2D
 
 const GRID_SIZE: float = 32.0
 
-@export var floor_size: Vector2 = Vector2(3000, 3000):
+@export var floor_size: Vector2 = Vector2(7500, 7500):
 	set(value):
 		floor_size = value
 		queue_redraw()

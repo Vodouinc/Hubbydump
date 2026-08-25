@@ -244,17 +244,18 @@ func _physics_process(delta: float) -> void:
 			_execute_stormboy_jump(to_base)
 			return
 
+	# --- NAVIGATION & OBSTACLE PATHFINDING ---
 	var move_dir = Vector2.ZERO
 	
 	if type == EnemyType.GRETCHIN and _process_gretchin_thievery() and is_instance_valid(targeted_scrap_item):
 		move_dir = global_position.direction_to(targeted_scrap_item.global_position)
 	else:
-		var is_path_usable = nav_agent and not nav_agent.is_navigation_finished() and nav_agent.is_target_reachable()
-
-		if is_path_usable:
+		# Use next path position if navigation agent has points
+		if nav_agent and not nav_agent.is_navigation_finished():
 			var next_path = nav_agent.get_next_path_position()
 			move_dir = global_position.direction_to(next_path)
 		else:
+			# Fallback: Check if blocked by a player barricade
 			var blocking_wall = _find_nearest_building_in_range(110.0)
 			if is_instance_valid(blocking_wall):
 				move_dir = global_position.direction_to(blocking_wall.global_position)
@@ -265,7 +266,8 @@ func _physics_process(delta: float) -> void:
 			else:
 				move_dir = global_position.direction_to(base_node.global_position)
 
-		var lateral_offset = move_dir.orthogonal() * sin(Time.get_ticks_msec() * 0.003 + lateral_fanning_seed) * 0.25
+		# Add lateral flocking spread
+		var lateral_offset = move_dir.orthogonal() * sin(Time.get_ticks_msec() * 0.003 + lateral_fanning_seed) * 0.2
 		move_dir = (move_dir + lateral_offset).normalized()
 
 	if type == EnemyType.GRETCHIN and not has_stolen_scrap:
@@ -275,27 +277,33 @@ func _physics_process(delta: float) -> void:
 
 	velocity = move_dir * current_speed
 
+	# --- COLLISION SLIDING (Smoothly slide along rocks, trees, and other units) ---
 	if move_and_slide():
 		for i in range(get_slide_collision_count()):
 			var collision = get_slide_collision(i)
 			var collider = collision.get_collider()
 			if is_instance_valid(collider):
-				if collider.has_method("take_damage") and not collider.is_in_group("enemies"):
+				if collider.has_method("take_damage") and not collider.is_in_group("enemies") and not collider.is_in_group("world_obstacles"):
 					velocity = Vector2.ZERO
 					perform_attack(collider)
 					return
-				elif collider.is_in_group("enemies") or collider.is_in_group("ork_citadel") or collider.is_in_group("ork_structures"):
+				else:
+					# Slide around rocks, trees, and fellow enemies
 					var slide_dir = move_dir.slide(collision.get_normal()).normalized()
 					velocity = slide_dir * current_speed
 
+	# --- ANTI-STUCK SYSTEM (Detects if stuck against geometry for > 1.2s) ---
 	stuck_check_timer += delta
-	if stuck_check_timer >= 2.5:
+	if stuck_check_timer >= 1.2:
 		stuck_check_timer = 0.0
 		if is_instance_valid(base_node) and not is_objective_guard:
-			if global_position.distance_to(last_stuck_pos) < 12.0 and not is_jumping_or_lunging and attack_cooldown_timer <= 0.0:
-				var push_dir = (base_node.global_position - global_position).normalized()
-				var side_nudge = push_dir.orthogonal() * (24.0 if (get_instance_id() % 2 == 0) else -24.0)
-				global_position += (push_dir * 18.0) + side_nudge
+			if global_position.distance_to(last_stuck_pos) < 20.0 and not is_jumping_or_lunging and attack_cooldown_timer <= 0.0:
+				# Recalculate navigation path immediately
+				_update_nav_target()
+				# Strong lateral nudge around the obstacle
+				var to_base = (base_node.global_position - global_position).normalized()
+				var side = to_base.orthogonal() * (32.0 if (get_instance_id() % 2 == 0) else -32.0)
+				global_position += (to_base * 12.0) + side
 		last_stuck_pos = global_position
 
 func _evaluate_mob_rule_and_berserk():

@@ -1514,8 +1514,7 @@ func _spawn_ork_mega_camp():
 	var base_node = get_tree().get_first_node_in_group("base")
 	var base_pos = base_node.global_position if base_node else Vector2(500, 500)
 
-	# Placed deep in the wilderness (2400 units away)
-	var camp_pos = (base_pos + Vector2.RIGHT.rotated(randf_range(-PI, PI)) * 2400.0).snapped(Vector2(32, 32))
+	var camp_pos = (base_pos + Vector2.RIGHT.rotated(randf_range(-PI, PI)) * 2200.0).snapped(Vector2(32, 32))
 	spawn_entity({
 		"type": "ork_citadel",
 		"name": "OrkCitadel_Core",
@@ -1535,6 +1534,10 @@ func _spawn_ork_mega_camp():
 			"name": "OrkScrapHeap_" + str(i + 1),
 			"position": heap_positions[i].snapped(Vector2(32, 32))
 		})
+
+	# Ping Radar/Minimap to display the Ork Citadel position
+	get_tree().call_group("navigation_pointers", "set_citadel_position", camp_pos)
+	get_tree().call_group("minimap_ui", "register_citadel_position", camp_pos)
 
 func start_next_wave():
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return

@@ -857,8 +857,21 @@ func _process_rts_camera_panning(delta: float):
 func _unhandled_input(event: InputEvent):
 	if not _is_local_authority(): return
 
-	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-		if _handle_modal_esc_close():
+	if event is InputEventKey and event.pressed and not event.echo:
+		# 1. Close open UI / Map with ESC
+		if event.keycode == KEY_ESCAPE:
+			if _handle_modal_esc_close():
+				get_viewport().set_input_as_handled()
+				return
+
+		# 2. Toggle Fullscreen Tactical Map with 'M'
+		if event.keycode == KEY_M and not is_dead:
+			var m_ui = get_tree().get_first_node_in_group("minimap_ui")
+			if m_ui and m_ui.has_method("toggle_fullscreen_map"):
+				m_ui.toggle_fullscreen_map()
+			elif m_ui and "is_fullscreen" in m_ui:
+				m_ui.is_fullscreen = not m_ui.is_fullscreen
+				m_ui.queue_redraw()
 			get_viewport().set_input_as_handled()
 			return
 

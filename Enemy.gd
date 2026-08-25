@@ -116,10 +116,10 @@ func _update_nav_target() -> void:
 func apply_type_stats() -> void:
 	match type:
 		EnemyType.GRETCHIN:
-			speed = 155.0
-			max_health = 45 # Increased from 25 for better survivability
+			speed = 130.0 # Catchable in melee
+			max_health = 45
 			damage = 5
-			attack_range = 210.0
+			attack_range = 200.0
 			if health_bar:
 				health_bar.bar_size = Vector2(22.0, 3.5)
 				health_bar.bar_offset = Vector2(0.0, -16.0)
@@ -359,57 +359,52 @@ func _process_organic_gretchin_steering(delta: float, base_speed: float) -> Vect
 	gretchin_threat_scan_timer += delta
 	var close_threat = cached_target_friendly
 
-	# Periodically scan for nearby players/bodyguards
-	if gretchin_threat_scan_timer >= 0.12:
+	if gretchin_threat_scan_timer >= 0.15:
 		gretchin_threat_scan_timer = 0.0
-		cached_target_friendly = _find_nearest_friendly_in_range(160.0)
+		cached_target_friendly = _find_nearest_friendly_in_range(110.0) # Reduced range
 		close_threat = cached_target_friendly
 
 	if gretchin_panic_timer > 0.0:
 		gretchin_panic_timer -= delta
 
-	# --- 1. PANIC SCURRY (Player is dangerously close) ---
+	# --- 1. BRIEF PANIC SCURRY (Only triggers if player is very close < 75px) ---
 	if is_instance_valid(close_threat):
 		var dist = global_position.distance_to(close_threat.global_position)
-		if dist <= 110.0:
-			gretchin_panic_timer = 0.85
+		if dist <= 75.0:
+			gretchin_panic_timer = 0.35 # Short 0.35s scamper
 
 		if gretchin_panic_timer > 0.0:
 			var dir_away = (global_position - close_threat.global_position).normalized()
-			var wobble = sin(Time.get_ticks_msec() * 0.015 + lateral_fanning_seed) * 0.55
+			var wobble = sin(Time.get_ticks_msec() * 0.015 + lateral_fanning_seed) * 0.4
 			var panic_dir = (dir_away + dir_away.orthogonal() * wobble).normalized()
-			
-			var nearest_shield = _find_nearest_ork_meatshield()
-			if is_instance_valid(nearest_shield):
-				var to_shield = (nearest_shield.global_position - global_position).normalized()
-				panic_dir = (panic_dir * 0.6 + to_shield * 0.4).normalized()
 
 			if visual_sprite:
-				visual_sprite.rotation = sin(Time.get_ticks_msec() * 0.025) * 0.22
+				visual_sprite.rotation = sin(Time.get_ticks_msec() * 0.025) * 0.2
 
-			return panic_dir * (base_speed * 1.35)
+			# Slower panic speed so melee Tech-Priest can easily catch up
+			return panic_dir * (base_speed * 1.15)
 
-	# --- 2. OPPORTUNISTIC THIEVERY (Go steal scrap) ---
+	# --- 2. OPPORTUNISTIC THIEVERY ---
 	if _process_gretchin_thievery() and is_instance_valid(targeted_scrap_item):
-		var to_scrap = global_position.direction_to(targeted_scrap_item.global_position)
-		var scrap_wobble = to_scrap.orthogonal() * sin(Time.get_ticks_msec() * 0.006 + lateral_fanning_seed) * 0.2
-		return (to_scrap + scrap_wobble).normalized() * base_speed
+		return global_position.direction_to(targeted_scrap_item.global_position) * base_speed
 
-	# --- 3. LONG-RANGE MARCH (Follow NavMesh around mountains) ---
+	# --- 3. COMMITTED BASE ASSAULT (Follow NavMesh directly to base) ---
 	var dist_to_base = global_position.distance_to(base_node.global_position)
-	if dist_to_base > 240.0:
+	if dist_to_base > 160.0:
 		if nav_agent and not nav_agent.is_navigation_finished():
 			var next_path = nav_agent.get_next_path_position()
-			var nav_dir = global_position.direction_to(next_path)
-			var wobble = nav_dir.orthogonal() * sin(Time.get_ticks_msec() * 0.003 + lateral_fanning_seed) * 0.15
-			return (nav_dir + wobble).normalized() * base_speed
+			return global_position.direction_to(next_path) * base_speed
 		else:
 			return global_position.direction_to(base_node.global_position) * base_speed
 
-	# --- 4. CLOSE-RANGE SKIRMISH (Loosely circle and take potshots) ---
-	var to_base = (base_node.global_position - global_position).normalized()
-	var orbit_dir = to_base.orthogonal() * (1.0 if (get_instance_id() % 2 == 0) else -1.0)
-	return (orbit_dir * 0.75 - to_base * 0.25).normalized() * (base_speed * 0.85)
+	# --- 4. AT BASE: STAND AND ATTACK (No endless circling) ---
+	var blocking_target = _find_nearest_attackable_target(attack_range)
+	if is_instance_valid(blocking_target):
+		velocity = Vector2.ZERO
+		perform_attack(blocking_target)
+		return Vector2.ZERO
+
+	return global_position.direction_to(base_node.global_position) * (base_speed * 0.5)
 
 
 func _find_nearest_ork_meatshield() -> Node2D:

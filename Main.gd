@@ -1160,8 +1160,21 @@ func _begin_match_local() -> void:
 	match_started = true
 	DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_CONFINED)
 	_hide_all_menus()
-	var hud = get_tree().get_first_node_in_group("ability_hud")
-	if hud and hud.has_method("show"): hud.show()
+	
+	# Show Ability HUD
+	var a_hud = get_tree().get_first_node_in_group("ability_hud")
+	if a_hud and a_hud.has_method("show"): 
+		a_hud.show()
+
+	# Show Wave HUD (Fixes missing Wave UI on restart)
+	var w_hud = get_tree().get_first_node_in_group("wave_hud")
+	if w_hud and w_hud.has_method("show"): 
+		w_hud.show()
+
+	# Show Minimap / Radar
+	var m_ui = get_tree().get_first_node_in_group("minimap_ui")
+	if m_ui and m_ui.has_method("show"): 
+		m_ui.show()
 
 func _is_in_session() -> bool:
 	return multiplayer.has_multiplayer_peer() and multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED
@@ -1649,7 +1662,8 @@ func start_next_wave():
 	total_wave_enemies_cached = enemies_left_to_spawn
 
 	is_wave_preparing = true
-	wave_prep_timer = WAVE_PREP_DURATION
+	# 35 seconds on Wave 1 so new players have time to build; 8s on subsequent waves
+	wave_prep_timer = 35.0 if current_wave == 1 else 8.0
 	_broadcast_wave_hud()
 	
 	if base_radar_level >= 2:
@@ -2370,8 +2384,9 @@ func sync_game_over(is_victory: bool):
 	_show_game_over_screen(is_victory)
 
 func _show_game_over_screen(is_victory: bool):
+	DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_VISIBLE)
 	var go_ui = get_node_or_null("%GameOverUI")
-	if not go_ui:
+	if not go_ui and has_node("UI/GameOverUI"):
 		go_ui = $UI.get_node_or_null("GameOverUI")
 
 	if go_ui:
@@ -2386,13 +2401,13 @@ func _show_game_over_screen(is_victory: bool):
 				title_lbl.text = "◆ PRAISE THE OMNISSIAH — VICTORY ◆"
 				title_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
 			if sub_lbl:
-				sub_lbl.text = "The facility successfully withstood all %d waves of the xeno onslaught." % max_waves
+				sub_lbl.text = "The facility successfully withstood all %d waves." % max_waves
 		else:
 			if title_lbl:
 				title_lbl.text = "◆ CRITICAL SYSTEM FAILURE — DEFEAT ◆"
 				title_lbl.add_theme_color_override("font_color", Color(0.92, 0.22, 0.18))
 			if sub_lbl:
-				sub_lbl.text = "Core breach occurred on Wave %d. The base has fallen." % current_wave
+				sub_lbl.text = "Core breach on Wave %d. Press [ESC] or Restart below." % current_wave
 
 		if bg_draw:
 			bg_draw.set("is_victory_screen", is_victory)
@@ -2401,6 +2416,15 @@ func _show_game_over_screen(is_victory: bool):
 		var restart_btn = go_ui.get_node_or_null("%RestartButton")
 		if restart_btn and not restart_btn.pressed.is_connected(_on_restart_pressed):
 			restart_btn.pressed.connect(_on_restart_pressed)
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo:
+		# If Game Over screen is active, allow ESC to return to title
+		var go_ui = get_node_or_null("%GameOverUI")
+		if not go_ui and has_node("UI/GameOverUI"): go_ui = $UI/GameOverUI
+		if go_ui and go_ui.visible and event.keycode == KEY_ESCAPE:
+			_on_restart_pressed()
+			get_viewport().set_input_as_handled()
 
 func _on_restart_pressed():
 	if not multiplayer.has_multiplayer_peer():
@@ -2419,6 +2443,8 @@ func request_rematch():
 func execute_rematch():
 	get_tree().paused = false
 	active_paused_peers.clear()
+	
+	get_tree().call_group("minimap_ui", "reset_minimap_state")
 
 	var go_ui = get_node_or_null("%GameOverUI")
 	if not go_ui and has_node("UI/GameOverUI"): go_ui = $UI/GameOverUI

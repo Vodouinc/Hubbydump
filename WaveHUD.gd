@@ -185,6 +185,10 @@ func _on_waaagh_unhovered() -> void:
 		waaagh_tooltip.hide()
 
 func update_telemetry(wave: int, max_w: int, title: String, preparing: bool, prep_left: float, on_break: bool, break_left: float, contacts_active: int, contacts_total: int) -> void:
+	# Ensure the HUD is visible whenever telemetry is received
+	if not visible:
+		show()
+
 	if not is_instance_valid(wave_tag_lbl): return
 
 	wave_tag_lbl.text = "⚔️ WAVE %02d/%02d" % [wave, max_w]

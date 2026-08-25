@@ -1,92 +1,87 @@
+# res://Scrap.gd
 extends Area2D
 
-@export var value: int = 5
+@export var value: int = 6
 @export var float_speed: float = 3.0
-@export var base_magnet_speed: float = 240.0
-@export var base_magnet_range: float = 220.0
+@export var player_vacuum_range: float = 75.0
+@export var player_vacuum_speed: float = 380.0
 
 var time_passed: float = 0.0
 var base_y: float = 0.0
-var target_pylon: Node2D = null
+var target_collector: Node2D = null
 var scan_timer: float = 0.0
+var is_collected: bool = false
 
 func _ready() -> void:
 	add_to_group("scrap")
 	base_y = position.y
+	monitoring = true
+	monitorable = true
+	
+	# Detect bodies (players, enemies, drones)
 	body_entered.connect(_on_body_entered)
+	area_entered.connect(_on_area_entered)
 
 func _process(delta: float) -> void:
+	if is_collected: return
 	time_passed += delta * float_speed
-	
-	# Determine if Siphon Tech is researched
-	var main_node = get_tree().get_first_node_in_group("main")
-	var is_siphon_upgraded = main_node.get("tech_magnet_unlocked") if main_node else false
-	
-	var active_range = 385.0 if is_siphon_upgraded else base_magnet_range
-	var active_speed = 360.0 if is_siphon_upgraded else base_magnet_speed
 
-	# 1. Throttle pylon search (Scans 4 times/sec)
 	scan_timer += delta
-	if scan_timer >= 0.25:
+	if scan_timer >= 0.15:
 		scan_timer = 0.0
-		_find_nearest_pylon(active_range)
+		_find_nearest_collector()
 
-	# 2. Magnetic Pull
-	if is_instance_valid(target_pylon):
-		var target_pos = target_pylon.global_position
-		var dist = global_position.distance_to(target_pos)
-		
-		# Move smoothly toward pylon at active speed
-		global_position = global_position.move_toward(target_pos, active_speed * delta)
-		
-		# Auto-absorb if Antenna (Type 5)
-		var p_type = int(target_pylon.get("building_type")) if "building_type" in target_pylon else 0
-		if p_type == 5 and dist <= 26.0:
-			if multiplayer.is_server() or not multiplayer.has_multiplayer_peer():
-				_collect_scrap_into_bank()
+	# Magnetic pull toward player or antenna pylon
+	if is_instance_valid(target_collector):
+		var target_pos = target_collector.global_position
+		global_position = global_position.move_toward(target_pos, player_vacuum_speed * delta)
+		if global_position.distance_to(target_pos) <= 22.0:
+			_collect_scrap_into_bank()
 	else:
 		position.y = base_y + sin(time_passed) * 3.5
 
-func _find_nearest_pylon(search_range: float):
-	target_pylon = null
-	var min_d = search_range
-	
-	for b in get_tree().get_nodes_in_group("buildings"):
-		if not is_instance_valid(b): continue
-		var b_type = int(b.get("building_type")) if "building_type" in b else 0
-		
-		if b_type in [4, 5]:
-			var d = global_position.distance_to(b.global_position)
+func _find_nearest_collector():
+	target_collector = null
+	var min_d = player_vacuum_range
+
+	# 1. Vacuum toward nearby players
+	for p in get_tree().get_nodes_in_group("players"):
+		if is_instance_valid(p) and not p.get("is_dead"):
+			var d = global_position.distance_to(p.global_position)
 			if d < min_d:
 				min_d = d
-				target_pylon = b
+				target_collector = p
+
+	# 2. Vacuum toward Noosphere Antenna / Distributor if Magnet tech is unlocked
+	if target_collector == null:
+		var main_node = get_tree().get_first_node_in_group("main")
+		var has_magnet = main_node.get("tech_magnet_unlocked") if main_node else false
+		var pylon_range = 380.0 if has_magnet else 220.0
+		
+		for b in get_tree().get_nodes_in_group("buildings"):
+			if is_instance_valid(b) and int(b.get("building_type")) in [4, 5]:
+				var d = global_position.distance_to(b.global_position)
+				if d < pylon_range and d < min_d:
+					min_d = d
+					target_collector = b
 
 func _on_body_entered(body: Node2D) -> void:
-	if multiplayer.is_server() or not multiplayer.has_multiplayer_peer():
-		if body.is_in_group("players") or body.is_in_group("bodyguards") or body.name.begins_with("ServoSkull"):
-			_collect_scrap_into_bank()
+	if is_collected: return
+	if body.is_in_group("players") or body.is_in_group("friendlies") or body.is_in_group("ServoSkull"):
+		_collect_scrap_into_bank()
+
+func _on_area_entered(area: Area2D) -> void:
+	if is_collected: return
+	if area.is_in_group("players") or area.is_in_group("friendlies"):
+		_collect_scrap_into_bank()
 
 func _collect_scrap_into_bank():
-	var main = get_parent()
-	if not (main and main.has_method("add_scrap")):
-		main = get_tree().get_first_node_in_group("main")
+	if is_collected: return
+	is_collected = true
 
-	if main and main.has_method("add_scrap"):
-		main.add_scrap(value)
-		rpc("spawn_pickup_fx", global_position)
-		queue_free()
+	var main_node = get_tree().get_first_node_in_group("main")
+	if main_node and main_node.has_method("add_scrap"):
+		main_node.add_scrap(value)
 
-@rpc("call_local", "reliable")
-func spawn_pickup_fx(spawn_pos: Vector2) -> void:
-	
-	AudioManager.play_sfx("scrap_pickup", spawn_pos, -2.0)
-	
-	var label = Label.new()
-	label.script = load("res://DamageNumber.gd")
-	label.global_position = spawn_pos + Vector2(-12, -20)
-	get_tree().current_scene.add_child(label)
-	
-	label.text = "+" + str(value) + " Scrap"
-	label.label_settings = LabelSettings.new()
-	label.label_settings.font_color = Color(0.2, 0.95, 0.3)
-	label.label_settings.font_size = 14
+	AudioManager.play_sfx("scrap_pickup", global_position, -2.0, 1.2)
+	queue_free()

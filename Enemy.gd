@@ -388,6 +388,9 @@ func _physics_process(delta: float) -> void:
 # ==============================================================================
 # DYNAMIC AGGRO & TARGET SELECTION MATRIX
 # ==============================================================================
+
+
+
 func _evaluate_dynamic_aggro() -> void:
 	if is_instance_valid(current_aggro_target):
 		var target_dead = current_aggro_target.get("is_dead") == true
@@ -593,19 +596,43 @@ func _process_enemy_special_abilities(_delta: float):
 				if is_instance_valid(hook_target):
 					_execute_nob_harpoon_hook(hook_target)
 
+func _has_line_of_sight_to(target: Node2D) -> bool:
+	var space = get_world_2d().direct_space_state
+	if not space or not is_instance_valid(target):
+		return false
+
+	var query = PhysicsRayQueryParameters2D.create(global_position, target.global_position)
+	query.exclude = [get_rid()]
+	query.collide_with_bodies = true
+	query.collide_with_areas = false
+
+	var hit = space.intersect_ray(query)
+	if hit.is_empty():
+		return true # Clear path with no obstacles
+
+	var collider = hit.collider
+	# If the first collider hit is our target (or another friendly player/bodyguard), line of sight is clear
+	if collider == target or collider.is_in_group("players") or collider.is_in_group("bodyguards"):
+		return true
+
+	# If it hit a barricade, wall collider, building, or mountain obstacle, line of sight is blocked
+	return false
+
 func _find_best_hook_target(max_range: float) -> Node2D:
 	var candidates: Array = []
 	for p in get_tree().get_nodes_in_group("players"):
 		if is_instance_valid(p) and not bool(p.get("is_dead")):
 			var d = global_position.distance_to(p.global_position)
 			if d >= 75.0 and d <= max_range:
-				candidates.append(p)
+				if _has_line_of_sight_to(p):
+					candidates.append(p)
 
 	for bg in get_tree().get_nodes_in_group("bodyguards"):
 		if is_instance_valid(bg):
 			var d = global_position.distance_to(bg.global_position)
 			if d >= 75.0 and d <= max_range:
-				candidates.append(bg)
+				if _has_line_of_sight_to(bg):
+					candidates.append(bg)
 
 	if candidates.is_empty(): return null
 	candidates.sort_custom(func(a, b): return global_position.distance_to(a.global_position) < global_position.distance_to(b.global_position))
@@ -744,6 +771,27 @@ class HarpoonTelegraphFX extends Node2D:
 		var dir = (aim_target - start_pos).normalized()
 		var strike_end = start_pos + (dir * max_range)
 
+		# 1. First cast a direct ray to check if the path is obstructed by a wall or obstacle
+		var ray_query = PhysicsRayQueryParameters2D.create(start_pos, strike_end)
+		if is_instance_valid(source_enemy):
+			ray_query.exclude = [source_enemy.get_rid()]
+		ray_query.collide_with_bodies = true
+		ray_query.collide_with_areas = false
+
+		var max_travel_dist = max_range
+		var hit = space.intersect_ray(ray_query)
+		if not hit.is_empty():
+			var collider = hit.collider
+			if is_instance_valid(collider):
+				# If we hit a building, wall, or world obstacle first:
+				if collider.is_in_group("buildings") or collider.is_in_group("world_obstacles") or collider is StaticBody2D:
+					max_travel_dist = start_pos.distance_to(hit.position)
+					AudioManager.play_sfx("hit", hit.position, 1.0, 1.4)
+					if collider.has_method("take_damage"):
+						collider.take_damage(15) # Hook damages the barrier it struck
+					return # Hook was stopped by the wall!
+
+		# 2. If no wall blocked the path, query for players / bodyguards
 		var shape = CircleShape2D.new()
 		shape.radius = 18.0
 		var query = PhysicsShapeQueryParameters2D.new()
@@ -756,11 +804,15 @@ class HarpoonTelegraphFX extends Node2D:
 
 		var sample_steps = 14
 		for i in range(1, sample_steps + 1):
-			var sample_pt = start_pos.lerp(strike_end, float(i) / float(sample_steps))
+			var step_dist = (float(i) / float(sample_steps)) * max_range
+			if step_dist > max_travel_dist:
+				break
+
+			var sample_pt = start_pos + (dir * step_dist)
 			query.transform = Transform2D(0.0, sample_pt)
 			var results = space.intersect_shape(query, 8)
-			for hit in results:
-				var body = hit.collider
+			for hit_res in results:
+				var body = hit_res.collider
 				if is_instance_valid(body) and (body.is_in_group("players") or body.is_in_group("bodyguards")):
 					if not bool(body.get("is_dead")):
 						var d = start_pos.distance_to(body.global_position)

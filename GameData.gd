@@ -16,7 +16,8 @@ enum TurretSpec {
 	NONE = 0,
 	COGNIS_FLAK = 1,
 	VOLKITE_CULVERIN = 2,
-	ARC_BLASTER = 3
+	ARC_BLASTER = 3,
+	GAUSS_DISINTEGRATOR = 4 # Cleansing the Necron Tomb unlocks this!
 }
 
 enum BaseRadarTier {
@@ -226,6 +227,16 @@ const TURRET_SPEC_INFO: Dictionary = {
 		"fire_interval": 0.55,
 		"damage": 45,
 		"range": 320.0
+	},
+	TurretSpec.GAUSS_DISINTEGRATOR: {
+		"name": "Cognis-Gauss Disintegrator",
+		"icon": "💚",
+		"hotkey": "4",
+		"role": "Molecular Armor Liquefier & Splash Shredder",
+		"desc": "Fires supercharged green Gauss bolts (110 DMG / 0.50s) that vaporize heavy armor with a 35px molecular splash (45 AOE DMG).",
+		"fire_interval": 0.50,
+		"damage": 110,
+		"range": 380.0
 	}
 }
 

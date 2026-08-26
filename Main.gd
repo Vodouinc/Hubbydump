@@ -36,10 +36,10 @@ const CLASS_DATA = {
 		"name": "Sister Superior",
 		"faction": "Adepta Sororitas • Order of Our Martyred Lady",
 		"role": "One-Woman Army & Holy Pyre Juggernaut",
-		"unit_type_id": 6, # <-- Point to SISTER_OF_BATTLE in UnitSprite
-		"arsenal": "• Primary (LMB): Holy Promethium Flamer (Armor-Piercing Burn Cone)\n• Secondary (RMB): Thermal Multi-Melta (Instant Armor Liquefaction)\n• Ability [1]: Seraphim Rocket Dash (Thruster Jump & Fire Trail)\n• Ability [2]: Holy Hand Grenade (Cataclysmic Relic Blast)\n• Ability [3]: Act of Faith: Miracle Shield (Passive Dodge + Instant Regen)\n• Ultimate [4]: Righteous Pyre of Saint Katherine (Ascension Pillar)\n• Passive: Saint Celestine Martyrdom (Angelic Rebirth on Death)",
+		"unit_type_id": 6,
+		"arsenal": "• Primary (LMB): Ministorum Flamer (Short-Range 65° Firestorm)\n• Secondary (RMB): Retributor Heavy Bolter (Long-Range 3-Round Burst)\n• Ability [1]: Seraphim Rocket Dash (Thruster Jump & Fire Trail)\n• Ability [2]: Holy Hand Grenade (Cataclysmic Relic Blast)\n• Ability [3]: Act of Faith: Miracle Shield (Passive Dodge + Instant Regen)\n• Ultimate [4]: Righteous Pyre of Saint Katherine (Ascension Pillar)\n• Passive: Saint Celestine Martyrdom (Angelic Rebirth on Death)",
 		"stats": "🛡️ HP: 135   |   ⚡ SPD: 310   |   🔥 ROLE: MOBA Juggernaut & Swarm Melter",
-		"desc": "Zealous champion of the God-Emperor. Sweeps across the battlefield incinerating xenos swarms with promethium, shattering heavy armor with melta fire, and resurrecting as an angelic Living Saint.",
+		"desc": "Zealous champion of the God-Emperor. Sweeps across the battlefield incinerating xenos swarms at point-blank range, eliminating distant threats with heavy bolter bursts, and resurrecting as an angelic Living Saint.",
 		"flavor": "\"In the Emperor's name we cleanse with fire. Let none survive who defy His light.\"\n— Battle Hymn of the Martyred Lady"
 	}
 }
@@ -83,6 +83,12 @@ var wave_break_timer: float = 0.0
 var is_on_wave_break: bool = false
 
 var flanker_raid_timer: float = 30.0
+
+var tech_gauss_turret_unlocked: bool = false
+var has_quantum_shield: bool = false
+
+var _navmesh_rebake_timer: float = 0.0
+var _navmesh_rebake_pending: bool = false
 
 var player_classes: Dictionary = {}
 var player_ready: Dictionary = {}
@@ -234,6 +240,12 @@ func _process(delta: float) -> void:
 				flanker_raid_timer = randf_range(28.0, 42.0)
 				_spawn_flanker_raid()
 
+	if _navmesh_rebake_pending:
+		_navmesh_rebake_timer -= delta
+		if _navmesh_rebake_timer <= 0.0:
+			_navmesh_rebake_pending = false
+			_setup_and_bake_navmesh()
+			
 	_process_lan_discovery(delta)
 
 # ==============================================================================
@@ -326,6 +338,11 @@ func _setup_core_sub_uis():
 		$UI.add_child(w_hud)
 		wave_hud_node = w_hud
 	
+	if not has_node("UI/EventBannerHUD"):
+		var banner_hud = load("res://EventBannerHUD.gd").new()
+		banner_hud.name = "EventBannerHUD"
+		$UI.add_child(banner_hud)
+	
 	if not has_node("FogOfWar"):
 		var fow = load("res://FogOfWar.gd").new()
 		fow.name = "FogOfWar"
@@ -383,6 +400,8 @@ func _setup_core_sub_uis():
 # ==============================================================================
 # 2. TITLE UI BUILDER
 # ==============================================================================
+
+
 func _build_title_menu_ui():
 	if not ui_layer: return
 
@@ -1230,10 +1249,10 @@ func _begin_match() -> void:
 	_spawn_map_scrap_deposits()
 	_spawn_ork_mega_camp()
 	_spawn_stc_vaults()
-	
-	# --- ADD THIS LINE TO ENGAGE BASE AI IF NO TECH-PRIEST IS PLAYING ---
-	_check_and_initiate_base_ai()
+	_spawn_sororitas_quest()
+	_spawn_necron_tomb()
 
+	_check_and_initiate_base_ai()
 	request_navmesh_rebake()
 	start_next_wave()
 
@@ -1341,59 +1360,186 @@ func _check_and_initiate_base_ai():
 # ==============================================================================
 # 6. SPAWNER & ENTITY ROUTING
 # ==============================================================================
+
+func _spawn_necron_tomb() -> void:
+	var base_node = get_tree().get_first_node_in_group("base")
+	var base_pos = base_node.global_position if is_instance_valid(base_node) else Vector2(500, 500)
+
+	# Spawn Tomb ~1600px South-West of Sanctum Base
+	var tomb = load("res://NecronTomb.gd").new()
+	tomb.name = "NecronTomb"
+	tomb.position = (base_pos + Vector2(-1100, -1100)).snapped(Vector2(32, 32))
+	add_child(tomb)
+
+func _spawn_sororitas_quest() -> void:
+	var base_node = get_tree().get_first_node_in_group("base")
+	var base_pos = base_node.global_position if is_instance_valid(base_node) else Vector2(500, 500)
+
+	# 1. Spawn Outpost ~900px away from base (North-East)
+	var outpost = load("res://SororitasOutpost.gd").new()
+	outpost.name = "SororitasOutpost"
+	outpost.position = (base_pos + Vector2(650, -650)).snapped(Vector2(32, 32))
+	add_child(outpost)
+	# (Notice: Relic is NO LONGER spawned here!)
+
+	# 2. Spawn Relic deep in the wilderness
+	var relic_pos = (base_pos + Vector2(-1200, 1300)).snapped(Vector2(32, 32))
+	var relic = load("res://SebastianRelic.gd").new()
+	relic.name = "SebastianRelic"
+	relic.position = relic_pos
+	add_child(relic)
+
+	# 3. Spawn Relic Guards
+	for g in range(4):
+		spawn_entity({
+			"type": "enemy",
+			"name": "RelicGuard_" + str(randi()),
+			"enemy_type": 2 if g % 2 == 0 else 1,
+			"position": relic_pos + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(35.0, 75.0),
+			"is_objective_guard": true,
+			"guard_anchor": relic_pos,
+			"counts_toward_wave": false
+		})
+
+func spawn_sebastian_relic_event() -> void:
+	# Prevent duplicate spawns if called multiple times
+	if is_instance_valid(get_node_or_null("SebastianRelic")) or not get_tree().get_nodes_in_group("sebastian_relic").is_empty():
+		return
+
+	var base_node = get_tree().get_first_node_in_group("base")
+	var base_pos = base_node.global_position if is_instance_valid(base_node) else Vector2(500, 500)
+
+	# 1. Spawn Relic deep in the wilderness
+	var relic_pos = (base_pos + Vector2(-1200, 1300)).snapped(Vector2(32, 32))
+	var relic = load("res://SebastianRelic.gd").new()
+	relic.name = "SebastianRelic"
+	relic.position = relic_pos
+	add_child(relic)
+
+	# 2. Spawn Feral Greenskin Relic Ambush Guards
+	for g in range(4):
+		spawn_entity({
+			"type": "enemy",
+			"name": "RelicGuard_" + str(randi()),
+			"enemy_type": 2 if g % 2 == 0 else 1, # Boyz & Squigs
+			"position": relic_pos + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(35.0, 75.0),
+			"is_objective_guard": true,
+			"guard_anchor": relic_pos,
+			"counts_toward_wave": false
+		})
+
+	# Tactical Alert sound
+	AudioManager.play_sfx("klaxon_alert", relic_pos, 1.0, 1.4)
+
 func _spawn_world_terrain():
 	var base_node = get_tree().get_first_node_in_group("base")
-	var base_pos = base_node.global_position if base_node else Vector2(500, 500)
+	var base_pos = base_node.global_position if is_instance_valid(base_node) else Vector2(500, 500)
 	var obs_idx = 0
 
-	# 1. MOUNTAIN RIDGES (Create 6-8 natural winding chokepoint walls)
+	# 1. MOUNTAIN RIDGES (7 winding chokepoints of Basalt Crags)
 	for ridge in range(7):
 		var ridge_angle = (float(ridge) * TAU / 7.0) + randf_range(-0.3, 0.3)
-		var ridge_start = base_pos + Vector2.RIGHT.rotated(ridge_angle) * randf_range(650.0, 1100.0)
+		var ridge_start = base_pos + Vector2.RIGHT.rotated(ridge_angle) * randf_range(650.0, 1150.0)
 		var ridge_dir = Vector2.RIGHT.rotated(ridge_angle + randf_range(1.1, 1.8))
-		var segment_count = randi_range(6, 11)
+		var segment_count = randi_range(6, 10)
 		var current_pos = ridge_start
 
 		for seg in range(segment_count):
-			obs_idx += 1
-			var r = randf_range(38.0, 56.0)
-			spawn_entity({
-				"type": "world_obstacle",
-				"name": "MountainRidge_" + str(obs_idx),
-				"position": current_pos.snapped(Vector2(24, 24)),
-				"obstacle_type": WorldObstacle.ObstacleType.MOUNTAIN_CRAG,
-				"radius": r
-			})
+			var r = randf_range(38.0, 54.0)
+			if _is_position_clear_of_landmarks(current_pos, r + 40.0):
+				obs_idx += 1
+				spawn_entity({
+					"type": "world_obstacle",
+					"name": "MountainRidge_" + str(obs_idx),
+					"position": current_pos.snapped(Vector2(24, 24)),
+					"obstacle_type": WorldObstacle.ObstacleType.MOUNTAIN_CRAG,
+					"radius": r
+				})
 			current_pos += ridge_dir * (r * 1.35) + Vector2.RIGHT.rotated(randf() * TAU) * 12.0
 
-	# 2. IRONWOOD FOREST GROVES (10 dense forest pockets)
-	for grove in range(10):
+	# 2. IRONWOOD CANOPY GROVES (8 dense cybernetic forest pockets)
+	for grove in range(8):
 		var grove_angle = randf() * TAU
 		var grove_center = base_pos + Vector2.RIGHT.rotated(grove_angle) * randf_range(600.0, 2200.0)
-		var tree_count = randi_range(7, 14)
+		var tree_count = randi_range(6, 11)
 
 		for t in range(tree_count):
+			var t_pos = grove_center + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(15.0, 110.0)
+			var r = randf_range(28.0, 38.0)
+			if _is_position_clear_of_landmarks(t_pos, r + 30.0):
+				obs_idx += 1
+				spawn_entity({
+					"type": "world_obstacle",
+					"name": "Tree_" + str(obs_idx),
+					"position": t_pos.snapped(Vector2(16, 16)),
+					"obstacle_type": WorldObstacle.ObstacleType.IRONWOOD_TREE,
+					"radius": r
+				})
+
+	# 3. INDUSTRIAL RUINS & PROMETHEUM PIPELINES (Urban choke points)
+	for ruin in range(10):
+		var ruin_pos = base_pos + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(750.0, 2100.0)
+		var r = randf_range(36.0, 48.0)
+		if _is_position_clear_of_landmarks(ruin_pos, r + 40.0):
 			obs_idx += 1
-			var t_pos = grove_center + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(15.0, 120.0)
+			var obs_t = WorldObstacle.ObstacleType.INDUSTRIAL_RUIN if ruin % 2 == 0 else WorldObstacle.ObstacleType.PROMETHEUM_PIPELINE
 			spawn_entity({
 				"type": "world_obstacle",
-				"name": "Tree_" + str(obs_idx),
-				"position": t_pos.snapped(Vector2(16, 16)),
-				"obstacle_type": WorldObstacle.ObstacleType.IRONWOOD_TREE,
-				"radius": randf_range(24.0, 36.0)
+				"name": "IndustrialZone_" + str(obs_idx),
+				"position": ruin_pos.snapped(Vector2(32, 32)),
+				"obstacle_type": obs_t,
+				"radius": r
 			})
 
-	# 3. INDUSTRIAL SECTOR RUINS (Urban chokes on the perimeter)
-	for ruin in range(12):
-		obs_idx += 1
-		var ruin_pos = base_pos + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(750.0, 2100.0)
-		spawn_entity({
-			"type": "world_obstacle",
-			"name": "Ruin_" + str(obs_idx),
-			"position": ruin_pos.snapped(Vector2(32, 32)),
-			"obstacle_type": WorldObstacle.ObstacleType.INDUSTRIAL_RUIN,
-			"radius": randf_range(42.0, 60.0)
-		})
+	# 4. CRASHED WAR-WRECKS & GLOWING RAD-CRYSTAL CLUSTERS (Wilderness landmarks)
+	for spec in range(8):
+		var spec_pos = base_pos + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(800.0, 2300.0)
+		var r = randf_range(34.0, 46.0)
+		if _is_position_clear_of_landmarks(spec_pos, r + 45.0):
+			obs_idx += 1
+			var obs_t = WorldObstacle.ObstacleType.CRASHED_WARRECK if spec % 2 == 0 else WorldObstacle.ObstacleType.RAD_CRYSTAL
+			spawn_entity({
+				"type": "world_obstacle",
+				"name": "SpecialFeature_" + str(obs_idx),
+				"position": spec_pos.snapped(Vector2(32, 32)),
+				"obstacle_type": obs_t,
+				"radius": r
+			})
+
+func _is_position_clear_of_landmarks(test_pos: Vector2, min_clearance: float) -> bool:
+	var base_node = get_tree().get_first_node_in_group("base")
+	var base_pos = base_node.global_position if is_instance_valid(base_node) else Vector2(500, 500)
+
+	# 1. Base Sanctum Protection Zone
+	if test_pos.distance_to(base_pos) < (280.0 + min_clearance):
+		return false
+
+	# 2. Necron Tomb & Ley-Line Matrix Protection Zone (240px radius around tomb)
+	var necron_tomb_pos = base_pos + Vector2(-1100, -1100)
+	if test_pos.distance_to(necron_tomb_pos) < (240.0 + min_clearance):
+		return false
+
+	# 3. Sororitas Outpost Protection Zone
+	var sororitas_pos = base_pos + Vector2(650, -650)
+	if test_pos.distance_to(sororitas_pos) < (180.0 + min_clearance):
+		return false
+
+	# 4. Sebastian Relic Protection Zone
+	var relic_pos = base_pos + Vector2(-1200, 1300)
+	if test_pos.distance_to(relic_pos) < (150.0 + min_clearance):
+		return false
+
+	# 5. Scrap Deposits (Ensures smelters can always be built unobstructed)
+	for dep in get_tree().get_nodes_in_group("scrap_deposits"):
+		if is_instance_valid(dep) and test_pos.distance_to(dep.global_position) < (90.0 + min_clearance):
+			return false
+
+	# 6. STC Vaults
+	for v in get_tree().get_nodes_in_group("stc_vaults"):
+		if is_instance_valid(v) and test_pos.distance_to(v.global_position) < (130.0 + min_clearance):
+			return false
+
+	return true
 
 func spawn_entity(data: Dictionary) -> Node:
 	if spawner and multiplayer.has_multiplayer_peer():
@@ -2037,16 +2183,15 @@ func notify_citadel_destroyed():
 
 func _announce_tactical_update(text_msg: String):
 	AudioManager.play_sfx("klaxon_alert", Vector2.ZERO, 2.0, 1.3)
-	# Display popup across all player screens
-	for p in get_tree().get_nodes_in_group("players"):
-		var label = Label.new()
-		label.script = load("res://DamageNumber.gd")
-		label.global_position = p.global_position + Vector2(-120, -55)
-		get_parent().add_child(label)
-		label.text = text_msg
-		label.label_settings = LabelSettings.new()
-		label.label_settings.font_color = Color(1.0, 0.85, 0.2)
-		label.label_settings.font_size = 14
+	
+	if multiplayer.has_multiplayer_peer():
+		rpc("sync_banner_announcement", "⚠️ TACTICAL VOX DIRECTIVE", text_msg, 3)
+	else:
+		sync_banner_announcement("⚠️ TACTICAL VOX DIRECTIVE", text_msg, 3)
+
+@rpc("call_local", "reliable")
+func sync_banner_announcement(header_txt: String, body_txt: String, banner_type: int):
+	get_tree().call_group("event_banner", "post_banner", header_txt, body_txt, banner_type)
 
 func notify_enemy_defeated():
 	if (not multiplayer.has_multiplayer_peer()) or multiplayer.is_server():
@@ -2344,6 +2489,28 @@ func sync_sanctum_tech(radar_lvl: int, waaagh_reader: bool):
 	tech_waaagh_reader_unlocked = waaagh_reader
 	get_tree().call_group("base_upgrade_ui", "_refresh_cards")
 
+func unlock_necron_archeotech() -> void:
+	tech_gauss_turret_unlocked = true
+	has_quantum_shield = true
+	add_scrap(180)
+	add_requisition(60)
+
+	# Overcharge Base Shield
+	var base_node = get_tree().get_first_node_in_group("base")
+	if is_instance_valid(base_node) and base_node.has_method("add_shield"):
+		base_node.add_shield(150)
+
+	if multiplayer.has_multiplayer_peer():
+		rpc("sync_necron_rewards", tech_gauss_turret_unlocked, has_quantum_shield)
+	else:
+		sync_necron_rewards(tech_gauss_turret_unlocked, has_quantum_shield)
+
+@rpc("call_local", "reliable")
+func sync_necron_rewards(gauss_unlocked: bool, quantum_shield: bool) -> void:
+	tech_gauss_turret_unlocked = gauss_unlocked
+	has_quantum_shield = quantum_shield
+	get_tree().call_group("buildings", "queue_redraw")
+
 func unlock_tech(tech_index: int):
 	match tech_index:
 		0: tech_shields_unlocked = true
@@ -2426,6 +2593,8 @@ func request_build_structure(build_pos: Vector2, building_type: int = 0):
 
 func request_navmesh_rebake():
 	call_deferred("_setup_and_bake_navmesh")
+	_navmesh_rebake_pending = true
+	_navmesh_rebake_timer = 0.25
 
 func _setup_and_bake_navmesh() -> void:
 	if not is_instance_valid(nav_region):
@@ -2606,6 +2775,8 @@ func execute_rematch():
 	tech_electro_barricades_unlocked = false
 	tech_spikes_cover_unlocked = false
 	tech_targeting_uplink_unlocked = false
+	tech_gauss_turret_unlocked = false
+	has_quantum_shield = false
 
 	if (not multiplayer.has_multiplayer_peer()) or multiplayer.is_server():
 		if wave_timer: wave_timer.stop()
@@ -2620,6 +2791,10 @@ func execute_rematch():
 		for cit in get_tree().get_nodes_in_group("ork_citadel"): cit.queue_free()
 		for heap in get_tree().get_nodes_in_group("ork_structures"): heap.queue_free()
 		for obs in get_tree().get_nodes_in_group("world_obstacles"): obs.queue_free()
+		for q in get_tree().get_nodes_in_group("quest_interactables"): q.queue_free()
+		for d in get_tree().get_nodes_in_group("sororitas_defenders"): d.queue_free()
+		for n in get_tree().get_nodes_in_group("necron_enemies"): n.queue_free()
+		for t in get_tree().get_nodes_in_group("necron_tomb"): t.queue_free()
 
 		var base = get_tree().get_first_node_in_group("base")
 		if base and base.has_method("sync_base_health"):
@@ -2678,11 +2853,11 @@ class STCVault extends StaticBody2D:
 		var main_node = get_tree().get_first_node_in_group("main")
 		if main_node:
 			if relic_id == 0:
-				main_node.unlock_tech(6) # Unlocks Cutting Lasers (ID 6)
-				main_node._announce_tactical_update("⚡ STC RECOVERED: COGNIS THERMAL LASER ARRAYS ONLINE!")
+				main_node.unlock_tech(6)
+				main_node._announce_tactical_update("⚡ STC RECOVERED: Cutting Laser Turret Array unlocked!")
 			else:
-				main_node.unlock_tech(7) # Unlocks Master Aegis Core (ID 7)
-				main_node._announce_tactical_update("⚡ STC RECOVERED: MASTER AEGIS FORTRESS CORE ONLINE (+75 WALL HP)!")
+				main_node.unlock_tech(7)
+				main_node._announce_tactical_update("⚡ STC RECOVERED: Master Aegis Fortress Core (+75 HP to all walls)!")
 		queue_redraw()
 
 	func _draw() -> void:

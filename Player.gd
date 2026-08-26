@@ -78,17 +78,18 @@ const HOLY_INTERVENTION_COOLDOWN_MAX: float = 14.0
 
 const EXP_REQUIREMENTS: Array[int] = [0, 80, 200, 420, 750, 1200]
 
+# --- SISTER OF BATTLE WEAPONS ---
 var flamer_active: bool = false
 var flamer_cooldown_timer: float = 0.0
 var flamer_tick_timer: float = 0.0
-const FLAMER_TICK_RATE: float = 0.08
-const FLAMER_DAMAGE: int = 14
-const FLAMER_CONE_ANGLE: float = 48.0
-const FLAMER_RANGE: float = 185.0
+const FLAMER_TICK_RATE: float = 0.07
+const FLAMER_DAMAGE: int = 16
+const FLAMER_CONE_ANGLE: float = 65.0 # Widened 65° cone
+const FLAMER_RANGE: float = 125.0     # Tight 125px close combat
 
-var melta_cooldown_timer: float = 0.0
-const MELTA_COOLDOWN: float = 1.6
-const MELTA_DAMAGE: int = 110
+var bolter_cooldown_timer: float = 0.0
+const BOLTER_COOLDOWN: float = 1.05
+const BOLTER_DAMAGE: int = 38
 
 var dash_cooldown_timer: float = 0.0
 const DASH_COOLDOWN: float = 4.0
@@ -862,43 +863,53 @@ func request_interact_nearby_structure() -> void:
 	if c_ui and c_ui.visible: c_ui.close_terminal(); return
 
 	var closest = _get_closest_interactable_structure()
-	if is_instance_valid(closest):
-		if closest.is_in_group("stc_vaults") and closest.has_method("interact_relic"):
-			closest.interact_relic(self)
-			return
+	if not is_instance_valid(closest):
+		return
 
-		if closest.is_in_group("base"):
-			if b_ui: b_ui.open_terminal(closest)
-			return
+	# 1. General interaction hook for Quests (Sororitas Outpost, Sebastian Relic, etc.)
+	if closest.has_method("interact"):
+		closest.interact(self)
+		return
 
-		var main_node = get_tree().get_first_node_in_group("main")
-		var b_type = int(closest.building_type) if "building_type" in closest else -1
+	# 2. STC Vaults
+	if closest.is_in_group("stc_vaults") and closest.has_method("interact_relic"):
+		closest.interact_relic(self)
+		return
 
-		match b_type:
-			0:
+	# 3. Sanctum Main Base Core
+	if closest.is_in_group("base"):
+		if b_ui: b_ui.open_terminal(closest)
+		return
+
+	# 4. Standard Player Buildings
+	var main_node = get_tree().get_first_node_in_group("main")
+	var b_type = int(closest.building_type) if "building_type" in closest else -1
+
+	match b_type:
+		0:
+			if multiplayer.has_multiplayer_peer():
+				if main_node: main_node.rpc_id(1, "request_upgrade_gate", closest.name)
+			elif closest.has_method("try_upgrade_to_gate"):
+				closest.try_upgrade_to_gate()
+		2:
+			var lvl = closest.turret_upgrade_level if "turret_upgrade_level" in closest else 0
+			var spec = closest.turret_spec if "turret_spec" in closest else 0
+			if lvl < 3:
 				if multiplayer.has_multiplayer_peer():
-					if main_node: main_node.rpc_id(1, "request_upgrade_gate", closest.name)
-				elif closest.has_method("try_upgrade_to_gate"):
-					closest.try_upgrade_to_gate()
-			2:
-				var lvl = closest.turret_upgrade_level if "turret_upgrade_level" in closest else 0
-				var spec = closest.turret_spec if "turret_spec" in closest else 0
-				if lvl < 3:
-					if multiplayer.has_multiplayer_peer():
-						if main_node: main_node.rpc_id(1, "request_upgrade_turret", closest.name)
-					elif closest.has_method("try_upgrade_turret"):
-						closest.try_upgrade_turret()
-				elif spec == GameData.TurretSpec.NONE and t_ui:
-					t_ui.open_modal(closest)
-			4:
-				if multiplayer.has_multiplayer_peer():
-					if main_node: main_node.rpc_id(1, "request_upgrade_distributor", closest.name)
-				elif closest.has_method("try_upgrade_distributor"):
-					closest.try_upgrade_distributor()
-			6:
-				if r_ui: r_ui.open_terminal(closest)
-			7:
-				if c_ui: c_ui.open_terminal(closest)
+					if main_node: main_node.rpc_id(1, "request_upgrade_turret", closest.name)
+				elif closest.has_method("try_upgrade_turret"):
+					closest.try_upgrade_turret()
+			elif spec == GameData.TurretSpec.NONE and t_ui:
+				t_ui.open_modal(closest)
+		4:
+			if multiplayer.has_multiplayer_peer():
+				if main_node: main_node.rpc_id(1, "request_upgrade_distributor", closest.name)
+			elif closest.has_method("try_upgrade_distributor"):
+				closest.try_upgrade_distributor()
+		6:
+			if r_ui: r_ui.open_terminal(closest)
+		7:
+			if c_ui: c_ui.open_terminal(closest)
 
 func _get_closest_interactable_structure() -> Node2D:
 	var candidates: Array[Node2D] = []
@@ -908,6 +919,11 @@ func _get_closest_interactable_structure() -> Node2D:
 	if is_instance_valid(base_node):
 		if global_position.distance_to(base_node.global_position) <= 80.0:
 			candidates.append(base_node)
+
+	# Quests (Sisters Outpost, Sebastian Relic)
+	for quest_node in get_tree().get_nodes_in_group("quest_interactables"):
+		if is_instance_valid(quest_node) and global_position.distance_to(quest_node.global_position) <= 85.0:
+			candidates.append(quest_node)
 
 	for vault in get_tree().get_nodes_in_group("stc_vaults"):
 		if is_instance_valid(vault) and not vault.get("is_cleansed"):
@@ -1000,7 +1016,7 @@ func _process(delta: float):
 
 func _process_sister_systems(delta: float):
 	if dash_cooldown_timer > 0.0: dash_cooldown_timer = maxf(0.0, dash_cooldown_timer - delta)
-	if melta_cooldown_timer > 0.0: melta_cooldown_timer = maxf(0.0, melta_cooldown_timer - delta)
+	if bolter_cooldown_timer > 0.0: bolter_cooldown_timer = maxf(0.0, bolter_cooldown_timer - delta)
 	if holy_grenade_cooldown > 0.0: holy_grenade_cooldown = maxf(0.0, holy_grenade_cooldown - delta)
 	if miracle_act_cooldown > 0.0: miracle_act_cooldown = maxf(0.0, miracle_act_cooldown - delta)
 	if sister_ultimate_cooldown > 0.0: sister_ultimate_cooldown = maxf(0.0, sister_ultimate_cooldown - delta)
@@ -1150,14 +1166,57 @@ func _find_nearest_deposit(world_pos: Vector2, max_dist: float) -> Node2D:
 func _draw():
 	if not _is_local_authority(): return
 
+	# 1. Tech-Priest Building Grid
 	if is_building_mode and current_class == PlayerClass.MELEE:
 		_draw_holographic_build_grid()
 
+	# 2. Skitarii Marshal RTS Selection Box
 	elif current_class == PlayerClass.RANGED:
 		if is_box_selecting:
 			_draw_rts_selection_box()
 		if is_attack_move_queued:
 			_draw_attack_move_cursor_reticle()
+
+	# 3. Sister of Battle 1:1 Flame Cone Stream
+	elif current_class == PlayerClass.SISTER_OF_BATTLE:
+		if flamer_active and not is_dead:
+			_draw_flamer_cone_visual()
+
+func _draw_flamer_cone_visual() -> void:
+	var mouse_world = get_global_mouse_position()
+	var aim_angle = (mouse_world - global_position).angle()
+	var half_angle_rad = deg_to_rad(FLAMER_CONE_ANGLE * 0.5)
+
+	var pulse = 0.88 + sin(Time.get_ticks_msec() * 0.04) * 0.12
+	var flame_len = FLAMER_RANGE * pulse
+
+	var num_segments = 12
+	var outer_poly: PackedVector2Array = [Vector2.ZERO]
+	var mid_poly: PackedVector2Array = [Vector2.ZERO]
+	var inner_poly: PackedVector2Array = [Vector2.ZERO]
+
+	for i in range(num_segments + 1):
+		var t = float(i) / float(num_segments)
+		var a = aim_angle - half_angle_rad + (t * half_angle_rad * 2.0)
+		var jitter = sin(Time.get_ticks_msec() * 0.03 + i * 2.0) * 6.0
+		
+		outer_poly.append(Vector2(cos(a), sin(a)) * (flame_len + jitter))
+		mid_poly.append(Vector2(cos(a), sin(a)) * (flame_len * 0.65 + jitter * 0.6))
+		inner_poly.append(Vector2(cos(a), sin(a)) * (flame_len * 0.35 + jitter * 0.3))
+
+	# 1. Outer Flame Corona (Orange)
+	draw_colored_polygon(outer_poly, Color(1.0, 0.40, 0.10, 0.35))
+	# 2. Mid Firestream (Amber/Yellow)
+	draw_colored_polygon(mid_poly, Color(1.0, 0.75, 0.15, 0.60))
+	# 3. Inner Incandescent Core (White-Hot)
+	draw_colored_polygon(inner_poly, Color(1.0, 0.95, 0.80, 0.85))
+
+	# 4. Trailing Fire Embers
+	for k in range(4):
+		var spark_t = fmod(Time.get_ticks_msec() * 0.002 + k * 0.25, 1.0)
+		var spark_a = aim_angle + randf_range(-half_angle_rad, half_angle_rad) * 0.6
+		var spark_pos = Vector2(cos(spark_a), sin(spark_a)) * (spark_t * flame_len * 1.05)
+		draw_circle(spark_pos, randf_range(1.2, 2.5), Color(1.0, 0.90, 0.30, 1.0 - spark_t))
 
 func _draw_rts_selection_box():
 	var p1 = to_local(box_select_start_world)
@@ -1406,22 +1465,24 @@ func set_building_type(type_id: int):
 func _handle_sister_input(event: InputEvent):
 	var mouse_world = get_global_mouse_position()
 
-	# LMB: Holy Flamer
+	# LMB: Ministorum Heavy Flamer
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		flamer_active = event.pressed
 		rpc("sync_flamer_fx", flamer_active)
 		get_viewport().set_input_as_handled()
 		return
 
-	# RMB: Thermal Multi-Melta
+	# RMB: Retributor Heavy Bolter (3-Round Rapid Burst)
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-		if melta_cooldown_timer <= 0.0:
-			rpc("perform_melta_blast", mouse_world)
+		if bolter_cooldown_timer <= 0.0:
+			if multiplayer.has_multiplayer_peer():
+				rpc("perform_heavy_bolter_burst", mouse_world)
+			else:
+				perform_heavy_bolter_burst(mouse_world)
 		get_viewport().set_input_as_handled()
 		return
 
 	if event is InputEventKey and event.pressed:
-		# If Ctrl is held, do NOT cast abilities (let AbilityHUD handle the Quick-Unlock)
 		if event.ctrl_pressed or Input.is_key_pressed(KEY_CTRL):
 			return
 
@@ -1465,22 +1526,46 @@ func _handle_sister_input(event: InputEvent):
 			request_interact_nearby_structure()
 			get_viewport().set_input_as_handled()
 
-@rpc("call_local", "unreliable")
-func sync_flamer_fx(is_firing: bool):
-	flamer_active = is_firing
-	if visual_sprite and "is_flamer_firing" in visual_sprite:
-		visual_sprite.is_flamer_firing = is_firing
-		visual_sprite.queue_redraw()
+@rpc("any_peer", "call_local", "reliable")
+func perform_heavy_bolter_burst(target_pos: Vector2):
+	bolter_cooldown_timer = BOLTER_COOLDOWN
+	add_camera_trauma(0.18)
 
-@rpc("any_peer", "call_local", "unreliable")
-func perform_flamer_tick(mouse_world: Vector2):
-	_execute_flamer_cone_tick(mouse_world)
+	var main_node = get_tree().get_first_node_in_group("main")
+	if not main_node: return
+
+	# 3-Round Rapid Burst Sequence (0ms, 80ms, 160ms)
+	for shot in range(3):
+		var delay = shot * 0.08
+		get_tree().create_timer(delay).timeout.connect(func():
+			if not is_instance_valid(self) or is_dead: return
+			AudioManager.play_sfx("radium_shot", global_position, -3.0, randf_range(1.15, 1.35))
+			
+			if multiplayer.is_server() or not multiplayer.has_multiplayer_peer():
+				var spawn_origin = global_position + Vector2(0, -6)
+				var spread = randf_range(-0.04, 0.04)
+				var dir = (target_pos - spawn_origin).normalized().rotated(spread)
+				var dmg = BOLTER_DAMAGE if not is_ultimate_active else int(BOLTER_DAMAGE * 1.5)
+
+				main_node.spawn_entity({
+					"type": "bullet",
+					"name": "HeavyBolterBolt_" + str(randi()),
+					"position": spawn_origin + (dir * 18.0),
+					"direction": dir,
+					"damage": dmg,
+					"bullet_type": 3, # KINETIC_TRACER
+					"is_enemy_bullet": false
+				})
+		)
 
 func _execute_flamer_cone_tick(mouse_world: Vector2):
-	AudioManager.play_sfx("radium_shot", global_position, -8.0, 0.6)
+	AudioManager.play_sfx("flamer", global_position, -7.0, 1.25)
 	var aim_dir = (mouse_world - global_position).normalized()
 
 	var space = get_world_2d().direct_space_state
+	if not space: return
+
+	# 1:1 Geometric Cone Physics Query (125px radius, 65° arc)
 	var shape = CircleShape2D.new()
 	shape.radius = FLAMER_RANGE
 	var q = PhysicsShapeQueryParameters2D.new()
@@ -1493,40 +1578,21 @@ func _execute_flamer_cone_tick(mouse_world: Vector2):
 		var b = hit.collider
 		if is_instance_valid(b) and (b.is_in_group("enemies") or b.is_in_group("objectives")):
 			var to_enemy = (b.global_position - global_position).normalized()
-			if rad_to_deg(aim_dir.angle_to(to_enemy)) <= FLAMER_CONE_ANGLE * 0.5:
+			if rad_to_deg(aim_dir.angle_to(to_enemy)) <= (FLAMER_CONE_ANGLE * 0.5):
 				if b.has_method("take_damage"):
 					var dmg = FLAMER_DAMAGE if not is_ultimate_active else int(FLAMER_DAMAGE * 1.8)
-					b.take_damage(dmg, to_enemy * 45.0)
+					b.take_damage(dmg, to_enemy * 35.0)
 
-@rpc("any_peer", "call_local", "reliable")
-func perform_melta_blast(target_pos: Vector2):
-	melta_cooldown_timer = MELTA_COOLDOWN
-	AudioManager.play_sfx("volkite_beam", global_position, 3.0, 0.75)
-	add_camera_trauma(0.40)
+@rpc("call_local", "unreliable")
+func sync_flamer_fx(is_firing: bool):
+	flamer_active = is_firing
+	if visual_sprite and "is_flamer_firing" in visual_sprite:
+		visual_sprite.is_flamer_firing = is_firing
+		visual_sprite.queue_redraw()
 
-	var dir = (target_pos - global_position).normalized()
-	var blast_end = global_position + (dir * 280.0)
-
-	var m_fx = MeltaBeamFX.new()
-	m_fx.start_pos = global_position + Vector2(0, -2)
-	m_fx.end_pos = blast_end
-	get_parent().add_child(m_fx)
-
-	var space = get_world_2d().direct_space_state
-	var shape = SegmentShape2D.new()
-	shape.a = global_position
-	shape.b = blast_end
-	var q = PhysicsShapeQueryParameters2D.new()
-	q.shape = shape
-	q.collide_with_bodies = true
-	var hits = space.intersect_shape(q, 32)
-
-	for hit in hits:
-		var b = hit.collider
-		if is_instance_valid(b) and (b.is_in_group("enemies") or b.is_in_group("objectives")):
-			if b.has_method("take_damage"):
-				var dmg = MELTA_DAMAGE if not is_ultimate_active else int(MELTA_DAMAGE * 1.5)
-				b.take_damage(dmg, dir * 350.0)
+@rpc("any_peer", "call_local", "unreliable")
+func perform_flamer_tick(mouse_world: Vector2):
+	_execute_flamer_cone_tick(mouse_world)
 
 @rpc("any_peer", "call_local", "reliable")
 func perform_seraphim_dash(d_dir: Vector2):
@@ -2353,7 +2419,7 @@ class TooltipOverlayRenderer extends Node2D:
 		var font = ThemeDB.fallback_font
 
 		var is_maxed = false
-		if b.is_in_group("stc_vaults"):
+		if b.is_in_group("stc_vaults") or b.is_in_group("quest_interactables"):
 			pass
 		elif b.is_in_group("base") or ("building_type" in b and int(b.building_type) in [6, 7]):
 			pass
@@ -2370,6 +2436,7 @@ class TooltipOverlayRenderer extends Node2D:
 		var pulse = 0.7 + sin(Time.get_ticks_msec() * 0.007) * 0.3
 		var ring_r = 26.0
 		if b.is_in_group("base"): ring_r = 52.0
+		elif b.is_in_group("quest_interactables"): ring_r = 30.0
 		elif "building_type" in b and int(b.building_type) in [1, 3, 6, 7]: ring_r = 34.0
 
 		if is_maxed:

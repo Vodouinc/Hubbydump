@@ -150,6 +150,14 @@ func _draw_main_base():
 	IsoDraw.purity_seal(self, door_p + Vector2(-12, -4), 8.0)
 	IsoDraw.purity_seal(self, door_p + Vector2(12, -4), 8.0)
 
+	var main_node = get_tree().get_first_node_in_group("main")
+	if main_node and main_node.get("has_quantum_shield"):
+		var pulse = 0.7 + sin(idle_timer * 4.0) * 0.3
+		draw_set_transform(Vector2.ZERO, 0, Vector2(1.0, 0.50))
+		draw_arc(Vector2.ZERO, 58.0, 0, TAU, 36, Color(0.20, 1.0, 0.45, 0.85 * pulse), 2.0)
+		draw_circle(Vector2.ZERO, 58.0, Color(0.20, 1.0, 0.45, 0.08 * pulse))
+		draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
+
 # ==============================================================================
 # 2. BARRICADE
 # ==============================================================================
@@ -275,6 +283,11 @@ func _draw_turret():
 					draw_line(b_root + perp * 4.5, b_tip + perp * 2.0, C_BRASS, 2.5)
 					draw_line(b_root - perp * 4.5, b_tip - perp * 2.0, C_BRASS, 2.5)
 					draw_circle(head_pos, 4.5, C_CYAN)
+				4: # Necron Gauss Disintegrator
+					draw_line(b_root, b_tip, C_STEEL_DARK, 6.0)
+					draw_line(b_root, b_tip, Color(0.20, 1.0, 0.45), 2.5)
+					draw_circle(b_tip, 3.5, Color(0.20, 1.0, 0.45))
+					draw_circle(head_pos, 4.0, Color(0.20, 1.0, 0.45))
 
 	draw_circle(head_pos, 2.0, C_CYAN)
 

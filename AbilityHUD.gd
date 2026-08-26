@@ -648,8 +648,8 @@ func _get_data_for_category(category: String, idx: int) -> Dictionary:
 		match category:
 			"weapon":
 				match idx:
-					0: return {"key": "LMB", "name": "Holy Flamer", "short": "FLAMER", "sub": "Burn Cone", "icon": "flamer", "scrap": 0, "req": 0, "type_id": -1, "desc": "Continuous promethium fire cone.", "flavor": "\"Cleanse with fire.\""}
-					1: return {"key": "RMB", "name": "Multi-Melta", "short": "MELTA", "sub": "Thermal Ray", "icon": "melta", "scrap": 0, "req": 0, "type_id": -1, "desc": "Devastating thermal ray (110 DMG).", "flavor": "\"No armor withstands His fury.\""}
+					0: return {"key": "LMB", "name": "Ministorum Flamer", "short": "FLAMER", "sub": "Burn Cone", "icon": "flamer", "scrap": 0, "req": 0, "type_id": -1, "desc": "Continuous short-range firestorm (125px / 65° cone).", "flavor": "\"Cleanse with promethium.\""}
+					1: return {"key": "RMB", "name": "Retributor Bolter", "short": "BOLTER", "sub": "3-Round Burst", "icon": "radium_carbine", "scrap": 0, "req": 0, "type_id": -1, "desc": "Long-range 3-round explosive bolt burst (3x 38 DMG).", "flavor": "\"Lead in His holy name.\""}
 					2: return {"key": "SPACE", "name": "Seraphim Dash", "short": "DASH", "sub": "Thruster", "icon": "seraphim_dash", "scrap": 0, "req": 0, "type_id": 4, "current_rank": r_dash, "max_rank": 3, "can_upgrade": (pts > 0 and r_dash < 3), "desc": "Rocket dash leaving fire trails.", "flavor": "\"Seraphim wings.\""}
 					_: return {}
 			"marshal_action":
@@ -739,9 +739,9 @@ func refresh_hud_display():
 		elif p_class == 1 and i == 2:
 			slot.cooldown_left = local_player.orbital_strike_cooldown if "orbital_strike_cooldown" in local_player else 0.0
 		elif p_class == 2:
-			if i == 1: slot.cooldown_left = local_player.melta_cooldown_timer if "melta_cooldown_timer" in local_player else 0.0
+			if i == 1: slot.cooldown_left = local_player.bolter_cooldown_timer if "bolter_cooldown_timer" in local_player else 0.0
 			elif i == 2: slot.cooldown_left = local_player.dash_cooldown_timer if "dash_cooldown_timer" in local_player else 0.0
-
+	
 	# Tech-Priest Defenses & Industry Pods
 	if p_class == 0:
 		for i in range(defense_buttons.size()):

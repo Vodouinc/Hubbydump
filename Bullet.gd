@@ -7,7 +7,8 @@ enum BulletType {
 	PLASMA_BOLT = 2,       # Tech-Priest: Heavy superheated cyan plasma orb
 	KINETIC_TRACER = 3,    # Cognis Turret / Heavy Stubber: Amber tracer streak
 	PHOSPHOR_ROUND = 4,    # Kastelan Automata: Heavy incendiary white-hot bolt
-	ORK_SLUG = 5           # Gretchin/Orks: Heavy jagged iron scrap slug
+	ORK_SLUG = 5,          # Gretchin/Orks: Heavy jagged iron scrap slug
+	GAUSS_FLAYER = 6       # Necrons: Molecular-disintegrating green energy flayer
 }
 
 @export var bullet_type: BulletType = BulletType.KINETIC_TRACER:
@@ -57,6 +58,11 @@ func _apply_bullet_type_stats():
 			speed = 520.0
 			is_plasma_caliver = true
 			is_enemy_bullet = false
+		BulletType.GAUSS_FLAYER:
+			speed = 680.0
+			# Only add to enemy_bullets group if spawned as an enemy projectile
+			if is_enemy_bullet:
+				add_to_group("enemy_bullets")
 		BulletType.KINETIC_TRACER:
 			speed = 720.0
 			# Only set to false if not already set as enemy
@@ -82,6 +88,10 @@ func _setup_bullet_light():
 			light_col = Color(0.35, 0.90, 1.0)
 			energy = 0.9
 			scale_factor = 1.4
+		BulletType.GAUSS_FLAYER:
+			light_col = Color(0.15, 1.00, 0.45)
+			energy = 1.2
+			scale_factor = 1.8
 		BulletType.RADIUM_FLECHETTE:
 			light_col = Color(0.25, 0.95, 0.35)
 			energy = 0.8
@@ -119,6 +129,13 @@ func _draw() -> void:
 			draw_line(Vector2(-18, 0), Vector2(8, 0), Color(0.85, 0.95, 1.0, 0.95), 1.0) # Razor-sharp core
 			draw_circle(Vector2(8, 0), 1.0, Color.WHITE)
 
+		BulletType.GAUSS_FLAYER:
+			# Molecular-flaying emerald Gauss beam with corona
+			draw_circle(Vector2(2, 0), 6.5, Color(0.15, 1.0, 0.40, 0.35))
+			draw_line(Vector2(-16, 0), Vector2(4, 0), Color(0.20, 1.0, 0.45, 0.9), 4.5)
+			draw_line(Vector2(-12, 0), Vector2(5, 0), Color(0.85, 1.0, 0.90), 1.6)
+			draw_circle(Vector2(5, 0), 2.2, Color.WHITE)
+
 		BulletType.RADIUM_FLECHETTE:
 			# Glowing irradiated green dart
 			draw_line(Vector2(-12, 0), Vector2(3, 0), Color(0.25, 0.95, 0.35, 0.45), 3.0)
@@ -155,10 +172,9 @@ func _draw() -> void:
 func _on_body_entered(body: Node2D):
 	if body == self: return
 
-	# 1. ENEMY BULLETS (Gretchin scrap slugs, etc.)
+	# 1. ENEMY BULLETS (Gretchin scrap slugs, Necron enemy warriors)
 	if is_enemy_bullet:
-		# COMPLETELY IGNORE ALL ENEMIES (No self-harm or friendly fire)
-		if body.is_in_group("enemies") or body.is_in_group("ork_citadel") or body.is_in_group("ork_structures"):
+		if body.is_in_group("enemies") or body.is_in_group("ork_citadel") or body.is_in_group("ork_structures") or body.is_in_group("necron_enemies"):
 			return
 
 		if multiplayer.is_server() or not multiplayer.has_multiplayer_peer():
@@ -169,9 +185,8 @@ func _on_body_entered(body: Node2D):
 			elif body.is_in_group("world_obstacles"):
 				call_deferred("queue_free")
 
-	# 2. PLAYER & DEFENDER BULLETS
+	# 2. PLAYER & DEFENDER BULLETS (Cognis Turrets, Rangers, Plasma, Gauss Turret)
 	else:
-		# COMPLETELY IGNORE PLAYERS AND FRIENDLIES
 		if body.is_in_group("players") or body.is_in_group("bodyguards") or body.is_in_group("friendlies") or body.is_in_group("buildings") or body.is_in_group("base"):
 			return
 
@@ -179,8 +194,32 @@ func _on_body_entered(body: Node2D):
 			if body.is_in_group("enemies") or body.is_in_group("objectives") or body.is_in_group("ork_citadel") or body.is_in_group("ork_structures"):
 				if "is_plasma_caliver" in self and is_plasma_caliver and body.has_method("apply_telemetry_mark"):
 					body.apply_telemetry_mark(6.0)
+
 				if body.has_method("take_damage"):
 					body.take_damage(damage)
+
+				# GAUSS MOLECULAR DISINTEGRATION SPLASH (45 AOE DMG in 35px)
+				if bullet_type == BulletType.GAUSS_FLAYER:
+					_execute_gauss_splash(body.global_position)
+
 				call_deferred("queue_free")
 			elif body.is_in_group("world_obstacles"):
 				call_deferred("queue_free")
+
+func _execute_gauss_splash(hit_pos: Vector2) -> void:
+	AudioManager.play_sfx("volkite_beam", hit_pos, -2.0, 1.8)
+	var space = get_world_2d().direct_space_state
+	if not space: return
+
+	var shape = CircleShape2D.new()
+	shape.radius = 35.0
+	var q = PhysicsShapeQueryParameters2D.new()
+	q.shape = shape
+	q.transform = Transform2D(0.0, hit_pos)
+	q.collide_with_bodies = true
+	var hits = space.intersect_shape(q, 16)
+	for h in hits:
+		var target = h.collider
+		if is_instance_valid(target) and (target.is_in_group("enemies") or target.is_in_group("objectives")):
+			if target.has_method("take_damage"):
+				target.take_damage(45, (target.global_position - hit_pos).normalized() * 100.0)

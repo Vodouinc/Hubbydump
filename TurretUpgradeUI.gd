@@ -28,7 +28,7 @@ func _build_ui_layout():
 	add_child(center)
 
 	var pc = PanelContainer.new()
-	pc.custom_minimum_size = Vector2(860, 340)
+	pc.custom_minimum_size = Vector2(1060, 350)
 	pc.mouse_filter = Control.MOUSE_FILTER_STOP
 	center.add_child(pc)
 	panel_container = pc
@@ -82,15 +82,21 @@ func _process(_delta: float):
 
 func _unhandled_input(event: InputEvent):
 	if not visible: return
-	if event is InputEventKey and event.pressed:
-		if event.keycode == KEY_1 or event.keycode == KEY_KP_1:
+	if event is InputEventKey and event.pressed and not event.echo:
+		var main_node = get_tree().get_first_node_in_group("main")
+		var gauss_unlocked = main_node.get("tech_gauss_turret_unlocked") if main_node else false
+
+		if event.keycode in [KEY_1, KEY_KP_1]:
 			_select_spec(GameData.TurretSpec.COGNIS_FLAK)
 			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_2 or event.keycode == KEY_KP_2:
+		elif event.keycode in [KEY_2, KEY_KP_2]:
 			_select_spec(GameData.TurretSpec.VOLKITE_CULVERIN)
 			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_3 or event.keycode == KEY_KP_3:
+		elif event.keycode in [KEY_3, KEY_KP_3]:
 			_select_spec(GameData.TurretSpec.ARC_BLASTER)
+			get_viewport().set_input_as_handled()
+		elif (event.keycode in [KEY_4, KEY_KP_4]) and gauss_unlocked and GameData.TurretSpec.has("GAUSS_DISINTEGRATOR"):
+			_select_spec(GameData.TurretSpec.GAUSS_DISINTEGRATOR)
 			get_viewport().set_input_as_handled()
 		elif event.keycode in [KEY_ESCAPE, KEY_E]:
 			close_modal()
@@ -103,32 +109,47 @@ func _refresh_cards():
 
 	var main_node = get_tree().get_first_node_in_group("main")
 	var cur_req = main_node.requisition_amount if main_node else 0
+	var gauss_unlocked = main_node.get("tech_gauss_turret_unlocked") if main_node else false
 
-	for spec_id in [GameData.TurretSpec.COGNIS_FLAK, GameData.TurretSpec.VOLKITE_CULVERIN, GameData.TurretSpec.ARC_BLASTER]:
-		var info = GameData.TURRET_SPEC_INFO[spec_id]
-		var card = _create_spec_card(spec_id, info, cur_req)
-		cards_container.add_child(card)
+	# 1. Base 3 Specializations
+	var specs_to_show: Array[int] = [
+		GameData.TurretSpec.COGNIS_FLAK,
+		GameData.TurretSpec.VOLKITE_CULVERIN,
+		GameData.TurretSpec.ARC_BLASTER
+	]
 
-func _create_spec_card(spec_id: int, info: Dictionary, cur_req: int) -> PanelContainer:
+	# 2. Append Gauss Disintegrator if unlocked from the Necron Tomb
+	if gauss_unlocked and GameData.TurretSpec.has("GAUSS_DISINTEGRATOR"):
+		specs_to_show.append(GameData.TurretSpec.GAUSS_DISINTEGRATOR)
+
+	# 3. Build the Cards
+	for spec_id in specs_to_show:
+		var info = GameData.TURRET_SPEC_INFO.get(spec_id, {})
+		if not info.is_empty():
+			var is_archeotech = (spec_id == GameData.TurretSpec.get("GAUSS_DISINTEGRATOR", -1))
+			var card = _create_spec_card(spec_id, info, cur_req, is_archeotech)
+			cards_container.add_child(card)
+
+func _create_spec_card(spec_id: int, info: Dictionary, cur_req: int, is_archeotech: bool = false) -> PanelContainer:
 	var card = PanelContainer.new()
-	card.custom_minimum_size = Vector2(245, 210)
+	card.custom_minimum_size = Vector2(235, 215)
 
 	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 6)
+	vbox.add_theme_constant_override("separation", 5)
 	card.add_child(vbox)
 
 	var header = Label.new()
 	header.text = "[%s] %s %s" % [info.hotkey, info.icon, info.name]
 	header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	header.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
-	header.add_theme_font_size_override("font_size", 13)
+	header.add_theme_color_override("font_color", Color(0.20, 1.00, 0.45) if is_archeotech else Color(0.20, 0.88, 1.0))
+	header.add_theme_font_size_override("font_size", 12)
 	vbox.add_child(header)
 
 	var role_lbl = Label.new()
 	role_lbl.text = info.role
 	role_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	role_lbl.add_theme_color_override("font_color", Color(0.95, 0.75, 0.20))
-	role_lbl.add_theme_font_size_override("font_size", 10)
+	role_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45) if is_archeotech else Color(0.95, 0.75, 0.20))
+	role_lbl.add_theme_font_size_override("font_size", 9)
 	vbox.add_child(role_lbl)
 
 	var desc_lbl = Label.new()
@@ -136,7 +157,7 @@ func _create_spec_card(spec_id: int, info: Dictionary, cur_req: int) -> PanelCon
 	desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	desc_lbl.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	desc_lbl.add_theme_color_override("font_color", Color(0.75, 0.78, 0.82))
-	desc_lbl.add_theme_font_size_override("font_size", 11)
+	desc_lbl.add_theme_font_size_override("font_size", 10)
 	vbox.add_child(desc_lbl)
 
 	var cost_lbl = Label.new()
@@ -149,7 +170,7 @@ func _create_spec_card(spec_id: int, info: Dictionary, cur_req: int) -> PanelCon
 	var btn = Button.new()
 	btn.text = "COMMISSION [%s]" % info.hotkey
 	btn.disabled = (cur_req < GameData.TURRET_SPEC_REQ_COST)
-	btn.custom_minimum_size = Vector2(0, 30)
+	btn.custom_minimum_size = Vector2(0, 28)
 	btn.pressed.connect(func(): _select_spec(spec_id))
 	vbox.add_child(btn)
 

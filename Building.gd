@@ -152,10 +152,7 @@ func _setup_building_light() -> void:
 	match building_type:
 		Type.GENERATOR:
 			light = LightUtils.create_point_light(Color(0.20, 0.88, 1.0), 1.3, 2.6)
-		Type.MANUFACTORUM:
-			light = LightUtils.create_point_light(Color(1.0, 0.55, 0.15), 1.4, 2.8)
 		Type.TURRET:
-			# Adapt light color based on weapon specialization
 			match turret_spec:
 				GameData.TurretSpec.VOLKITE_CULVERIN:
 					light = LightUtils.create_point_light(Color(1.0, 0.25, 0.15), 1.2, 2.4)
@@ -163,9 +160,13 @@ func _setup_building_light() -> void:
 					light = LightUtils.create_point_light(Color(0.20, 0.88, 1.0), 1.3, 2.6)
 				GameData.TurretSpec.COGNIS_FLAK:
 					light = LightUtils.create_point_light(Color(1.0, 0.75, 0.25), 1.0, 2.2)
+				GameData.TurretSpec.GAUSS_DISINTEGRATOR:
+					light = LightUtils.create_point_light(Color(0.20, 1.0, 0.45), 1.4, 2.8)
 				_:
 					var glow_col = Color(0.20, 0.88, 1.0) if is_noosphere_connected else Color(1.0, 0.75, 0.25)
 					light = LightUtils.create_point_light(glow_col, 0.8, 1.8)
+		Type.MANUFACTORUM:
+			light = LightUtils.create_point_light(Color(1.0, 0.55, 0.15), 1.4, 2.8)
 		Type.DISTRIBUTOR:
 			light = LightUtils.create_point_light(Color(1.0, 0.72, 0.15), 0.8, 1.8)
 		Type.NOOSPHERE_ANTENNA:
@@ -475,6 +476,12 @@ func _calculate_target_weight(enemy: Node2D) -> float:
 		GameData.TurretSpec.ARC_BLASTER:
 			if enemy.type in [Enemy.EnemyType.SQUIG, Enemy.EnemyType.ORK_BOY]:
 				weight += 300.0
+		GameData.TurretSpec.GAUSS_DISINTEGRATOR:
+			# Prioritize high-threat armored targets (Nobz, Warboss, Ork Citadel)
+			if enemy.type in [4, 5] or enemy.is_in_group("objectives") or enemy.is_in_group("ork_citadel"):
+				weight += 750.0
+			elif "current_health" in enemy and "max_health" in enemy:
+				weight += (float(enemy.current_health) / float(enemy.max_health)) * 250.0
 	return weight
 
 @rpc("call_local", "unreliable")
@@ -872,6 +879,19 @@ func _on_turret_timer_timeout():
 							"damage": GameData.TURRET_DAMAGE_BY_LEVEL[turret_upgrade_level]
 						})
 					AudioManager.play_sfx("laser", global_position, -4.0)
+
+				GameData.TurretSpec.GAUSS_DISINTEGRATOR:
+					if main_node.spawner:
+						main_node.spawner.spawn({
+							"type": "bullet",
+							"name": "GaussTurretBolt_" + str(randi()),
+							"position": global_position + (dir * 24.0),
+							"direction": dir,
+							"damage": GameData.TURRET_SPEC_INFO[turret_spec].damage,
+							"bullet_type": 6, # BulletType.GAUSS_FLAYER
+							"is_enemy_bullet": false # Friendly projectile!
+						})
+					AudioManager.play_sfx("volkite_beam", global_position, -1.0, 1.6)
 
 				GameData.TurretSpec.COGNIS_FLAK:
 					flak_barrel_toggle = not flak_barrel_toggle

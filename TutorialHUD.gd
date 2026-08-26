@@ -12,6 +12,9 @@ var tut_title_lbl: Label
 var tut_task_lbl: Label
 var skip_btn: Button
 
+var bonus_sororitas_lbl: Label
+var bonus_necron_lbl: Label
+
 # Section 2: Primary Objectives
 var primary_wave_lbl: Label
 var primary_citadel_lbl: Label
@@ -232,11 +235,11 @@ func _build_ui():
 	log_panel = PanelContainer.new()
 	log_panel.name = "DirectivesLogPanel"
 	log_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	log_panel.custom_minimum_size = Vector2(240, 0)
+	log_panel.custom_minimum_size = Vector2(250, 0)
 
 	# Semi-transparent glassmorphic StyleBox
 	var sb = StyleBoxFlat.new()
-	sb.bg_color = Color(0.02, 0.03, 0.05, 0.55)
+	sb.bg_color = Color(0.02, 0.03, 0.05, 0.65)
 	sb.border_color = Color(0.20, 0.88, 1.0, 0.35)
 	sb.set_border_width_all(1)
 	sb.set_corner_radius_all(3)
@@ -333,6 +336,20 @@ func _build_ui():
 	bonus_outposts_lbl.add_theme_color_override("font_color", Color(0.75, 0.80, 0.85))
 	root_vbox.add_child(bonus_outposts_lbl)
 
+	bonus_sororitas_lbl = Label.new()
+	bonus_sororitas_lbl.text = "[ ] Sisters: Sebastian Relic"
+	bonus_sororitas_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	bonus_sororitas_lbl.add_theme_font_size_override("font_size", 8)
+	bonus_sororitas_lbl.add_theme_color_override("font_color", Color(0.75, 0.80, 0.85))
+	root_vbox.add_child(bonus_sororitas_lbl)
+
+	bonus_necron_lbl = Label.new()
+	bonus_necron_lbl.text = "[ ] Necron Tomb: Undiscovered"
+	bonus_necron_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	bonus_necron_lbl.add_theme_font_size_override("font_size", 8)
+	bonus_necron_lbl.add_theme_color_override("font_color", Color(0.75, 0.80, 0.85))
+	root_vbox.add_child(bonus_necron_lbl)
+
 # ==============================================================================
 # LIVE TRACKING FOR CAMPAIGN & TUTORIALS
 # ==============================================================================
@@ -341,6 +358,7 @@ func _refresh_campaign_objectives():
 	var main_node = get_tree().get_first_node_in_group("main")
 	if not main_node: return
 
+	# 1. Wave Defense
 	var cur_w = main_node.get("current_wave") if "current_wave" in main_node else 1
 	var max_w = main_node.get("max_waves") if "max_waves" in main_node else 15
 	if is_instance_valid(primary_wave_lbl):
@@ -350,6 +368,7 @@ func _refresh_campaign_objectives():
 		else:
 			primary_wave_lbl.text = "[ ] Defend Forge: Wave %02d/%02d" % [cur_w, max_w]
 
+	# 2. Citadel Strike
 	var citadel = get_tree().get_first_node_in_group("ork_citadel")
 	if is_instance_valid(primary_citadel_lbl):
 		if not is_instance_valid(citadel) and main_node.get("is_warboss_spawned"):
@@ -361,6 +380,7 @@ func _refresh_campaign_objectives():
 		else:
 			primary_citadel_lbl.text = "[ ] Strike: Destroy Citadel"
 
+	# 3. STC Vaults
 	var stc_vaults = get_tree().get_nodes_in_group("stc_vaults")
 	var cleansed_count = 0
 	for v in stc_vaults:
@@ -374,6 +394,7 @@ func _refresh_campaign_objectives():
 		else:
 			bonus_stc_lbl.text = "[ ] Recover STC Relics (%d/2)" % cleansed_count
 
+	# 4. Outposts
 	var destroyed_sats = 0
 	if not main_node.get("has_squig_pit"): destroyed_sats += 1
 	if not main_node.get("has_stormboy_pad"): destroyed_sats += 1
@@ -385,6 +406,51 @@ func _refresh_campaign_objectives():
 			bonus_outposts_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
 		else:
 			bonus_outposts_lbl.text = "[ ] Cripple Outposts (%d/3)" % destroyed_sats
+
+	# 5. Sororitas Quest Tracker
+	var outpost = get_tree().get_first_node_in_group("sororitas_outpost")
+	if is_instance_valid(bonus_sororitas_lbl):
+		if is_instance_valid(outpost):
+			match int(outpost.get("quest_state")):
+				0: # NOT_STARTED
+					bonus_sororitas_lbl.text = "[ ] Sisters: Talk at Outpost"
+					bonus_sororitas_lbl.add_theme_color_override("font_color", Color(0.75, 0.80, 0.85))
+				1: # IN_PROGRESS
+					bonus_sororitas_lbl.text = "[ ] Sisters: Find Sebastian Relic"
+					bonus_sororitas_lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
+				2: # RELIC_FOUND
+					bonus_sororitas_lbl.text = "[!] Sisters: Return Relic to Outpost"
+					bonus_sororitas_lbl.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
+				3: # COMPLETED
+					bonus_sororitas_lbl.text = "[✓] Sisters: Defending Base"
+					bonus_sororitas_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
+		else:
+			bonus_sororitas_lbl.text = "[✓] Sisters: Vigil Active"
+			bonus_sororitas_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
+
+	# 6. Necron Tomb Tracker
+	var tomb = get_tree().get_first_node_in_group("necron_tomb")
+	if is_instance_valid(bonus_necron_lbl):
+		if is_instance_valid(tomb):
+			match int(tomb.get("tomb_state")):
+				0: # DORMANT
+					bonus_necron_lbl.text = "[ ] Necron Tomb: Unsealed"
+					bonus_necron_lbl.add_theme_color_override("font_color", Color(0.75, 0.80, 0.85))
+				1: # HACKING
+					bonus_necron_lbl.text = "[!] Necron Tomb: Deciphering Lock..."
+					bonus_necron_lbl.add_theme_color_override("font_color", Color(0.25, 0.95, 0.45))
+				2: # AWAKENED / BOSS
+					bonus_necron_lbl.text = "[☠] Necron Tomb: Purge Cryptek"
+					bonus_necron_lbl.add_theme_color_override("font_color", Color(0.92, 0.22, 0.18))
+				3: # REWARD_READY
+					bonus_necron_lbl.text = "[!] Necron Tomb: Extract Noctilith"
+					bonus_necron_lbl.add_theme_color_override("font_color", Color(1.0, 0.88, 0.35))
+				4: # COMPLETED
+					bonus_necron_lbl.text = "[✓] Necron Tomb: Cleansed"
+					bonus_necron_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
+		else:
+			bonus_necron_lbl.text = "[✓] Necron Tomb: Cleansed"
+			bonus_necron_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
 
 func _evaluate_tutorial_quest():
 	if current_step_index >= current_quests.size():

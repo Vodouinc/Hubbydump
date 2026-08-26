@@ -286,6 +286,15 @@ func _show_title_screen():
 	if singleplayer_root_control: singleplayer_root_control.hide()
 	if lobby_root_control: lobby_root_control.hide()
 
+	# Hide all in-game HUDs and clean up beacons
+	get_tree().call_group("tutorial_hud", "reset_tutorial")
+	var a_hud = get_tree().get_first_node_in_group("ability_hud")
+	if a_hud: a_hud.hide()
+	var w_hud = get_tree().get_first_node_in_group("wave_hud")
+	if w_hud: w_hud.hide()
+	var m_ui = get_tree().get_first_node_in_group("minimap_ui")
+	if m_ui: m_ui.hide()
+
 func _show_singleplayer_menu():
 	if title_root_control: title_root_control.hide()
 	if singleplayer_root_control: singleplayer_root_control.show()
@@ -2493,6 +2502,8 @@ func sync_game_over(is_victory: bool):
 	if w_hud: w_hud.hide()
 	var m_ui = get_tree().get_first_node_in_group("minimap_ui")
 	if m_ui: m_ui.hide()
+	var t_hud = get_tree().get_first_node_in_group("tutorial_hud")
+	if t_hud: t_hud.hide()
 
 	var p_ui = get_tree().get_first_node_in_group("pause_menu")
 	if p_ui: p_ui.hide()
@@ -2562,6 +2573,7 @@ func execute_rematch():
 	
 	get_tree().call_group("minimap_ui", "reset_minimap_state")
 	get_tree().call_group("fog_of_war", "reset_fog")
+	get_tree().call_group("tutorial_hud", "reset_tutorial")
 	
 	var go_ui = get_node_or_null("%GameOverUI")
 	if not go_ui and has_node("UI/GameOverUI"): go_ui = $UI/GameOverUI
@@ -2572,6 +2584,9 @@ func execute_rematch():
 
 	var a_hud = get_tree().get_first_node_in_group("ability_hud")
 	if a_hud: a_hud.hide()
+
+	var w_hud = get_tree().get_first_node_in_group("wave_hud")
+	if w_hud: w_hud.hide()
 
 	current_wave = 0
 	active_enemies = 0

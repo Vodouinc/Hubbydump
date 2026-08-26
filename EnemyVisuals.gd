@@ -40,13 +40,12 @@ func _ready() -> void:
 
 func _setup_glow_layer():
 	if not has_node("EnemyGlowOverlay"):
-		glow_layer = Node2D.new()
+		glow_layer = EnemyGlowRenderer.new()
 		glow_layer.name = "EnemyGlowOverlay"
 		var mat = CanvasItemMaterial.new()
 		mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
 		glow_layer.material = mat
 		add_child(glow_layer)
-		glow_layer.set_script(load("res://EnemyVisuals.gd").EnemyGlowRenderer)
 	else:
 		glow_layer = get_node("EnemyGlowOverlay")
 

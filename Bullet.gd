@@ -29,10 +29,13 @@ func _ready():
 	unshaded_mat.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
 	material = unshaded_mat
 
-	collision_layer = 4 # FIXED: Layer 4 allows the sanctuary dome to intercept bullets
+	collision_layer = 4
 	collision_mask = 0xFFFFFFFF
 	monitoring = true
 	monitorable = true
+
+	# FIX: Align visual rotation with velocity vector
+	rotation = direction.angle()
 
 	add_to_group("bullets")
 	_apply_bullet_type_stats()
@@ -40,6 +43,7 @@ func _ready():
 
 	get_tree().create_timer(3.0).timeout.connect(queue_free)
 	body_entered.connect(_on_body_entered)
+
 
 func _apply_bullet_type_stats():
 	match bullet_type:
@@ -105,6 +109,7 @@ func _setup_bullet_light():
 
 func _physics_process(delta: float):
 	position += direction * speed * delta
+	rotation = direction.angle()
 
 func _draw() -> void:
 	match bullet_type:

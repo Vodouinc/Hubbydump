@@ -304,9 +304,10 @@ func set_rally_point(world_pos: Vector2):
 
 func _process_gate_sensor():
 	var should_open = false
+	# FIXED: Checks all players and friendly cohort units
 	var friendlies: Array = get_tree().get_nodes_in_group("players")
-	friendlies.append_array(get_tree().get_nodes_in_group("bodyguards"))
-	friendlies.append_array(get_tree().get_nodes_in_group("ServoSkull"))
+	friendlies.append_array(get_tree().get_nodes_in_group("friendlies"))
+	friendlies.append_array(get_tree().get_nodes_in_group("controllable_units"))
 
 	for f in friendlies:
 		if is_instance_valid(f) and global_position.distance_to(f.global_position) <= GATE_SENSOR_RADIUS:
@@ -498,6 +499,9 @@ func take_damage(amount: int, knockback: Vector2 = Vector2.ZERO):
 		damage_remaining -= shield_dmg
 		if multiplayer.has_multiplayer_peer():
 			rpc("sync_shield", current_shield)
+		else:
+			# FIXED: Update UI in singleplayer when shield takes damage
+			update_ui()
 
 	if damage_remaining > 0.0:
 		var new_hp = max(0, current_health - int(damage_remaining))
@@ -522,7 +526,6 @@ func take_damage(amount: int, knockback: Vector2 = Vector2.ZERO):
 						if has_electro and enemy.has_method("take_damage"):
 							enemy.take_damage(12)
 							enemy.set("knockback_velocity", (enemy.global_position - global_position).normalized() * 80.0)
-
 @rpc("call_local", "reliable")
 func sync_shield(new_shield: float):
 	current_shield = new_shield
@@ -839,8 +842,10 @@ func _on_turret_timer_timeout():
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server(): return
 	
 	var max_range = GameData.TURRET_SPEC_INFO[turret_spec].range if turret_spec != GameData.TurretSpec.NONE else GameData.TURRET_RANGE_BY_LEVEL[turret_upgrade_level]
+	
+	# FIXED: Acquire smart target with proper specialized max_range fallback
 	if not is_instance_valid(cached_target_enemy) or global_position.distance_to(cached_target_enemy.global_position) > max_range:
-		cached_target_enemy = _find_closest_enemy()
+		cached_target_enemy = _acquire_turret_target(max_range)
 
 	if is_instance_valid(cached_target_enemy):
 		var enemy_vel = cached_target_enemy.velocity if "velocity" in cached_target_enemy else Vector2.ZERO

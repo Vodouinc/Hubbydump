@@ -6,13 +6,11 @@ var local_player: Node2D = null
 var update_accumulator: float = 0.0
 var context_banner: PanelContainer = null
 var context_label: Label = null
-const UPDATE_INTERVAL: float = 0.06
+var main_hbox: HBoxContainer = null
+const UPDATE_INTERVAL: float = 0.05
 
 var reboot_panel: PanelContainer = null
 var reboot_timer_lbl: Label = null
-
-# Tech-Priest Active Tab (0: Defenses, 1: Industry)
-var tp_active_tab: int = 0
 
 # Theme Colors
 const C_BG_DARK     := Color(0.04, 0.05, 0.08, 0.96)
@@ -23,20 +21,19 @@ const C_CYAN        := Color(0.20, 0.88, 1.00)
 const C_AMBER       := Color(1.00, 0.72, 0.15)
 const C_RED_ALERT   := Color(0.92, 0.22, 0.18)
 const C_GREEN_READY := Color(0.35, 0.95, 0.45)
-const C_PARCHMENT   := Color(0.88, 0.84, 0.72)
-const C_MUTED       := Color(0.50, 0.54, 0.60)
 
 var weapon_buttons: Array[Button] = []
-var action_buttons: Array[Button] = []
+var defense_buttons: Array[Button] = []
+var industry_buttons: Array[Button] = []
+var marshal_action_buttons: Array[Button] = []
 var augment_buttons: Array[Button] = []
 
-# Tech-Priest Tab Buttons
-var tp_tab_container: HBoxContainer = null
-var tp_defenses_tab_btn: Button = null
-var tp_industry_tab_btn: Button = null
+# Pod Containers
+var defense_pod_panel: PanelContainer = null
+var industry_pod_panel: PanelContainer = null
+var marshal_action_panel: PanelContainer = null
+var augment_panel: PanelContainer = null
 
-var action_panel: PanelContainer = null
-var action_title_lbl: Label = null
 var tooltip_card: PanelContainer = null
 var hovered_slot_data: Dictionary = {}
 var global_res_label: Label = null
@@ -61,10 +58,34 @@ func _process(delta: float):
 			hide()
 			return
 
+	_update_hud_positions()
+
 	update_accumulator += delta
 	if update_accumulator >= UPDATE_INTERVAL:
 		update_accumulator = 0.0
 		refresh_hud_display()
+
+func _update_hud_positions():
+	var vp = get_viewport_rect().size
+	if is_instance_valid(main_hbox):
+		var w = clampf(main_hbox.size.x, 780.0, 1020.0)
+		main_hbox.position = Vector2((vp.x - w) * 0.5, vp.y - 88.0)
+		main_hbox.size.y = 80.0
+
+	if is_instance_valid(context_banner):
+		context_banner.position = Vector2((vp.x - 460.0) * 0.5, vp.y - 114.0)
+		context_banner.size = Vector2(460.0, 22.0)
+
+	if is_instance_valid(sister_prog_panel):
+		sister_prog_panel.position = Vector2((vp.x - 420.0) * 0.5, vp.y - 116.0)
+		sister_prog_panel.size = Vector2(420.0, 22.0)
+
+	# Centers the Respawn Banner in the middle of the screen
+	if is_instance_valid(reboot_panel):
+		var r_width = 480.0
+		var r_height = 62.0
+		reboot_panel.position = Vector2((vp.x - r_width) * 0.5, (vp.y - r_height) * 0.38)
+		reboot_panel.size = Vector2(r_width, r_height)
 
 func _find_local_player():
 	for p in get_tree().get_nodes_in_group("players"):
@@ -75,81 +96,35 @@ func _find_local_player():
 
 func setup_hud_for_player(player_node: Node2D):
 	local_player = player_node
-	tp_active_tab = 0
 	show()
+	_configure_pods_for_class()
 	refresh_hud_display()
+
+func _configure_pods_for_class():
+	var p_class = int(local_player.get("current_class")) if is_instance_valid(local_player) and "current_class" in local_player else 0
+
+	if p_class == 0: # Tech-Priest: Show Defenses and Industry side-by-side
+		if defense_pod_panel: defense_pod_panel.show()
+		if industry_pod_panel: industry_pod_panel.show()
+		if marshal_action_panel: marshal_action_panel.hide()
+		if augment_panel: augment_panel.hide()
+	elif p_class == 1: # Marshal: Show Directives and Retinue
+		if defense_pod_panel: defense_pod_panel.hide()
+		if industry_pod_panel: industry_pod_panel.hide()
+		if marshal_action_panel: marshal_action_panel.show()
+		if augment_panel: augment_panel.show()
+	elif p_class == 2: # Sister: Show Relics and Blessings
+		if defense_pod_panel: defense_pod_panel.hide()
+		if industry_pod_panel: industry_pod_panel.hide()
+		if marshal_action_panel: marshal_action_panel.show()
+		if augment_panel: augment_panel.show()
 
 func _input(event: InputEvent) -> void:
 	if not is_instance_valid(local_player): return
 	var p_class = int(local_player.get("current_class")) if "current_class" in local_player else 0
 
-	# =========================================================================
-	# A. TECH-PRIEST RTS TAB & BUILD HOTKEYS (1/2 Tabs + Q/E/R/F Building Keys)
-	# =========================================================================
-	if p_class == 0:
-		if event is InputEventKey and event.pressed and not event.echo:
-			var code = event.keycode if event.keycode != 0 else event.physical_keycode
-			
-			# ESC / Backspace: Cancel Building Mode
-			if code == KEY_ESCAPE:
-				if local_player.get("is_building_mode"):
-					if local_player.has_method("toggle_build_mode"):
-						local_player.toggle_build_mode(-1)
-					refresh_hud_display()
-					get_viewport().set_input_as_handled()
-					return
-
-			# Keys 1 & 2: Switch Tabs
-			match code:
-				KEY_1, KEY_KP_1:
-					tp_active_tab = 0 # Switch to DEFENSES Tab
-					refresh_hud_display()
-					get_viewport().set_input_as_handled()
-					return
-				KEY_2, KEY_KP_2:
-					tp_active_tab = 1 # Switch to INDUSTRY Tab
-					refresh_hud_display()
-					get_viewport().set_input_as_handled()
-					return
-
-			# Keys Q, E, R, F: Select Building in Active Tab (No WASD Conflict!)
-			if tp_active_tab == 0: # --- DEFENSES TAB ---
-				match code:
-					KEY_Q:
-						_select_tp_structure(0) # Aegis Rampart (Wall)
-						get_viewport().set_input_as_handled()
-					KEY_E:
-						_select_tp_structure(2) # Cognis Turret
-						get_viewport().set_input_as_handled()
-					KEY_R:
-						_select_tp_structure(4) # Electro-Relay
-						get_viewport().set_input_as_handled()
-
-			elif tp_active_tab == 1: # --- INDUSTRY TAB ---
-				match code:
-					KEY_Q:
-						_select_tp_structure(1) # Plasma Dynamo
-						get_viewport().set_input_as_handled()
-					KEY_E:
-						_select_tp_structure(3) # Scrap Smelter
-						get_viewport().set_input_as_handled()
-					KEY_R:
-						_select_tp_structure(6) # Tech Shrine
-						get_viewport().set_input_as_handled()
-					KEY_F:
-						_select_tp_structure(7) # Cybernetica Forge
-						get_viewport().set_input_as_handled()
-
-		elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
-			if local_player.get("is_building_mode"):
-				if local_player.has_method("toggle_build_mode"):
-					local_player.toggle_build_mode(-1)
-				refresh_hud_display()
-
-	# =========================================================================
-	# B. SISTER OF BATTLE QUICK-UNLOCK HOTKEYS (CTRL + 1-4 / SPACE)
-	# =========================================================================
-	elif p_class == 2:
+	# Sister of Battle Quick-Upgrade Hotkeys (CTRL + 1-4 / SPACE)
+	if p_class == 2:
 		if event is InputEventKey and event.pressed and not event.echo:
 			if event.ctrl_pressed or Input.is_key_pressed(KEY_CTRL):
 				var code = event.keycode if event.keycode != 0 else event.physical_keycode
@@ -165,18 +140,6 @@ func _input(event: InputEvent) -> void:
 				if target_id != -1:
 					_try_quick_upgrade_sister(target_id)
 					get_viewport().set_input_as_handled()
-
-func set_tp_tab(tab_idx: int) -> void:
-	tp_active_tab = tab_idx
-	refresh_hud_display()
-
-func get_tp_tab() -> int:
-	return tp_active_tab
-
-func _select_tp_structure(type_id: int):
-	if local_player and local_player.has_method("toggle_build_mode"):
-		local_player.toggle_build_mode(type_id)
-	refresh_hud_display()
 
 func _try_quick_upgrade_sister(target_upgrade_id: int) -> void:
 	var pts = local_player.get("miracle_points") if "miracle_points" in local_player else 0
@@ -203,8 +166,7 @@ func _try_quick_upgrade_sister(target_upgrade_id: int) -> void:
 				local_player.request_upgrade_sister_ability(target_upgrade_id)
 
 func _build_hud_layout():
-	for c in get_children():
-		c.queue_free()
+	for c in get_children(): c.queue_free()
 
 	_build_top_left_resource_monitor()
 	_build_context_interaction_banner()
@@ -217,27 +179,24 @@ func _build_hud_layout():
 	add_child(tooltip_card)
 	tooltip_card.hide()
 
-	var main_hbox = HBoxContainer.new()
+	# Main HUD Horizontal Flow Bar
+	main_hbox = HBoxContainer.new()
 	main_hbox.name = "MainHUDHBox"
-	main_hbox.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	main_hbox.offset_left = -440
-	main_hbox.offset_right = 440
-	main_hbox.offset_top = -80
-	main_hbox.offset_bottom = -10
-	main_hbox.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	main_hbox.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	main_hbox.add_theme_constant_override("separation", 10)
+	main_hbox.add_theme_constant_override("separation", 8)
 	main_hbox.mouse_filter = Control.MOUSE_FILTER_PASS
 	add_child(main_hbox)
 
-	# --- POD A: ARMAMENTS & ACTIVES ---
-	var weapon_panel = _create_pod_panel("ArmamentPod", main_hbox)
+	var vp = get_viewport_rect().size
+	main_hbox.position = Vector2((vp.x - 920.0) * 0.5, vp.y - 88.0)
+
+	# --- 1. ARMAMENTS POD (Shared: LMB / RMB / C) ---
+	var weapon_panel = _create_pod_panel("ArmamentPod", main_hbox, C_BRASS_DIM)
 	var weapon_vbox = VBoxContainer.new()
 	weapon_vbox.add_theme_constant_override("separation", 2)
 	weapon_panel.add_child(weapon_vbox)
 
 	var w_title = Label.new()
-	w_title.text = "ARMAMENTS & ACTIVES"
+	w_title.text = "ARMAMENTS"
 	w_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	w_title.add_theme_font_size_override("font_size", 8)
 	w_title.add_theme_color_override("font_color", C_BRASS)
@@ -250,86 +209,249 @@ func _build_hud_layout():
 	weapon_buttons.clear()
 	for i in range(3):
 		var slot = CompactSlot.new("weapon", i)
-		slot.custom_minimum_size = Vector2(48, 48)
+		slot.custom_minimum_size = Vector2(48, 50)
 		slot.mouse_entered.connect(_on_slot_hovered.bind(slot))
 		slot.mouse_exited.connect(_on_slot_unhovered)
 		slot.pressed.connect(_on_slot_clicked.bind(slot))
 		weapon_hbox.add_child(slot)
 		weapon_buttons.append(slot)
 
-	# --- POD B: TACTICAL PROTOCOLS / FORGE COGITATOR TABS ---
-	action_panel = _create_pod_panel("ActionPod", main_hbox)
-	var action_vbox = VBoxContainer.new()
-	action_vbox.add_theme_constant_override("separation", 2)
-	action_panel.add_child(action_vbox)
+	# --- 2. TECH-PRIEST DEFENSES POD (Cyan Theme: 1, 2, 3) ---
+	defense_pod_panel = _create_pod_panel("DefensePod", main_hbox, Color(0.12, 0.32, 0.42))
+	var def_vbox = VBoxContainer.new()
+	def_vbox.add_theme_constant_override("separation", 2)
+	defense_pod_panel.add_child(def_vbox)
 
-	# Tech-Priest Dual Category Tabs Header
-	tp_tab_container = HBoxContainer.new()
-	tp_tab_container.alignment = BoxContainer.ALIGNMENT_CENTER
-	tp_tab_container.add_theme_constant_override("separation", 6)
-	action_vbox.add_child(tp_tab_container)
+	var def_title = Label.new()
+	def_title.text = "🛡️ DEFENSES"
+	def_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	def_title.add_theme_font_size_override("font_size", 8)
+	def_title.add_theme_color_override("font_color", C_CYAN)
+	def_vbox.add_child(def_title)
 
-	tp_defenses_tab_btn = Button.new()
-	tp_defenses_tab_btn.text = "[1] 🛡️ DEFENSES"
-	tp_defenses_tab_btn.custom_minimum_size = Vector2(100, 16)
-	tp_defenses_tab_btn.add_theme_font_size_override("font_size", 8)
-	tp_defenses_tab_btn.pressed.connect(func(): set_tp_tab(0))
-	tp_tab_container.add_child(tp_defenses_tab_btn)
+	var def_hbox = HBoxContainer.new()
+	def_hbox.add_theme_constant_override("separation", 4)
+	def_vbox.add_child(def_hbox)
 
-	tp_industry_tab_btn = Button.new()
-	tp_industry_tab_btn.text = "[2] ⚙️ INDUSTRY"
-	tp_industry_tab_btn.custom_minimum_size = Vector2(100, 16)
-	tp_industry_tab_btn.add_theme_font_size_override("font_size", 8)
-	tp_industry_tab_btn.pressed.connect(func(): set_tp_tab(1))
-	tp_tab_container.add_child(tp_industry_tab_btn)
-
-	action_title_lbl = Label.new()
-	action_title_lbl.text = "TACTICAL PROTOCOLS"
-	action_title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	action_title_lbl.add_theme_font_size_override("font_size", 8)
-	action_title_lbl.add_theme_color_override("font_color", C_CYAN)
-	action_vbox.add_child(action_title_lbl)
-
-	var action_hbox = HBoxContainer.new()
-	action_hbox.add_theme_constant_override("separation", 4)
-	action_vbox.add_child(action_hbox)
-
-	action_buttons.clear()
-	for i in range(7):
-		var slot = CompactSlot.new("action", i)
-		slot.custom_minimum_size = Vector2(48, 48)
+	defense_buttons.clear()
+	for i in range(3):
+		var slot = CompactSlot.new("tp_defense", i)
+		slot.custom_minimum_size = Vector2(48, 50)
 		slot.mouse_entered.connect(_on_slot_hovered.bind(slot))
 		slot.mouse_exited.connect(_on_slot_unhovered)
 		slot.pressed.connect(_on_slot_clicked.bind(slot))
-		action_hbox.add_child(slot)
-		action_buttons.append(slot)
+		def_hbox.add_child(slot)
+		defense_buttons.append(slot)
 
-	# --- POD C: CYBERNETICS & BLESSINGS ---
-	var augment_panel = _create_pod_panel("AugmentPod", main_hbox)
-	var augment_vbox = VBoxContainer.new()
-	augment_vbox.add_theme_constant_override("separation", 2)
-	augment_panel.add_child(augment_vbox)
+	# --- 3. TECH-PRIEST INDUSTRY POD (Brass Theme: 4, 5, 6, 7) ---
+	industry_pod_panel = _create_pod_panel("IndustryPod", main_hbox, Color(0.42, 0.32, 0.14))
+	var ind_vbox = VBoxContainer.new()
+	ind_vbox.add_theme_constant_override("separation", 2)
+	industry_pod_panel.add_child(ind_vbox)
+
+	var ind_title = Label.new()
+	ind_title.text = "⚙️ INDUSTRY"
+	ind_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ind_title.add_theme_font_size_override("font_size", 8)
+	ind_title.add_theme_color_override("font_color", C_AMBER)
+	ind_vbox.add_child(ind_title)
+
+	var ind_hbox = HBoxContainer.new()
+	ind_hbox.add_theme_constant_override("separation", 4)
+	ind_vbox.add_child(ind_hbox)
+
+	industry_buttons.clear()
+	for i in range(4):
+		var slot = CompactSlot.new("tp_industry", i)
+		slot.custom_minimum_size = Vector2(48, 50)
+		slot.mouse_entered.connect(_on_slot_hovered.bind(slot))
+		slot.mouse_exited.connect(_on_slot_unhovered)
+		slot.pressed.connect(_on_slot_clicked.bind(slot))
+		ind_hbox.add_child(slot)
+		industry_buttons.append(slot)
+
+	# --- 4. MARSHAL & SISTER DIRECTIVES POD ---
+	marshal_action_panel = _create_pod_panel("MarshalActionPod", main_hbox, C_BRASS_DIM)
+	var m_act_vbox = VBoxContainer.new()
+	m_act_vbox.add_theme_constant_override("separation", 2)
+	marshal_action_panel.add_child(m_act_vbox)
+
+	var m_act_title = Label.new()
+	m_act_title.name = "MarshalTitle"
+	m_act_title.text = "TACTICAL DIRECTIVES"
+	m_act_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	m_act_title.add_theme_font_size_override("font_size", 8)
+	m_act_title.add_theme_color_override("font_color", C_CYAN)
+	m_act_vbox.add_child(m_act_title)
+
+	var m_act_hbox = HBoxContainer.new()
+	m_act_hbox.add_theme_constant_override("separation", 4)
+	m_act_vbox.add_child(m_act_hbox)
+
+	marshal_action_buttons.clear()
+	for i in range(6):
+		var slot = CompactSlot.new("marshal_action", i)
+		slot.custom_minimum_size = Vector2(48, 50)
+		slot.mouse_entered.connect(_on_slot_hovered.bind(slot))
+		slot.mouse_exited.connect(_on_slot_unhovered)
+		slot.pressed.connect(_on_slot_clicked.bind(slot))
+		m_act_hbox.add_child(slot)
+		marshal_action_buttons.append(slot)
+
+	# --- 5. RETINUE & BLESSINGS POD (Marshal / Sister) ---
+	augment_panel = _create_pod_panel("AugmentPod", main_hbox, C_BRASS_DIM)
+	var aug_vbox = VBoxContainer.new()
+	aug_vbox.add_theme_constant_override("separation", 2)
+	augment_panel.add_child(aug_vbox)
 
 	var aug_title = Label.new()
-	aug_title.text = "BIONICS & BLESSINGS"
+	aug_title.text = "RETINUE / BLESSINGS"
 	aug_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	aug_title.add_theme_font_size_override("font_size", 8)
 	aug_title.add_theme_color_override("font_color", C_AMBER)
-	augment_vbox.add_child(aug_title)
+	aug_vbox.add_child(aug_title)
 
 	var augment_hbox = HBoxContainer.new()
 	augment_hbox.add_theme_constant_override("separation", 4)
-	augment_vbox.add_child(augment_hbox)
+	aug_vbox.add_child(augment_hbox)
 
 	augment_buttons.clear()
 	for i in range(3):
 		var slot = CompactSlot.new("augment", i)
-		slot.custom_minimum_size = Vector2(48, 48)
+		slot.custom_minimum_size = Vector2(48, 50)
 		slot.mouse_entered.connect(_on_slot_hovered.bind(slot))
 		slot.mouse_exited.connect(_on_slot_unhovered)
 		slot.pressed.connect(_on_slot_clicked.bind(slot))
 		augment_hbox.add_child(slot)
 		augment_buttons.append(slot)
+
+	_configure_pods_for_class()
+
+func _create_pod_panel(pod_name: String, parent_container: Container, border_col: Color) -> PanelContainer:
+	var pc = PanelContainer.new()
+	pc.name = pod_name
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = C_BG_DARK
+	sb.border_color = border_col
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(3)
+	sb.content_margin_left = 6
+	sb.content_margin_right = 6
+	sb.content_margin_top = 3
+	sb.content_margin_bottom = 3
+	sb.shadow_color = Color(0, 0, 0, 0.6)
+	sb.shadow_size = 3
+	pc.add_theme_stylebox_override("panel", sb)
+	parent_container.add_child(pc)
+	return pc
+
+func _build_top_left_resource_monitor():
+	var top_panel = PanelContainer.new()
+	top_panel.name = "TopLeftResourceMonitor"
+	top_panel.z_index = 100
+	top_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	top_panel.offset_left = 12
+	top_panel.offset_top = 8
+	top_panel.offset_right = 265
+	top_panel.offset_bottom = 36
+	top_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0.04, 0.05, 0.08, 0.92)
+	sb.border_color = Color(0.24, 0.28, 0.35)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(3)
+	sb.content_margin_left = 10
+	sb.content_margin_right = 10
+	sb.content_margin_top = 2
+	sb.content_margin_bottom = 2
+	sb.shadow_color = Color(0, 0, 0, 0.5)
+	sb.shadow_size = 4
+	top_panel.add_theme_stylebox_override("panel", sb)
+	add_child(top_panel)
+
+	global_res_label = Label.new()
+	global_res_label.name = "GlobalResLabel"
+	global_res_label.text = "⚙ 75 SCRAP   ⚡ 25 REQ   🤖 0/12"
+	global_res_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	global_res_label.add_theme_font_size_override("font_size", 9)
+	global_res_label.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
+	top_panel.add_child(global_res_label)
+
+func _build_context_interaction_banner():
+	context_banner = PanelContainer.new()
+	context_banner.name = "ContextInteractionBanner"
+	context_banner.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	context_banner.offset_left = -230
+	context_banner.offset_right = 230
+	context_banner.offset_top = -106
+	context_banner.offset_bottom = -82
+	context_banner.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	context_banner.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	context_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0.04, 0.05, 0.08, 0.94)
+	sb.border_color = Color(0.20, 0.88, 1.0, 0.8)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(3)
+	sb.content_margin_left = 10
+	sb.content_margin_right = 10
+	sb.content_margin_top = 2
+	sb.content_margin_bottom = 2
+	sb.shadow_color = Color(0, 0, 0, 0.5)
+	sb.shadow_size = 4
+	context_banner.add_theme_stylebox_override("panel", sb)
+	add_child(context_banner)
+
+	context_label = Label.new()
+	context_label.name = "ContextLabel"
+	context_label.text = ""
+	context_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	context_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	context_label.add_theme_font_size_override("font_size", 8)
+	context_banner.add_child(context_label)
+	context_banner.hide()
+
+func _build_reboot_overlay():
+	reboot_panel = PanelContainer.new()
+	reboot_panel.name = "RebootOverlay"
+	reboot_panel.z_index = 150
+	reboot_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0.04, 0.05, 0.08, 0.95)
+	sb.border_color = Color(0.92, 0.22, 0.18)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(4)
+	sb.content_margin_left = 20
+	sb.content_margin_right = 20
+	sb.content_margin_top = 10
+	sb.content_margin_bottom = 10
+	sb.shadow_color = Color(0, 0, 0, 0.75)
+	sb.shadow_size = 8
+	reboot_panel.add_theme_stylebox_override("panel", sb)
+	add_child(reboot_panel)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 4)
+	reboot_panel.add_child(vbox)
+
+	reboot_timer_lbl = Label.new()
+	reboot_timer_lbl.text = "⚡ CEREBRAL REBOOT IN PROGRESS: 10.0s ⚡"
+	reboot_timer_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	reboot_timer_lbl.add_theme_color_override("font_color", Color(1.0, 0.72, 0.15))
+	reboot_timer_lbl.add_theme_font_size_override("font_size", 13)
+	vbox.add_child(reboot_timer_lbl)
+
+	var sub_lbl = Label.new()
+	sub_lbl.text = "Chassis destroyed. Re-materializing at Main Base Sanctum..."
+	sub_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub_lbl.add_theme_color_override("font_color", Color(0.75, 0.78, 0.82))
+	sub_lbl.add_theme_font_size_override("font_size", 9)
+	vbox.add_child(sub_lbl)
+
+	reboot_panel.hide()
 
 func _build_sister_progression_ribbon():
 	sister_prog_panel = PanelContainer.new()
@@ -382,134 +504,6 @@ func _build_sister_progression_ribbon():
 
 	sister_prog_panel.hide()
 
-func _build_reboot_overlay():
-	reboot_panel = PanelContainer.new()
-	reboot_panel.name = "RebootOverlay"
-	reboot_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	reboot_panel.offset_left = -260
-	reboot_panel.offset_right = 260
-	reboot_panel.offset_top = 80
-	reboot_panel.offset_bottom = 140
-	reboot_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	
-	var sb = StyleBoxFlat.new()
-	sb.bg_color = Color(0.04, 0.05, 0.08, 0.95)
-	sb.border_color = Color(0.92, 0.22, 0.18)
-	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(4)
-	sb.content_margin_left = 16
-	sb.content_margin_right = 16
-	sb.content_margin_top = 8
-	sb.content_margin_bottom = 8
-	reboot_panel.add_theme_stylebox_override("panel", sb)
-	add_child(reboot_panel)
-
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 2)
-	reboot_panel.add_child(vbox)
-
-	reboot_timer_lbl = Label.new()
-	reboot_timer_lbl.text = "⚡ CEREBRAL REBOOT IN PROGRESS: 10.0s ⚡"
-	reboot_timer_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	reboot_timer_lbl.add_theme_color_override("font_color", Color(1.0, 0.72, 0.15))
-	reboot_timer_lbl.add_theme_font_size_override("font_size", 12)
-	vbox.add_child(reboot_timer_lbl)
-
-	var sub_lbl = Label.new()
-	sub_lbl.text = "Chassis destroyed. Re-materializing at Main Base Sanctum..."
-	sub_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	sub_lbl.add_theme_color_override("font_color", Color(0.75, 0.78, 0.82))
-	sub_lbl.add_theme_font_size_override("font_size", 9)
-	vbox.add_child(sub_lbl)
-
-	reboot_panel.hide()
-
-func _build_context_interaction_banner():
-	context_banner = PanelContainer.new()
-	context_banner.name = "ContextInteractionBanner"
-	context_banner.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	context_banner.offset_left = -230
-	context_banner.offset_right = 230
-	context_banner.offset_top = -106
-	context_banner.offset_bottom = -82
-	context_banner.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	context_banner.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	context_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	
-	var sb = StyleBoxFlat.new()
-	sb.bg_color = Color(0.04, 0.05, 0.08, 0.94)
-	sb.border_color = Color(0.20, 0.88, 1.0, 0.8)
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(3)
-	sb.content_margin_left = 10
-	sb.content_margin_right = 10
-	sb.content_margin_top = 2
-	sb.content_margin_bottom = 2
-	sb.shadow_color = Color(0, 0, 0, 0.5)
-	sb.shadow_size = 4
-	context_banner.add_theme_stylebox_override("panel", sb)
-	add_child(context_banner)
-
-	context_label = Label.new()
-	context_label.name = "ContextLabel"
-	context_label.text = ""
-	context_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	context_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	context_label.add_theme_font_size_override("font_size", 8)
-	context_banner.add_child(context_label)
-	context_banner.hide()
-
-func _build_top_left_resource_monitor():
-	var top_panel = PanelContainer.new()
-	top_panel.name = "TopLeftResourceMonitor"
-	top_panel.z_index = 100
-	top_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	top_panel.offset_left = 12
-	top_panel.offset_top = 8
-	top_panel.offset_right = 265
-	top_panel.offset_bottom = 36
-	top_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	
-	var sb = StyleBoxFlat.new()
-	sb.bg_color = Color(0.04, 0.05, 0.08, 0.92)
-	sb.border_color = Color(0.24, 0.28, 0.35)
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(3)
-	sb.content_margin_left = 10
-	sb.content_margin_right = 10
-	sb.content_margin_top = 2
-	sb.content_margin_bottom = 2
-	sb.shadow_color = Color(0, 0, 0, 0.5)
-	sb.shadow_size = 4
-	top_panel.add_theme_stylebox_override("panel", sb)
-	add_child(top_panel)
-
-	global_res_label = Label.new()
-	global_res_label.name = "GlobalResLabel"
-	global_res_label.text = "⚙ 75 SCRAP   ⚡ 25 REQ   🤖 0/12"
-	global_res_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	global_res_label.add_theme_font_size_override("font_size", 9)
-	global_res_label.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
-	top_panel.add_child(global_res_label)
-
-func _create_pod_panel(pod_name: String, parent_container: Container) -> PanelContainer:
-	var pc = PanelContainer.new()
-	pc.name = pod_name
-	var sb = StyleBoxFlat.new()
-	sb.bg_color = C_BG_DARK
-	sb.border_color = C_BRASS_DIM
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(4)
-	sb.content_margin_left = 6
-	sb.content_margin_right = 6
-	sb.content_margin_top = 4
-	sb.content_margin_bottom = 4
-	sb.shadow_color = Color(0, 0, 0, 0.6)
-	sb.shadow_size = 4
-	pc.add_theme_stylebox_override("panel", sb)
-	parent_container.add_child(pc)
-	return pc
-
 func _on_slot_hovered(slot: Button):
 	if slot is CompactSlot:
 		hovered_slot_data = slot.cached_data
@@ -519,27 +513,27 @@ func _on_slot_hovered(slot: Button):
 
 func _on_slot_unhovered():
 	hovered_slot_data.clear()
-	if tooltip_card:
-		tooltip_card.hide()
+	if tooltip_card: tooltip_card.hide()
 
 func _on_slot_clicked(slot: Button):
 	if not is_instance_valid(local_player) or not (slot is CompactSlot): return
 	var p_class = int(local_player.get("current_class")) if "current_class" in local_player else 0
 
-	# --- 1. TECH-PRIEST ACTIONS ---
+	# 1. Tech-Priest Building Clicks
 	if p_class == 0:
-		if slot.category == "action":
+		if slot.category in ["tp_defense", "tp_industry"]:
 			var t_id = slot.cached_data.get("type_id", -1)
-			if t_id != -1:
-				_select_tp_structure(t_id)
+			if t_id != -1 and local_player.has_method("toggle_build_mode"):
+				local_player.toggle_build_mode(t_id)
+				refresh_hud_display()
 
-		elif slot.category == "augment" and slot.slot_index == 0:
+		elif slot.category == "weapon" and slot.slot_index == 2:
 			if multiplayer.has_multiplayer_peer(): local_player.rpc_id(1, "request_spawn_servo_skull")
 			else: local_player.request_spawn_servo_skull()
 
-	# --- 2. SKITARII MARSHAL ACTIONS ---
+	# 2. Marshal Actions
 	elif p_class == 1:
-		if slot.category == "action":
+		if slot.category == "marshal_action":
 			match slot.slot_index:
 				0: local_player.is_attack_move_queued = not local_player.is_attack_move_queued
 				1: local_player._issue_stop_to_selection()
@@ -553,82 +547,60 @@ func _on_slot_clicked(slot: Button):
 					if is_instance_valid(local_player.camera):
 						local_player.camera.global_position = local_player.global_position
 				5:
-					if multiplayer.has_multiplayer_peer():
-						local_player.rpc_id(1, "request_field_requisition_uplink")
-					else:
-						local_player.request_field_requisition_uplink()
+					if multiplayer.has_multiplayer_peer(): local_player.rpc_id(1, "request_field_requisition_uplink")
+					else: local_player.request_field_requisition_uplink()
 		elif slot.category == "weapon" and slot.slot_index == 1:
 			if local_player.has_method("_toggle_doctrina_imperative"):
 				local_player._toggle_doctrina_imperative()
 		elif slot.category == "augment":
-			if multiplayer.has_multiplayer_peer():
-				local_player.rpc_id(1, "request_recruit_bodyguard", slot.slot_index)
-			else:
-				local_player.request_recruit_bodyguard(slot.slot_index)
+			if multiplayer.has_multiplayer_peer(): local_player.rpc_id(1, "request_recruit_bodyguard", slot.slot_index)
+			else: local_player.request_recruit_bodyguard(slot.slot_index)
 
-	# --- 3. SISTER OF BATTLE ACTIONS ---
+	# 3. Sister of Battle Actions
 	elif p_class == 2:
 		var pts = local_player.get("miracle_points") if "miracle_points" in local_player else 0
-		var s_lvl = local_player.get("current_level") if "current_level" in local_player else 1
-
 		if pts > 0:
-			var target_upgrade_id: int = -1
-			if slot.category == "action":
-				var ability_id = slot.slot_index
-				if ability_id in [0, 1, 2]:
-					target_upgrade_id = ability_id
-				elif ability_id == 3:
-					var r_ult = local_player.get("rank_ultimate") if "rank_ultimate" in local_player else 0
-					var req_lvl = 6 if r_ult == 0 else 12
-					if s_lvl >= req_lvl and r_ult < 2:
-						target_upgrade_id = 3
+			var target_upgrade_id = -1
+			if slot.category == "marshal_action" and slot.slot_index in [0, 1, 2, 3]:
+				target_upgrade_id = slot.slot_index
 			elif slot.category == "weapon" and slot.slot_index == 2:
-				if local_player.get("rank_dash") < 3:
-					target_upgrade_id = 4
+				target_upgrade_id = 4
 
 			if target_upgrade_id != -1:
-				if multiplayer.has_multiplayer_peer():
-					local_player.rpc_id(1, "request_upgrade_sister_ability", target_upgrade_id)
-				else:
-					if local_player.has_method("request_upgrade_sister_ability"):
-						local_player.request_upgrade_sister_ability(target_upgrade_id)
+				if multiplayer.has_multiplayer_peer(): local_player.rpc_id(1, "request_upgrade_sister_ability", target_upgrade_id)
+				else: local_player.request_upgrade_sister_ability(target_upgrade_id)
 
 func _get_data_for_category(category: String, idx: int) -> Dictionary:
 	if not is_instance_valid(local_player): return {}
 	var p_class = int(local_player.get("current_class")) if "current_class" in local_player else 0
 
 	# ==========================================================================
-	# A. TECH-PRIEST ENGINSEER (TABBED RTS BUILD COGITATOR)
+	# A. TECH-PRIEST ENGINSEER (Direct 1-3 Defenses and 4-7 Industry)
 	# ==========================================================================
 	if p_class == 0:
 		match category:
 			"weapon":
 				match idx:
-					0: return {"key": "LMB", "name": "Omnissian Power-Axe", "sub": "Heavy Melee Cleave", "icon": "axe", "scrap": 0, "req": 0, "type_id": -1, "desc": "Heavy energized power-axe (40 DMG). Cuts through armor in a wide arc.", "flavor": "\"The blade is the voice of the Omnissiah.\""}
-					1: return {"key": "RMB", "name": "Plasma Caliver", "sub": "Auspex Paint", "icon": "plasma_pistol", "scrap": 0, "req": 0, "type_id": -1, "desc": "Fires superheated plasma (30 DMG). Applies Auspex Lock-On (+35% Crit).", "flavor": "\"Paint the xeno in telemetry.\""}
+					0: return {"key": "LMB", "name": "Omnissian Axe", "short": "AXE", "sub": "Heavy Melee", "icon": "axe", "scrap": 0, "req": 0, "type_id": -1, "desc": "Energized axe cleave (40 DMG).", "flavor": "\"The blade of Mars.\""}
+					1: return {"key": "RMB", "name": "Plasma Caliver", "short": "PLASMA", "sub": "Target Paint", "icon": "plasma_pistol", "scrap": 0, "req": 0, "type_id": -1, "desc": "Superheated plasma (30 DMG / +35% Crit).", "flavor": "\"Paint the xeno in telemetry.\""}
+					2: 
+						var skulls = local_player.active_servo_skulls.size() if "active_servo_skulls" in local_player else 0
+						return {"key": "C", "name": "Servo-Skull", "short": "DRONE", "sub": "Scrap Drone (%d/2)" % skulls, "icon": "skull", "scrap": 20, "req": 10, "type_id": -1, "active_count": skulls, "max_count": 2, "desc": "Deploys autonomous scrap drone.", "flavor": "\"Even in death, work continues.\""}
 					_: return {}
 
-			"action":
-				if tp_active_tab == 0: # --- 🛡️ DEFENSES TAB (Hotkeys: Q, E, R) ---
-					match idx:
-						0: return {"key": "Q", "name": "Aegis Blast Rampart", "sub": "Wall Post (15 Scrap)", "icon": "barricade", "scrap": 15, "req": 0, "type_id": 0, "desc": "Heavy blast wall. Links automatically into continuous ramparts. Upgrade to Gate [E].", "flavor": "\"Armor preserves the faithful.\""}
-						1: return {"key": "E", "name": "Cognis Defense Battery", "sub": "Turret (35 Scrap 5 Req)", "icon": "turret", "scrap": 35, "req": 5, "type_id": 2, "desc": "Automated defense battery. Upgradable to Flak, Volkite, or Arc Blasters with [E].", "flavor": "\"Strike swift in His name.\""}
-						2: return {"key": "R", "name": "Electro-Relay Substation", "sub": "Grid Conduit (20 Scrap)", "icon": "distributor", "scrap": 20, "req": 0, "type_id": 4, "desc": "Extends 240px Noosphere power grid. Magnetically siphons loose battlefield scrap.", "flavor": "\"The Motive Force flows unbroken.\""}
-						_: return {}
-
-				else: # --- ⚙️ INDUSTRY TAB (Hotkeys: Q, E, R, F) ---
-					match idx:
-						0: return {"key": "Q", "name": "Imperial Plasma Dynamo", "sub": "+2 Req / Cycle (25 Scrap)", "icon": "generator", "scrap": 25, "req": 0, "type_id": 1, "desc": "Generates +2 Requisition per cycle. Energizes shields and nanobots.", "flavor": "\"From caged fury we draw civilization.\""}
-						1: return {"key": "E", "name": "Scrap Smelter", "sub": "+5 Scrap / Cycle (30 Scrap)", "icon": "foundry", "scrap": 30, "req": 5, "type_id": 3, "desc": "Build over Scrap Deposit. Automatically extracts +5 Scrap per cycle.", "flavor": "\"The broken iron of the foe is remade.\""}
-						2: return {"key": "R", "name": "Omnissian Reliquary", "sub": "Tech Shrine (40 Scrap)", "icon": "shrine", "scrap": 40, "req": 15, "type_id": 6, "desc": "Access terminal [E] to research Shields, Lasers, Siphons, and Uplinks.", "flavor": "\"Knowledge is the true holy relic.\""}
-						3: return {"key": "F", "name": "Cybernetica Manufactorum", "sub": "Cohort Assembly (50 Scrap)", "icon": "cybernetica", "scrap": 50, "req": 20, "type_id": 7, "desc": "Construct Vanguard, Rangers, Ruststalkers, Kataphrons, and Kastelans with [E].", "flavor": "\"From holy fires march undying cohorts.\""}
-						_: return {}
-
-			"augment":
+			"tp_defense": # --- 🛡️ DEFENSES POD [1, 2, 3] ---
 				match idx:
-					0:
-						var skulls = local_player.active_servo_skulls.size() if "active_servo_skulls" in local_player else 0
-						return {"key": "C", "name": "Fabricate Servo-Skull", "sub": "Drone (%d/%d)" % [skulls, GameData.MAX_SERVO_SKULLS], "icon": "skull", "scrap": GameData.SERVO_SKULL_SCRAP_COST, "req": GameData.SERVO_SKULL_REQ_COST, "type_id": -1, "current_rank": skulls, "max_rank": GameData.MAX_SERVO_SKULLS, "desc": "Deploys an autonomous drone to retrieve scrap.", "flavor": "\"Even in death, the servant performs the work.\""}
+					0: return {"key": "1", "name": "Aegis Rampart", "short": "WALL", "sub": "Fortification", "icon": "barricade", "scrap": 15, "req": 0, "type_id": 0, "desc": "Heavy blast wall. Upgrade to Gate [E].", "flavor": "\"Armor preserves the faithful.\""}
+					1: return {"key": "2", "name": "Cognis Turret", "short": "TURRET", "sub": "Auto Battery", "icon": "turret", "scrap": 35, "req": 5, "type_id": 2, "desc": "Automated gun battery. Upgrade with [E].", "flavor": "\"Strike swift in His name.\""}
+					2: return {"key": "3", "name": "Electro-Relay", "short": "RELAY", "sub": "Grid Conduit", "icon": "distributor", "scrap": 20, "req": 0, "type_id": 4, "desc": "Extends 240px power grid & scrap siphon.", "flavor": "\"The Motive Force flows unbroken.\""}
+					_: return {}
+
+			"tp_industry": # --- ⚙️ INDUSTRY POD [4, 5, 6, 7] ---
+				match idx:
+					0: return {"key": "4", "name": "Plasma Dynamo", "short": "DYNAMO", "sub": "+2 Req / Cycle", "icon": "generator", "scrap": 25, "req": 0, "type_id": 1, "desc": "Generates +2 Requisition per cycle.", "flavor": "\"From caged fury we draw power.\""}
+					1: return {"key": "5", "name": "Scrap Smelter", "short": "SMELTER", "sub": "+5 Scrap / Cycle", "icon": "foundry", "scrap": 30, "req": 5, "type_id": 3, "desc": "Build over Scrap Deposit for +5 Scrap/cycle.", "flavor": "\"The broken iron is remade.\""}
+					2: return {"key": "6", "name": "Tech Shrine", "short": "SHRINE", "sub": "Research Lab", "icon": "shrine", "scrap": 40, "req": 15, "type_id": 6, "desc": "Access terminal [E] to research tech.", "flavor": "\"Knowledge is the holy relic.\""}
+					3: return {"key": "7", "name": "Cybernetica Forge", "short": "FORGE", "sub": "Cohort Factory", "icon": "cybernetica", "scrap": 50, "req": 20, "type_id": 7, "desc": "Manufacture Kataphrons and Kastelans with [E].", "flavor": "\"Undying cohorts march forth.\""}
 					_: return {}
 
 	# ==========================================================================
@@ -638,31 +610,31 @@ func _get_data_for_category(category: String, idx: int) -> Dictionary:
 		match category:
 			"weapon":
 				match idx:
-					0: return {"key": "LMB", "name": "Radium Serpenta Carbine", "sub": "Ranged Munition", "icon": "radium_carbine", "scrap": 0, "req": 0, "type_id": -1, "desc": "Rapid-fire irradiated rifle. Decays organic cellular structures on impact.", "flavor": "\"Cleanse in phosphor fallout.\""}
+					0: return {"key": "LMB", "name": "Radium Carbine", "short": "RADIUM", "sub": "Ranged", "icon": "radium_carbine", "scrap": 0, "req": 0, "type_id": -1, "desc": "Rapid-fire irradiated rifle.", "flavor": "\"Cleanse in fallout.\""}
 					1:
 						var is_conq = (local_player.active_doctrina == 0) if "active_doctrina" in local_player else true
-						return {"key": "Q", "name": "Doctrina: " + ("CONQUEROR" if is_conq else "PROTECTOR"), "sub": "Aura", "icon": "doctrina_conq" if is_conq else "doctrina_prot", "scrap": 0, "req": 0, "type_id": -1, "desc": "Aura: +30% Speed & +25% Fire Rate (-15% Armor)" if is_conq else "Aura: +35% Armor & +20% Range (-15% Speed)", "flavor": "\"Upload the sacred canticle.\""}
-					2: return {"key": "R", "name": "Orbital Lance Strike", "sub": "Bombardment", "icon": "orbital", "scrap": 0, "req": GameData.ORBITAL_REQ_COST, "type_id": -1, "desc": "Calls down a searing orbital lance strike (220 DMG / 45s CD).", "flavor": "\"Let the stars descend in cleansing fire.\""}
+						return {"key": "Q", "name": "Doctrina Aura", "short": "AURA", "sub": "Aura Switch", "icon": "doctrina_conq" if is_conq else "doctrina_prot", "scrap": 0, "req": 0, "type_id": -1, "desc": "Toggle Conqueror (+DPS) / Protector (+Armor).", "flavor": "\"Upload the sacred canticle.\""}
+					2: return {"key": "R", "name": "Orbital Lance", "short": "ORBITAL", "sub": "Bombardment", "icon": "orbital", "scrap": 0, "req": 50, "type_id": -1, "desc": "Calls down 220-DMG orbital lance strike.", "flavor": "\"Let the skies burn.\""}
 					_: return {}
-			"action":
+			"marshal_action":
 				match idx:
-					0: return {"key": "A", "name": "Attack-Move", "sub": "Directive", "icon": "attack_move", "scrap": 0, "req": 0, "type_id": -1, "desc": "Orders selected units to march and engage all enemies.", "flavor": "\"Advance with fury.\""}
-					1: return {"key": "S", "name": "Halt / Stop", "sub": "Directive", "icon": "stop", "scrap": 0, "req": 0, "type_id": -1, "desc": "Cancels movement and combat orders.", "flavor": "\"Hold position.\""}
-					2: return {"key": "H", "name": "Hold Ground", "sub": "Directive", "icon": "hold_ground", "scrap": 0, "req": 0, "type_id": -1, "desc": "Units hold ground and fire at maximum range.", "flavor": "\"The line does not yield.\""}
-					3: return {"key": "F", "name": "Auspex Target Paint", "sub": "Telemetry", "icon": "auspex_paint", "scrap": 0, "req": 0, "type_id": -1, "desc": "Paints target (+35% Crit). Kills yield +1 to +3 REQ.", "flavor": "\"Mark the xeno for eradication.\""}
-					4: return {"key": "SPACE", "name": "Focus Commander", "sub": "Camera", "icon": "cam_lock", "scrap": 0, "req": 0, "type_id": -1, "desc": "Centers tactical camera on the Marshal.", "flavor": "\"Re-center telemetry.\""}
-					5: return {"key": "V", "name": "Orbital Supply Uplink", "sub": "Transmutation", "icon": "distributor", "scrap": 15, "req": 0, "type_id": -1, "desc": "Transmits 15 Scrap to orbit for +8 Requisition.", "flavor": "\"Receive consecrated munitions.\""}
+					0: return {"key": "A", "name": "Attack-Move", "short": "A-MOVE", "sub": "Directive", "icon": "attack_move", "scrap": 0, "req": 0, "type_id": -1, "desc": "March and engage all enemies.", "flavor": "\"Advance with fury.\""}
+					1: return {"key": "S", "name": "Halt / Stop", "short": "STOP", "sub": "Directive", "icon": "stop", "scrap": 0, "req": 0, "type_id": -1, "desc": "Cancels orders.", "flavor": "\"Hold position.\""}
+					2: return {"key": "H", "name": "Hold Ground", "short": "HOLD", "sub": "Directive", "icon": "hold_ground", "scrap": 0, "req": 0, "type_id": -1, "desc": "Hold position and fire at max range.", "flavor": "\"The line does not yield.\""}
+					3: return {"key": "F", "name": "Target Paint", "short": "PAINT", "sub": "Telemetry", "icon": "auspex_paint", "scrap": 0, "req": 0, "type_id": -1, "desc": "Paints target (+35% Crit / +REQ on kill).", "flavor": "\"Mark for eradication.\""}
+					4: return {"key": "SPACE", "name": "Focus Cam", "short": "FOCUS", "sub": "Camera", "icon": "cam_lock", "scrap": 0, "req": 0, "type_id": -1, "desc": "Centers camera on commander.", "flavor": "\"Re-center telemetry.\""}
+					5: return {"key": "V", "name": "Supply Uplink", "short": "SUPPLY", "sub": "15 Scrap -> 8 Req", "icon": "distributor", "scrap": 15, "req": 0, "type_id": -1, "desc": "Transmits 15 Scrap for +8 Requisition.", "flavor": "\"Consecrated munitions.\""}
 					_: return {}
 			"augment":
 				var count = local_player.active_bodyguards.size() if "active_bodyguards" in local_player else 0
 				match idx:
-					0: return {"key": "Z", "name": "Skitarii Ranger", "sub": "Sniper", "icon": "recruit_ranger", "scrap": 15, "req": 5, "type_id": 0, "current_rank": count, "max_rank": GameData.MAX_BODYGUARDS, "desc": "Galvanic sniper cadre (%d/%d Active)." % [count, GameData.MAX_BODYGUARDS], "flavor": "\"Never miss the spark.\""}
-					1: return {"key": "X", "name": "Sicarian Ruststalker", "sub": "Assassin", "icon": "recruit_sicarian", "scrap": 20, "req": 10, "type_id": 1, "current_rank": count, "max_rank": GameData.MAX_BODYGUARDS, "desc": "Transonic cyber-assassin (%d/%d Active)." % [count, GameData.MAX_BODYGUARDS], "flavor": "\"Cleave at a molecular level.\""}
-					2: return {"key": "C", "name": "Skitarii Vanguard", "sub": "Shock Trooper", "icon": "recruit_vanguard", "scrap": 10, "req": 5, "type_id": 2, "current_rank": count, "max_rank": GameData.MAX_BODYGUARDS, "desc": "Rad-shock infantry with fallout aura (%d/%d Active)." % [count, GameData.MAX_BODYGUARDS], "flavor": "\"Their bodies burn with fallout.\""}
+					0: return {"key": "Z", "name": "Ranger Sniper", "short": "RANGER", "sub": "Sniper", "icon": "recruit_ranger", "scrap": 15, "req": 5, "type_id": 0, "current_rank": count, "max_rank": 4, "desc": "Galvanic marksman (%d/4 Active)." % count, "flavor": "\"Never miss the spark.\""}
+					1: return {"key": "X", "name": "Sicarian", "short": "SICARIAN", "sub": "Assassin", "icon": "recruit_sicarian", "scrap": 20, "req": 10, "type_id": 1, "current_rank": count, "max_rank": 4, "desc": "Cybernetic assassin (%d/4 Active)." % count, "flavor": "\"Molecular cleave.\""}
+					2: return {"key": "C", "name": "Vanguard", "short": "VANGUARD", "sub": "Shock", "icon": "recruit_vanguard", "scrap": 10, "req": 5, "type_id": 2, "current_rank": count, "max_rank": 4, "desc": "Rad-shock trooper (%d/4 Active)." % count, "flavor": "\"Rad-fallout aura.\""}
 					_: return {}
 
 	# ==========================================================================
-	# C. SISTER SUPERIOR (ADEPTA SORORITAS)
+	# C. SISTER SUPERIOR
 	# ==========================================================================
 	elif p_class == 2:
 		var pts = local_player.get("miracle_points") if "miracle_points" in local_player else 0
@@ -673,61 +645,26 @@ func _get_data_for_category(category: String, idx: int) -> Dictionary:
 		var r_ult = local_player.get("rank_ultimate") if "rank_ultimate" in local_player else 0
 		var s_lvl = local_player.get("current_level") if "current_level" in local_player else 1
 
-		var b_dmg = int(local_player.get("bullet_damage") if "bullet_damage" in local_player else 25)
-		var dodge_chance = float(local_player.get("faith_dodge_chance") if "faith_dodge_chance" in local_player else 0.15)
-		var cur_s = int(local_player.get("faith_shield_current") if "faith_shield_current" in local_player else 40)
-		var max_s = int(local_player.get("faith_shield_max") if "faith_shield_max" in local_player else 40)
-
 		match category:
 			"weapon":
 				match idx:
-					0: return {"key": "LMB", "name": "Holy Flamer", "sub": "Armor-Piercing Burn", "icon": "flamer", "scrap": 0, "req": 0, "type_id": -1, "desc": "Sprays continuous promethium fire (%d DPS). Scales with level." % b_dmg, "flavor": "\"Cleanse with holy fire.\""}
-					1: return {"key": "RMB", "name": "Multi-Melta", "sub": "Thermal Beam", "icon": "melta", "scrap": 0, "req": 0, "type_id": -1, "desc": "Devastating thermal ray (110 DMG) melting heavy Nobz and bastions.", "flavor": "\"No armor withstands His fury.\""}
-					2: return {"key": "SPACE", "name": "Seraphim Dash", "sub": "Jetpack Thrust (Rank %d/3)" % r_dash, "icon": "seraphim_dash", "scrap": 0, "req": 0, "type_id": 4, "current_rank": r_dash, "max_rank": 3, "can_upgrade": (pts > 0 and r_dash < 3), "desc": "Rocket dash leaving burning scorch trails. Upgrading reduces cooldown.", "flavor": "\"Seraphim wings bear us swift.\""}
-			"action":
+					0: return {"key": "LMB", "name": "Holy Flamer", "short": "FLAMER", "sub": "Burn Cone", "icon": "flamer", "scrap": 0, "req": 0, "type_id": -1, "desc": "Continuous promethium fire cone.", "flavor": "\"Cleanse with fire.\""}
+					1: return {"key": "RMB", "name": "Multi-Melta", "short": "MELTA", "sub": "Thermal Ray", "icon": "melta", "scrap": 0, "req": 0, "type_id": -1, "desc": "Devastating thermal ray (110 DMG).", "flavor": "\"No armor withstands His fury.\""}
+					2: return {"key": "SPACE", "name": "Seraphim Dash", "short": "DASH", "sub": "Thruster", "icon": "seraphim_dash", "scrap": 0, "req": 0, "type_id": 4, "current_rank": r_dash, "max_rank": 3, "can_upgrade": (pts > 0 and r_dash < 3), "desc": "Rocket dash leaving fire trails.", "flavor": "\"Seraphim wings.\""}
+					_: return {}
+			"marshal_action":
 				match idx:
-					0: return {"key": "1", "name": "Holy Intervention", "sub": "Sanctuary Relic (Rank %d/3)" % r_int, "icon": "miracle_shield", "scrap": 0, "req": 0, "type_id": 0, "current_rank": r_int, "max_rank": 3, "can_upgrade": (pts > 0 and r_int < 3), "desc": "Throws a holy relic that absorbs all incoming enemy projectiles in a 140px dome before detonating.", "flavor": "\"Stand within the sacred circle.\""}
-					1: return {"key": "2", "name": "Holy Hand Grenade", "sub": "Consecrated Relic (Rank %d/3)" % r_gren, "icon": "holy_grenade", "scrap": 0, "req": 0, "type_id": 1, "current_rank": r_gren, "max_rank": 3, "can_upgrade": (pts > 0 and r_gren < 3), "desc": "Lobs a sacred grenade dealing 160-300 DMG with wide knockback.", "flavor": "\"O Lord, bless this thy hand grenade...\""}
-					2: return {"key": "3", "name": "Act of Faith", "sub": "Faith Shield (Rank %d/3)" % r_shld, "icon": "miracle_shield", "scrap": 0, "req": 0, "type_id": 2, "current_rank": r_shld, "max_rank": 3, "can_upgrade": (pts > 0 and r_shld < 3), "desc": "Passive: Dodge + Faith Shield. Active: Instantly overcharges shield to max.", "flavor": "\"Faith is my shield.\""}
-					3: return {
-						"key": "4", 
-						"name": "Righteous Pyre", 
-						"sub": "Divine Ultimate (Rank %d/2)" % r_ult, 
-						"icon": "righteous_pyre", 
-						"scrap": 0, 
-						"req": 0, 
-						"type_id": 3, 
-						"current_rank": r_ult, 
-						"max_rank": 2, 
-						"can_upgrade": (pts > 0 and s_lvl >= (6 if r_ult == 0 else 12) and r_ult < 2), 
-						"desc": "Heavenly pillar of divine wrath (260-400 DMG), granting invulnerability for 6s. (Req. Lv 6 / Lv 12)", 
-						"flavor": "\"By Saint Katherine's blood!\""
-					}
+					0: return {"key": "1", "name": "Sanctuary", "short": "RELIC", "sub": "Shield Dome", "icon": "miracle_shield", "scrap": 0, "req": 0, "type_id": 0, "current_rank": r_int, "max_rank": 3, "can_upgrade": (pts > 0 and r_int < 3), "desc": "Absorbs incoming projectiles in a dome.", "flavor": "\"Stand within the light.\""}
+					1: return {"key": "2", "name": "Holy Grenade", "short": "GRENADE", "sub": "Cataclysm", "icon": "holy_grenade", "scrap": 0, "req": 0, "type_id": 1, "current_rank": r_gren, "max_rank": 3, "can_upgrade": (pts > 0 and r_gren < 3), "desc": "Lobs sacred grenade dealing 160-300 DMG.", "flavor": "\"Bless this thy grenade.\""}
+					2: return {"key": "3", "name": "Act of Faith", "short": "FAITH", "sub": "Shield Recharge", "icon": "miracle_shield", "scrap": 0, "req": 0, "type_id": 2, "current_rank": r_shld, "max_rank": 3, "can_upgrade": (pts > 0 and r_shld < 3), "desc": "Instantly recharges faith shield to max.", "flavor": "\"Faith is my shield.\""}
+					3: return {"key": "4", "name": "Righteous Pyre", "short": "PYRE", "sub": "Ultimate", "icon": "righteous_pyre", "scrap": 0, "req": 0, "type_id": 3, "current_rank": r_ult, "max_rank": 2, "can_upgrade": (pts > 0 and s_lvl >= (6 if r_ult == 0 else 12) and r_ult < 2), "desc": "Heavenly pillar granting invulnerability.", "flavor": "\"By Saint Katherine's blood!\""}
 					_: return {}
 			"augment":
 				match idx:
-					0:
-						var is_saint_ready = s_lvl >= 10
-						var status_txt = "MARTYRDOM READY (LVL 10+)" if is_saint_ready else "LOCKED (Req. Level 10)"
-						return {
-							"key": "PASSIVE", 
-							"name": "Living Saint Ascension", 
-							"sub": status_txt, 
-							"icon": "celestine_wings", 
-							"scrap": 0, 
-							"req": 0, 
-							"type_id": -1, 
-							"current_rank": (1 if is_saint_ready else 0), 
-							"max_rank": 1, 
-							"desc": "Upon taking lethal damage at Level 10+, ascend into Saint Celestine with glowing wings, full HP/Shield, and divine shockwaves.", 
-							"flavor": "\"She who dies in His light shall rise unbroken.\""
-						}
-					1:
-						return {"key": "PASSIVE", "name": "Holy Evasion", "sub": "+%d%% Dodge" % int(dodge_chance * 100), "icon": "seraphim_dash", "scrap": 0, "req": 0, "type_id": -1, "desc": "Passively dodges incoming projectile and melee attacks.", "flavor": "\"The Emperor protects her stride.\""}
-					2:
-						return {"key": "PASSIVE", "name": "Consecrated Aegis", "sub": "Shield (%d/%d)" % [cur_s, max_s], "icon": "miracle_shield", "scrap": 0, "req": 0, "type_id": -1, "desc": "Absorbs incoming damage before health. Regenerates passively.", "flavor": "\"Anointed in holy oils.\""}
-					_:
-						return {}
+					0: return {"key": "PASSIVE", "name": "Ascension", "short": "SAINT", "sub": "Martyrdom", "icon": "celestine_wings", "scrap": 0, "req": 0, "type_id": -1, "current_rank": (1 if s_lvl >= 10 else 0), "max_rank": 1, "desc": "Ascend into Saint Celestine on lethal damage (Lv 10+).", "flavor": "\"Rise unbroken.\""}
+					1: return {"key": "PASSIVE", "name": "Holy Dodge", "short": "DODGE", "sub": "+Dodge", "icon": "seraphim_dash", "scrap": 0, "req": 0, "type_id": -1, "desc": "Passively dodges incoming attacks.", "flavor": "\"The Emperor protects.\""}
+					2: return {"key": "PASSIVE", "name": "Faith Shield", "short": "SHIELD", "sub": "Aegis", "icon": "miracle_shield", "scrap": 0, "req": 0, "type_id": -1, "desc": "Passively regenerating faith shield.", "flavor": "\"Anointed in oils.\""}
+					_: return {}
 
 	return {}
 
@@ -741,13 +678,13 @@ func refresh_hud_display():
 
 	var p_class = int(local_player.get("current_class")) if "current_class" in local_player else 0
 
-	# --- 1. SHARED TOP-LEFT RESOURCE MONITOR ---
+	# 1. Top Left Resource Monitor
 	if global_res_label:
 		global_res_label.text = "⚙ %d SCRAP   ⚡ %d REQ   🤖 %d/%d" % [
 			cur_scrap, cur_req, cur_pop, GameData.BASE_COHORT_CAP
 		]
 
-	# --- 2. SISTER PROGRESSION RIBBON ---
+	# 2. Sister Progression Ribbon
 	if is_instance_valid(sister_prog_panel):
 		if p_class == 2:
 			sister_prog_panel.show()
@@ -775,27 +712,6 @@ func refresh_hud_display():
 		else:
 			sister_prog_panel.hide()
 
-	# --- 3. TECH-PRIEST TABS & HEADER UPDATE ---
-	if is_instance_valid(tp_tab_container):
-		if p_class == 0:
-			tp_tab_container.show()
-			action_title_lbl.hide()
-
-			# Highlight Active Tab
-			if tp_active_tab == 0:
-				tp_defenses_tab_btn.modulate = Color(0.20, 0.88, 1.0)
-				tp_industry_tab_btn.modulate = Color(0.6, 0.65, 0.7)
-			else:
-				tp_defenses_tab_btn.modulate = Color(0.6, 0.65, 0.7)
-				tp_industry_tab_btn.modulate = Color(1.0, 0.75, 0.2)
-		else:
-			tp_tab_container.hide()
-			action_title_lbl.show()
-			if p_class == 1:
-				action_title_lbl.text = "TACTICAL PROTOCOLS"; action_title_lbl.add_theme_color_override("font_color", C_CYAN)
-			elif p_class == 2:
-				action_title_lbl.text = "CONSECRATED RELICS"; action_title_lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.25))
-
 	var selected_type = local_player.selected_building_type if "selected_building_type" in local_player else 0
 	var is_building = local_player.is_building_mode if "is_building_mode" in local_player else false
 
@@ -808,49 +724,66 @@ func refresh_hud_display():
 		else:
 			reboot_panel.hide()
 
-	# 1. Weapon Pod
+	# Weapon Pod Updates
 	for i in range(weapon_buttons.size()):
 		var slot = weapon_buttons[i]
 		var data = _get_data_for_category("weapon", i)
 		_populate_slot(slot, data, cur_scrap, cur_req)
 
-		if p_class == 0 and i == 1:
-			var can_plasma = local_player.can_plasma_attack if "can_plasma_attack" in local_player else true
-			var cd = local_player.plasma_cooldown if "plasma_cooldown" in local_player else 0.65
-			slot.cooldown_left = 0.0 if can_plasma else cd
+		if p_class == 0:
+			if i == 0:
+				var is_swinging = local_player.is_attacking_anim if "is_attacking_anim" in local_player else false
+				slot.cooldown_left = 0.2 if (is_swinging or not local_player.get("can_attack")) else 0.0
+			elif i == 1:
+				slot.cooldown_left = 0.0 if local_player.get("can_plasma_attack") else 0.4
 		elif p_class == 1 and i == 2:
 			slot.cooldown_left = local_player.orbital_strike_cooldown if "orbital_strike_cooldown" in local_player else 0.0
 		elif p_class == 2:
 			if i == 1: slot.cooldown_left = local_player.melta_cooldown_timer if "melta_cooldown_timer" in local_player else 0.0
 			elif i == 2: slot.cooldown_left = local_player.dash_cooldown_timer if "dash_cooldown_timer" in local_player else 0.0
 
-	# 2. Action Pod
-	for i in range(action_buttons.size()):
-		var slot = action_buttons[i]
-		var data = _get_data_for_category("action", i)
-		_populate_slot(slot, data, cur_scrap, cur_req)
-
-		if p_class == 0:
+	# Tech-Priest Defenses & Industry Pods
+	if p_class == 0:
+		for i in range(defense_buttons.size()):
+			var slot = defense_buttons[i]
+			var data = _get_data_for_category("tp_defense", i)
+			_populate_slot(slot, data, cur_scrap, cur_req)
 			var t_id = data.get("type_id", -1)
 			slot.is_selected = (is_building and selected_type == t_id and t_id != -1)
-		elif p_class == 1:
-			if i == 0 and "is_attack_move_queued" in local_player:
-				slot.is_selected = local_player.is_attack_move_queued
-		elif p_class == 2:
-			if i == 0: slot.cooldown_left = local_player.holy_intervention_cooldown if "holy_intervention_cooldown" in local_player else 0.0
-			elif i == 1: slot.cooldown_left = local_player.holy_grenade_cooldown if "holy_grenade_cooldown" in local_player else 0.0
-			elif i == 2: slot.cooldown_left = local_player.miracle_act_cooldown if "miracle_act_cooldown" in local_player else 0.0
-			elif i == 3: slot.cooldown_left = local_player.sister_ultimate_cooldown if "sister_ultimate_cooldown" in local_player else 0.0
+			slot.queue_redraw()
 
-	# 3. Augment Pod
-	for i in range(augment_buttons.size()):
-		var slot = augment_buttons[i]
-		var data = _get_data_for_category("augment", i)
-		_populate_slot(slot, data, cur_scrap, cur_req)
-		if not data.is_empty() and data.has("current_rank") and data.has("max_rank"):
-			slot.current_rank = data.current_rank
-			slot.max_rank = data.max_rank
-			slot.is_maxed = (slot.current_rank >= slot.max_rank)
+		for i in range(industry_buttons.size()):
+			var slot = industry_buttons[i]
+			var data = _get_data_for_category("tp_industry", i)
+			_populate_slot(slot, data, cur_scrap, cur_req)
+			var t_id = data.get("type_id", -1)
+			slot.is_selected = (is_building and selected_type == t_id and t_id != -1)
+			slot.queue_redraw()
+
+	# Marshal & Sister Action Pods
+	elif p_class in [1, 2]:
+		for i in range(marshal_action_buttons.size()):
+			var slot = marshal_action_buttons[i]
+			var data = _get_data_for_category("marshal_action", i)
+			_populate_slot(slot, data, cur_scrap, cur_req)
+
+			if p_class == 1:
+				if i == 0 and "is_attack_move_queued" in local_player:
+					slot.is_selected = local_player.is_attack_move_queued
+			elif p_class == 2:
+				if i == 0: slot.cooldown_left = local_player.holy_intervention_cooldown if "holy_intervention_cooldown" in local_player else 0.0
+				elif i == 1: slot.cooldown_left = local_player.holy_grenade_cooldown if "holy_grenade_cooldown" in local_player else 0.0
+				elif i == 2: slot.cooldown_left = local_player.miracle_act_cooldown if "miracle_act_cooldown" in local_player else 0.0
+				elif i == 3: slot.cooldown_left = local_player.sister_ultimate_cooldown if "sister_ultimate_cooldown" in local_player else 0.0
+
+		for i in range(augment_buttons.size()):
+			var slot = augment_buttons[i]
+			var data = _get_data_for_category("augment", i)
+			_populate_slot(slot, data, cur_scrap, cur_req)
+			if not data.is_empty() and data.has("current_rank") and data.has("max_rank"):
+				slot.current_rank = data.current_rank
+				slot.max_rank = data.max_rank
+				slot.is_maxed = (slot.current_rank >= slot.max_rank)
 
 	if not hovered_slot_data.is_empty() and tooltip_card and tooltip_card.visible:
 		tooltip_card.set_data(hovered_slot_data, cur_scrap, cur_req)
@@ -934,11 +867,12 @@ func _populate_slot(slot: Button, data: Dictionary, cur_scrap: int, cur_req: int
 	
 	slot.show()
 	slot.cached_data = data
-	slot.key_txt = data.key
-	slot.icon_type = data.icon
-	slot.scrap_cost = data.scrap
-	slot.req_cost = data.req
-	slot.can_afford = (cur_scrap >= data.scrap and cur_req >= data.req)
+	slot.key_txt = data.get("key", "")
+	slot.label_txt = data.get("short", "")
+	slot.icon_type = data.get("icon", "")
+	slot.scrap_cost = data.get("scrap", 0)
+	slot.req_cost = data.get("req", 0)
+	slot.can_afford = (cur_scrap >= slot.scrap_cost and cur_req >= slot.req_cost)
 	
 	slot.current_rank = data.get("current_rank", 0)
 	slot.max_rank = data.get("max_rank", 0)
@@ -958,13 +892,110 @@ func _update_tooltip_position(slot: Button):
 		tooltip_card.global_position = Vector2(slot_center_x - (tooltip_card.size.x * 0.5), slot.global_position.y - tooltip_card.size.y - 12)
 
 # ==============================================================================
-# COMPACT HUD SLOT BUTTON (HIGH-CONTRAST VECTOR ICONS)
+# COMPACT HUD SLOT BUTTON
 # ==============================================================================
+
+class TooltipCard extends PanelContainer:
+	var title_lbl: Label
+	var sub_lbl: Label
+	var cost_lbl: Label
+	var desc_lbl: Label
+	var flavor_lbl: Label
+
+	func _init():
+		custom_minimum_size = Vector2(320, 0)
+		_setup_ui()
+
+	func _setup_ui():
+		var sb = StyleBoxFlat.new()
+		sb.bg_color = Color(0.04, 0.05, 0.08, 0.96)
+		sb.border_color = Color(0.82, 0.62, 0.24)
+		sb.set_border_width_all(1)
+		sb.set_corner_radius_all(4)
+		sb.content_margin_left = 10
+		sb.content_margin_right = 10
+		sb.content_margin_top = 8
+		sb.content_margin_bottom = 8
+		sb.shadow_color = Color(0, 0, 0, 0.65)
+		sb.shadow_size = 6
+		add_theme_stylebox_override("panel", sb)
+
+		var vbox = VBoxContainer.new()
+		vbox.add_theme_constant_override("separation", 4)
+		add_child(vbox)
+
+		title_lbl = Label.new()
+		title_lbl.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
+		title_lbl.add_theme_font_size_override("font_size", 12)
+		vbox.add_child(title_lbl)
+
+		sub_lbl = Label.new()
+		sub_lbl.add_theme_color_override("font_color", Color(0.82, 0.62, 0.24))
+		sub_lbl.add_theme_font_size_override("font_size", 9)
+		vbox.add_child(sub_lbl)
+
+		cost_lbl = Label.new()
+		cost_lbl.add_theme_font_size_override("font_size", 10)
+		vbox.add_child(cost_lbl)
+
+		var sep = ColorRect.new()
+		sep.custom_minimum_size = Vector2(0, 1)
+		sep.color = Color(0.25, 0.28, 0.35, 0.6)
+		vbox.add_child(sep)
+
+		desc_lbl = Label.new()
+		desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		desc_lbl.add_theme_color_override("font_color", Color(0.88, 0.90, 0.94))
+		desc_lbl.add_theme_font_size_override("font_size", 10)
+		vbox.add_child(desc_lbl)
+
+		flavor_lbl = Label.new()
+		flavor_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		flavor_lbl.add_theme_color_override("font_color", Color(0.72, 0.65, 0.50))
+		flavor_lbl.add_theme_font_size_override("font_size", 9)
+		vbox.add_child(flavor_lbl)
+
+	func set_data(data: Dictionary, cur_scrap: int, cur_req: int, cooldown_left: float = 0.0, is_maxed: bool = false):
+		title_lbl.text = "◆ %s [%s] ◆" % [data.get("name", "").to_upper(), data.get("key", "")]
+		sub_lbl.text = data.get("sub", "").to_upper()
+		desc_lbl.text = data.get("desc", "")
+		flavor_lbl.text = data.get("flavor", "")
+
+		var scrap = data.get("scrap", 0)
+		var req = data.get("req", 0)
+		var max_r = data.get("max_rank", 0)
+		var cur_r = data.get("current_rank", 0)
+		var can_up = data.get("can_upgrade", false)
+
+		if cooldown_left > 0.0:
+			cost_lbl.text = "⏳ RECHARGING (%.1fs Remaining)" % cooldown_left
+			cost_lbl.add_theme_color_override("font_color", Color(1.0, 0.72, 0.15))
+		elif max_r > 0 and cur_r == 0 and not data.has("active_count"):
+			if can_up:
+				cost_lbl.text = "✨ UNLOCK: CLICK SLOT OR PRESS [CTRL+KEY]"
+				cost_lbl.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
+			else:
+				cost_lbl.text = "🔒 LOCKED: EARN MIRACLE POINTS ON LEVEL-UP"
+				cost_lbl.add_theme_color_override("font_color", Color(0.75, 0.35, 0.35))
+		elif is_maxed:
+			cost_lbl.text = "◆ PROTOCOL MAXED ◆"
+			cost_lbl.add_theme_color_override("font_color", Color(0.4, 0.95, 0.5))
+		elif scrap == 0 and req == 0:
+			cost_lbl.text = "STATUS: NOOSPHERIC LINK ACTIVE"
+			cost_lbl.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
+		else:
+			var parts: Array[String] = []
+			if scrap > 0: parts.append("⚙ %d SCRAP" % scrap)
+			if req > 0: parts.append("⚡ %d REQ" % req)
+			var can_afford = (cur_scrap >= scrap and cur_req >= req)
+			cost_lbl.text = "COST: " + "   ".join(parts)
+			cost_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45) if can_afford else Color(0.92, 0.22, 0.18))
 
 class CompactSlot extends Button:
 	var category: String = "action"
 	var slot_index: int = 0
 	var key_txt: String = "1"
+	var label_txt: String = ""
 	var icon_type: String = "barricade"
 	var scrap_cost: int = 0
 	var req_cost: int = 0
@@ -984,7 +1015,7 @@ class CompactSlot extends Button:
 
 	func _draw():
 		var rect = Rect2(Vector2.ZERO, size)
-		var is_locked = (max_rank > 0 and current_rank == 0)
+		var is_locked = (max_rank > 0 and current_rank == 0 and not cached_data.has("active_count"))
 		var bg_color = Color(0.06, 0.07, 0.10, 0.95)
 		var border_color = Color(0.24, 0.28, 0.35)
 	
@@ -1004,6 +1035,7 @@ class CompactSlot extends Button:
 			border_color = Color(1.0, 0.65, 0.15, 0.85)
 		elif is_selected:
 			border_color = Color(0.20, 0.88, 1.00, 1.0)
+			bg_color = Color(0.05, 0.14, 0.22, 0.95)
 		elif not can_afford and (scrap_cost > 0 or req_cost > 0):
 			border_color = Color(0.92, 0.22, 0.18, 0.65)
 			bg_color = Color(0.10, 0.04, 0.04, 0.90)
@@ -1012,8 +1044,10 @@ class CompactSlot extends Button:
 
 		draw_rect(rect, bg_color, true)
 
-		_draw_icon(rect.get_center(), is_locked)
+		# 1. Vector Icon in Upper-Center
+		_draw_icon(Vector2(rect.size.x * 0.5, (rect.size.y * 0.5) - 3.0), is_locked)
 
+		# 2. Cooldown Overlay
 		if cooldown_left > 0.0:
 			draw_rect(rect, Color(0.02, 0.03, 0.05, 0.78), true)
 			var font = ThemeDB.fallback_font
@@ -1027,11 +1061,26 @@ class CompactSlot extends Button:
 		draw_rect(rect, border_color, false, 1.8 if (can_upgrade or is_selected or cooldown_left > 0.0) else 1.2)
 
 		var font = ThemeDB.fallback_font
+		
+		# 3. Top-Left Hotkey Text
 		if is_locked and not can_upgrade:
 			draw_string(font, Vector2(3, 10), "🔒", HORIZONTAL_ALIGNMENT_LEFT, -1, 8, Color(0.40, 0.44, 0.50))
 		else:
 			var key_col = Color(0.20, 0.88, 1.0) if (is_selected or can_upgrade) else (Color(0.50, 0.54, 0.60) if is_locked else Color(0.85, 0.88, 0.92))
 			draw_string(font, Vector2(3, 10), key_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 8, key_col)
+
+		# 4. Center-Lower Short Name
+		if label_txt != "" and not is_locked:
+			var label_col = Color(0.85, 0.88, 0.92) if can_afford else Color(0.60, 0.64, 0.70)
+			draw_string(font, Vector2(0, size.y - 12), label_txt, HORIZONTAL_ALIGNMENT_CENTER, size.x, 7, label_col)
+
+		# 5. Bottom Resource Cost
+		if scrap_cost > 0 or req_cost > 0:
+			var cost_str = ""
+			if scrap_cost > 0: cost_str += "⚙" + str(scrap_cost)
+			if req_cost > 0: cost_str += (" " if cost_str != "" else "") + "⚡" + str(req_cost)
+			var cost_col = Color(0.35, 0.95, 0.45) if can_afford else Color(0.92, 0.22, 0.18)
+			draw_string(font, Vector2(0, size.y - 2), cost_str, HORIZONTAL_ALIGNMENT_CENTER, size.x, 7, cost_col)
 
 		if can_upgrade:
 			var plus_rect = Rect2(size.x - 14, 2, 12, 10)
@@ -1039,7 +1088,7 @@ class CompactSlot extends Button:
 			draw_rect(plus_rect, Color(0.20, 0.88, 1.0), false, 1.0)
 			draw_string(font, Vector2(size.x - 12, 10), "+", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.20, 0.88, 1.0))
 
-		if max_rank > 0:
+		if max_rank > 0 and not cached_data.has("active_count"):
 			_draw_rank_pips(rect)
 
 	func _draw_rank_pips(rect: Rect2):
@@ -1053,7 +1102,7 @@ class CompactSlot extends Button:
 				draw_circle(pip_pos, 1.2, Color(0.25, 0.28, 0.35))
 
 	func _draw_icon(center: Vector2, is_locked: bool = false):
-		var p_mid := Vector2(center.x, center.y - 1.0)
+		var p_mid := Vector2(center.x, center.y - 2.0)
 
 		var gold  := Color(0.40, 0.42, 0.48, 0.45) if is_locked else Color(0.82, 0.62, 0.24)
 		var cyan  := Color(0.35, 0.38, 0.44, 0.45) if is_locked else Color(0.20, 0.88, 1.00)
@@ -1226,103 +1275,5 @@ class CompactSlot extends Button:
 			"skull":
 				draw_circle(p_mid, 5.0, gold)
 				draw_circle(p_mid + Vector2(1.5, -0.5), 1.5, cyan)
-
-# ==============================================================================
-# TOOLTIP CARD
-# ==============================================================================
-
-class TooltipCard extends PanelContainer:
-	var title_lbl: Label
-	var sub_lbl: Label
-	var cost_lbl: Label
-	var desc_lbl: Label
-	var flavor_lbl: Label
-
-	func _init():
-		custom_minimum_size = Vector2(320, 0)
-		_setup_ui()
-
-	func _setup_ui():
-		var sb = StyleBoxFlat.new()
-		sb.bg_color = Color(0.04, 0.05, 0.08, 0.96)
-		sb.border_color = Color(0.82, 0.62, 0.24)
-		sb.set_border_width_all(1)
-		sb.set_corner_radius_all(4)
-		sb.content_margin_left = 10
-		sb.content_margin_right = 10
-		sb.content_margin_top = 8
-		sb.content_margin_bottom = 8
-		sb.shadow_color = Color(0, 0, 0, 0.65)
-		sb.shadow_size = 6
-		add_theme_stylebox_override("panel", sb)
-
-		var vbox = VBoxContainer.new()
-		vbox.add_theme_constant_override("separation", 4)
-		add_child(vbox)
-
-		title_lbl = Label.new()
-		title_lbl.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
-		title_lbl.add_theme_font_size_override("font_size", 12)
-		vbox.add_child(title_lbl)
-
-		sub_lbl = Label.new()
-		sub_lbl.add_theme_color_override("font_color", Color(0.82, 0.62, 0.24))
-		sub_lbl.add_theme_font_size_override("font_size", 9)
-		vbox.add_child(sub_lbl)
-
-		cost_lbl = Label.new()
-		cost_lbl.add_theme_font_size_override("font_size", 10)
-		vbox.add_child(cost_lbl)
-
-		var sep = ColorRect.new()
-		sep.custom_minimum_size = Vector2(0, 1)
-		sep.color = Color(0.25, 0.28, 0.35, 0.6)
-		vbox.add_child(sep)
-
-		desc_lbl = Label.new()
-		desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		desc_lbl.add_theme_color_override("font_color", Color(0.88, 0.90, 0.94))
-		desc_lbl.add_theme_font_size_override("font_size", 10)
-		vbox.add_child(desc_lbl)
-
-		flavor_lbl = Label.new()
-		flavor_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		flavor_lbl.add_theme_color_override("font_color", Color(0.72, 0.65, 0.50))
-		flavor_lbl.add_theme_font_size_override("font_size", 9)
-		vbox.add_child(flavor_lbl)
-
-	func set_data(data: Dictionary, cur_scrap: int, cur_req: int, cooldown_left: float = 0.0, is_maxed: bool = false):
-		title_lbl.text = "◆ %s [%s] ◆" % [data.get("name", "").to_upper(), data.get("key", "")]
-		sub_lbl.text = data.get("sub", "").to_upper()
-		desc_lbl.text = data.get("desc", "")
-		flavor_lbl.text = data.get("flavor", "")
-
-		var scrap = data.get("scrap", 0)
-		var req = data.get("req", 0)
-		var max_r = data.get("max_rank", 0)
-		var cur_r = data.get("current_rank", 0)
-		var can_up = data.get("can_upgrade", false)
-
-		if cooldown_left > 0.0:
-			cost_lbl.text = "⏳ RECHARGING (%.1fs Remaining)" % cooldown_left
-			cost_lbl.add_theme_color_override("font_color", Color(1.0, 0.72, 0.15))
-		elif max_r > 0 and cur_r == 0:
-			if can_up:
-				cost_lbl.text = "✨ UNLOCK: CLICK SLOT OR PRESS [CTRL+KEY]"
-				cost_lbl.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
-			else:
-				cost_lbl.text = "🔒 LOCKED: EARN MIRACLE POINTS ON LEVEL-UP"
-				cost_lbl.add_theme_color_override("font_color", Color(0.75, 0.35, 0.35))
-		elif is_maxed:
-			cost_lbl.text = "◆ PROTOCOL MAXED ◆"
-			cost_lbl.add_theme_color_override("font_color", Color(0.4, 0.95, 0.5))
-		elif scrap == 0 and req == 0:
-			cost_lbl.text = "STATUS: NOOSPHERIC LINK ACTIVE"
-			cost_lbl.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
-		else:
-			var parts: Array[String] = []
-			if scrap > 0: parts.append("⚙ %d SCRAP" % scrap)
-			if req > 0: parts.append("⚡ %d REQ" % req)
-			var can_afford = (cur_scrap >= scrap and cur_req >= req)
-			cost_lbl.text = "COST: " + "   ".join(parts)
-			cost_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45) if can_afford else Color(0.92, 0.22, 0.18))
+				
+				

@@ -439,7 +439,6 @@ func _calculate_target_priority(target: Node2D) -> float:
 	if type == EnemyType.STORMBOY and target.is_in_group("players"):
 		bonus += 160.0
 	if type in [EnemyType.NOB, EnemyType.WARBOSS]:
-		# High priority on hooking and crushing players
 		if target.is_in_group("players"):
 			bonus += 180.0
 		elif target.is_in_group("buildings") and int(target.get("building_type")) == 2:
@@ -609,7 +608,6 @@ func _find_best_hook_target(max_range: float) -> Node2D:
 				candidates.append(bg)
 
 	if candidates.is_empty(): return null
-	# Pick the closest valid player/bodyguard in range
 	candidates.sort_custom(func(a, b): return global_position.distance_to(a.global_position) < global_position.distance_to(b.global_position))
 	return candidates[0]
 
@@ -655,13 +653,12 @@ func _execute_squig_pounce(target: Node2D):
 	)
 
 # ==============================================================================
-# ACCURATE NOB & WARBOSS 'EAVY SNAGGA HARPOON HOOK (ACTIVE TRACKING & 18PX HITBOX)
+# ACCURATE NOB & WARBOSS 'EAVY SNAGGA HARPOON HOOK
 # ==============================================================================
 func _execute_nob_harpoon_hook(target: Node2D) -> void:
 	hook_cooldown_timer = 9.0 if type == EnemyType.NOB else 7.0
 	is_hook_winding_up = true
 	
-	# Stop in place while winding up the hook
 	velocity = Vector2.ZERO
 	current_aggro_target = target
 
@@ -688,7 +685,7 @@ class HarpoonTelegraphFX extends Node2D:
 	var current_aim_pos: Vector2 = Vector2.ZERO
 	var locked_aim_pos: Vector2 = Vector2.ZERO
 	
-	var duration: float = 0.65 # 0.65s reaction telegraph
+	var duration: float = 0.65
 	var elapsed: float = 0.0
 	var is_locked: bool = false
 	var has_launched: bool = false
@@ -708,7 +705,6 @@ class HarpoonTelegraphFX extends Node2D:
 		if is_instance_valid(source_enemy):
 			start_pos = source_enemy.global_position
 
-		# 1. Active tracking & slight target leading during windup
 		if elapsed < (duration - 0.15):
 			if is_instance_valid(target_node):
 				var target_vel = target_node.velocity if "velocity" in target_node else Vector2.ZERO
@@ -716,7 +712,6 @@ class HarpoonTelegraphFX extends Node2D:
 			elif current_aim_pos == Vector2.ZERO:
 				current_aim_pos = start_pos + Vector2.RIGHT * 200.0
 		elif not is_locked:
-			# Snapshot trajectory 0.15s before launch so player can dodge
 			is_locked = true
 			locked_aim_pos = current_aim_pos
 
@@ -738,6 +733,10 @@ class HarpoonTelegraphFX extends Node2D:
 	func _execute_harpoon_strike() -> void:
 		AudioManager.play_sfx("axe_swing", start_pos, 2.0, 0.75)
 		
+		# Only the server/host applies damage and physics displacement
+		if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+			return
+
 		var space = get_world_2d().direct_space_state
 		if not space: return
 
@@ -745,7 +744,6 @@ class HarpoonTelegraphFX extends Node2D:
 		var dir = (aim_target - start_pos).normalized()
 		var strike_end = start_pos + (dir * max_range)
 
-		# FORGIVING 18PX THICK HITBOX (Using circle query along vector)
 		var shape = CircleShape2D.new()
 		shape.radius = 18.0
 		var query = PhysicsShapeQueryParameters2D.new()
@@ -756,7 +754,6 @@ class HarpoonTelegraphFX extends Node2D:
 		var best_hit_body: Node2D = null
 		var min_hit_dist = 9999.0
 
-		# Step along spear trajectory to find closest valid player/bodyguard
 		var sample_steps = 14
 		for i in range(1, sample_steps + 1):
 			var sample_pt = start_pos.lerp(strike_end, float(i) / float(sample_steps))
@@ -773,7 +770,6 @@ class HarpoonTelegraphFX extends Node2D:
 			if best_hit_body != null:
 				break
 
-		# YANK HIT PLAYER DIRECTLY TO MELEE RANGE
 		if is_instance_valid(best_hit_body):
 			if best_hit_body.has_method("take_damage"):
 				best_hit_body.take_damage(22)
@@ -792,7 +788,6 @@ class HarpoonTelegraphFX extends Node2D:
 						best_hit_body.movement_speed = orig_spd
 				)
 
-			# Immediate follow-up attack from Nob!
 			if is_instance_valid(source_enemy):
 				source_enemy.set("attack_cooldown_timer", 0.05)
 
@@ -811,7 +806,6 @@ class HarpoonTelegraphFX extends Node2D:
 		var strike_end = start_pos + (dir * max_range)
 
 		if elapsed < duration:
-			# 1. TELEGRAPH: Red Tracking Laser with Pulsing Crosshair
 			var t = elapsed / duration
 			var pulse = 0.65 + sin(elapsed * 28.0) * 0.35
 			var warn_col = Color(1.0, 0.2, 0.1, 0.9 * pulse)
@@ -824,7 +818,6 @@ class HarpoonTelegraphFX extends Node2D:
 			draw_line(aim_target + Vector2(-16, 0), aim_target + Vector2(16, 0), warn_col, 1.4)
 			draw_line(aim_target + Vector2(0, -16), aim_target + Vector2(0, 16), warn_col, 1.4)
 		else:
-			# 2. FLYING RUSTY CHAIN & BARBED HARPOON
 			var spear_pos = start_pos.lerp(strike_end, chain_progress)
 			draw_line(start_pos, spear_pos, Color(0.35, 0.30, 0.28), 4.5)
 			draw_line(start_pos, spear_pos, Color(0.85, 0.80, 0.75), 1.6)
@@ -890,6 +883,10 @@ class StikkbombTelegraphFX extends Node2D:
 	func _detonate_blast() -> void:
 		AudioManager.play_sfx("orbital_strike", target_pos, -4.0, 1.7)
 		get_tree().call_group("players", "add_camera_trauma", 0.30)
+
+		# Only the server/host applies damage and knockbacks
+		if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+			return
 
 		var space = get_world_2d().direct_space_state
 		if not space: return

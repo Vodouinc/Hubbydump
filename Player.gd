@@ -29,6 +29,7 @@ var plasma_damage: int = 30
 var is_dead: bool = false
 var respawn_timer: float = 0.0
 const RESPAWN_DURATION: float = 10.0
+var tp_active_tab: int = 0
 
 var preview_validation_info: Dictionary = {"valid": false, "reason": "INITIALIZING"}
 var tooltip_overlay: Node2D = null
@@ -1746,9 +1747,7 @@ func _handle_techpriest_arpg_input(event: InputEvent):
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 		if is_building_mode:
 			_cancel_build_mode()
-			var hud = get_tree().get_first_node_in_group("ability_hud")
-			if hud and hud.has_method("refresh_hud_display"):
-				hud.refresh_hud_display()
+			get_tree().call_group("ability_hud", "refresh_hud_display")
 		elif can_plasma_attack:
 			rpc("perform_plasma_attack", get_global_mouse_position())
 		get_viewport().set_input_as_handled()
@@ -1773,22 +1772,9 @@ func _handle_techpriest_arpg_input(event: InputEvent):
 		get_viewport().set_input_as_handled()
 		return
 
-	# 3. Keyboard Shortcuts: Tabs [1, 2], Buildings [Q, E, R, F], Interact [E], Drone [C]
+	# 3. Direct Keyboard Hotkeys: [1-3] Defenses, [4-7] Industry, [E] Interact, [C] Drone
 	if event is InputEventKey and event.pressed and not event.echo:
 		var code = event.keycode if event.keycode != 0 else event.physical_keycode
-		var hud = get_tree().get_first_node_in_group("ability_hud")
-
-		# [1] & [2]: Switch Category Tabs
-		if code in [KEY_1, KEY_KP_1] or event.unicode == 49:
-			if hud and hud.has_method("set_tp_tab"):
-				hud.set_tp_tab(0) # Switch to [1] DEFENSES
-			get_viewport().set_input_as_handled()
-			return
-		elif code in [KEY_2, KEY_KP_2] or event.unicode == 50:
-			if hud and hud.has_method("set_tp_tab"):
-				hud.set_tp_tab(1) # Switch to [2] INDUSTRY
-			get_viewport().set_input_as_handled()
-			return
 
 		# [C]: Deploy Servo-Skull Drone
 		if code == KEY_C:
@@ -1799,7 +1785,7 @@ func _handle_techpriest_arpg_input(event: InputEvent):
 			get_viewport().set_input_as_handled()
 			return
 
-		# [E]: Interact with nearby structures if not in building mode
+		# [E]: Interact with nearby structures (Sanctum, Shrines, Forges, Relics)
 		if code == KEY_E and not is_building_mode:
 			var nearby = _get_closest_interactable_structure()
 			if is_instance_valid(nearby):
@@ -1807,26 +1793,31 @@ func _handle_techpriest_arpg_input(event: InputEvent):
 				get_viewport().set_input_as_handled()
 				return
 
-		# [Q, E, R, F]: Pick Building in Active Tab (Zero WASD conflict)
-		var active_tab = hud.get_tp_tab() if (hud and hud.has_method("get_tp_tab")) else 0
+		# Direct Building Selection:
 		var structure_to_build: int = -1
+		match code:
+			# --- DEFENSES POD [1, 2, 3] ---
+			KEY_1, KEY_KP_1: structure_to_build = 0 # Wall / Barricade
+			KEY_2, KEY_KP_2: structure_to_build = 2 # Cognis Turret
+			KEY_3, KEY_KP_3: structure_to_build = 4 # Electro-Relay Substation
+			
+			# --- INDUSTRY POD [4, 5, 6, 7] ---
+			KEY_4, KEY_KP_4: structure_to_build = 1 # Plasma Dynamo (Generator)
+			KEY_5, KEY_KP_5: structure_to_build = 3 # Scrap Smelter
+			KEY_6, KEY_KP_6: structure_to_build = 6 # Tech Shrine (Research)
+			KEY_7, KEY_KP_7: structure_to_build = 7 # Cybernetica Forge
 
-		if active_tab == 0: # --- DEFENSES TAB ---
-			match code:
-				KEY_Q: structure_to_build = 0 # Aegis Blast Rampart (Wall)
-				KEY_E: structure_to_build = 2 # Cognis Defense Battery (Turret)
-				KEY_R: structure_to_build = 4 # Electro-Relay Substation
-		elif active_tab == 1: # --- INDUSTRY TAB ---
-			match code:
-				KEY_Q: structure_to_build = 1 # Imperial Plasma Dynamo
-				KEY_E: structure_to_build = 3 # Scrap Smelter
-				KEY_R: structure_to_build = 6 # Omnissian Reliquary (Tech Shrine)
-				KEY_F: structure_to_build = 7 # Cybernetica Manufactorum
+		if structure_to_build != -1 or event.unicode in [49, 50, 51, 52, 53, 54, 55]:
+			if event.unicode == 49: structure_to_build = 0
+			elif event.unicode == 50: structure_to_build = 2
+			elif event.unicode == 51: structure_to_build = 4
+			elif event.unicode == 52: structure_to_build = 1
+			elif event.unicode == 53: structure_to_build = 3
+			elif event.unicode == 54: structure_to_build = 6
+			elif event.unicode == 55: structure_to_build = 7
 
-		if structure_to_build != -1:
 			toggle_build_mode(structure_to_build)
-			if hud and hud.has_method("refresh_hud_display"):
-				hud.refresh_hud_display()
+			get_tree().call_group("ability_hud", "refresh_hud_display")
 			get_viewport().set_input_as_handled()
 			return
 

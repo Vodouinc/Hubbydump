@@ -29,10 +29,14 @@ var current_window_mode: int = DisplayServer.WINDOW_MODE_WINDOWED
 var is_vsync_enabled: bool = true
 var current_max_fps: int = 0
 
+var backdrop_rect: ColorRect = null
+var center_container: CenterContainer = null
+
 var is_opened_from_title: bool = false
 
 func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	z_index = 200 # Ensures pause menu renders in front of all in-game HUDs and overlays
 	add_to_group("pause_menu")
 	theme = AdmechTheme.make()
 	hide()
@@ -42,6 +46,7 @@ func _ready():
 func open_settings_from_title():
 	is_opened_from_title = true
 	_switch_view(View.VIDEO)
+	_update_layout_size()
 	panel_container.show()
 	ally_pause_banner.hide()
 	show()
@@ -80,31 +85,50 @@ func _unhandled_input(event: InputEvent) -> void:
 # ==============================================================================
 # 2. UI LAYOUT & VIEWS
 # ==============================================================================
+func _process(_delta: float) -> void:
+	if visible:
+		_update_layout_size()
+
+func _update_layout_size() -> void:
+	var vp = get_viewport_rect().size
+	size = vp
+	if is_instance_valid(backdrop_rect):
+		backdrop_rect.size = vp
+	if is_instance_valid(center_container):
+		center_container.size = vp
+	if is_instance_valid(ally_pause_banner):
+		ally_pause_banner.position = Vector2((vp.x - 400.0) * 0.5, 32.0)
+		ally_pause_banner.size = Vector2(400.0, 56.0)
+
 func _build_ui_layout():
+	z_index = 200
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-	# 1. Dark Backdrop
-	var backdrop = ColorRect.new()
-	backdrop.name = "Backdrop"
-	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
-	backdrop.color = Color(0.02, 0.03, 0.05, 0.75)
-	backdrop.mouse_filter = Control.MOUSE_FILTER_PASS
-	add_child(backdrop)
+	var vp = get_viewport_rect().size
+	size = vp
+
+	# 1. Dark Fullscreen Dimmer Backdrop
+	backdrop_rect = ColorRect.new()
+	backdrop_rect.name = "Backdrop"
+	backdrop_rect.size = vp
+	backdrop_rect.color = Color(0.02, 0.03, 0.05, 0.80)
+	backdrop_rect.mouse_filter = Control.MOUSE_FILTER_PASS
+	add_child(backdrop_rect)
 
 	# 2. Ally Pause Banner
 	_build_ally_pause_banner()
 
-	# 3. Main Center Menu Container
-	var center = CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_PASS
-	add_child(center)
+	# 3. Center Container (Explicitly matched to Viewport Size)
+	center_container = CenterContainer.new()
+	center_container.size = vp
+	center_container.mouse_filter = Control.MOUSE_FILTER_PASS
+	add_child(center_container)
 
 	var pc = PanelContainer.new()
 	pc.custom_minimum_size = Vector2(460, 380)
 	pc.mouse_filter = Control.MOUSE_FILTER_STOP
-	center.add_child(pc)
+	center_container.add_child(pc)
 	panel_container = pc
 
 	var root_vbox = VBoxContainer.new()
@@ -157,7 +181,7 @@ func _build_ui_layout():
 	window_mode_btn = _create_btn("WINDOW MODE: " + _get_window_mode_name(), func(): _cycle_window_mode())
 	vsync_btn = _create_btn("V-SYNC: " + ("ENABLED" if is_vsync_enabled else "DISABLED"), func(): _toggle_vsync())
 	fps_btn = _create_btn("MAX FPS: " + _get_fps_name(), func(): _cycle_max_fps())
-	var vid_back_btn = _create_btn("BACK [ESC]", func(): _switch_view(View.MAIN))
+	var vid_back_btn = _create_btn("BACK [ESC]", func(): _on_settings_back_pressed())
 
 	video_view_box.add_child(window_mode_btn)
 	video_view_box.add_child(vsync_btn)
@@ -191,7 +215,7 @@ func _build_ui_layout():
 	sfx_slider.value_changed.connect(func(v): AudioManager.set_sfx_volume(v); sfx_lbl.text = str(int(v*100)) + "%")
 	audio_view_box.add_child(sfx_row.container)
 
-	var aud_back_btn = _create_btn("BACK [ESC]", func(): _switch_view(View.MAIN))
+	var aud_back_btn = _create_btn("BACK [ESC]", func(): _on_settings_back_pressed())
 	audio_view_box.add_child(aud_back_btn)
 
 func _build_ally_pause_banner():
@@ -248,6 +272,7 @@ func toggle_my_pause_menu():
 
 func show_my_pause_menu():
 	_switch_view(View.MAIN)
+	_update_layout_size()
 	panel_container.show()
 	ally_pause_banner.hide()
 	show()

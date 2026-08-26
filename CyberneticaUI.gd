@@ -9,6 +9,9 @@ var pop_label: Label = null
 var rally_label: Label = null
 var active_forge_node: Node2D = null
 
+var last_cached_queue: Array = []
+var last_cached_timer: float = -1.0
+
 var cached_scrap: int = -1
 var cached_req: int = -1
 var cached_pop: int = -1
@@ -149,7 +152,13 @@ func _process(_delta: float):
 		cached_pop = cur_pop
 		_refresh_display()
 
-	_refresh_queue_display()
+	# FIX: Only update queue UI if queue array or rounded timer changes
+	var q: Array = active_forge_node.production_queue if "production_queue" in active_forge_node else []
+	var cur_timer: float = active_forge_node.production_timer if "production_timer" in active_forge_node else 0.0
+	if q != last_cached_queue or abs(cur_timer - last_cached_timer) > 0.05:
+		last_cached_queue = q.duplicate()
+		last_cached_timer = cur_timer
+		_refresh_queue_display()
 
 func _refresh_display():
 	if not visible or not is_instance_valid(active_forge_node): return

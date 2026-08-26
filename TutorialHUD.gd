@@ -55,12 +55,12 @@ const QUESTS_TECHPRIEST: Array[Dictionary] = [
 	},
 	{
 		"id": "tp_defense",
-		"task": "Build Cognis Turret [4] & deploy 2nd Servo-Skull [C]",
+		"task": "Build Cognis Turret [2] & deploy 2nd Servo-Skull [C]",
 		"type": "TP_DEFENSE"
 	},
 	{
 		"id": "tp_economy",
-		"task": "Build Plasma Dynamo [3] & Scrap Smelter [5] over Deposit",
+		"task": "Build Plasma Dynamo [4] & Scrap Smelter [5] over Deposit",
 		"type": "TP_ECONOMY"
 	},
 	{
@@ -155,6 +155,13 @@ func _save_settings():
 	var cfg = ConfigFile.new()
 	cfg.set_value("tutorial", "permanently_skipped", permanently_skipped)
 	cfg.save(SETTINGS_FILE)
+
+func reset_tutorial() -> void:
+	if is_instance_valid(active_beacon_node):
+		active_beacon_node.queue_free()
+		active_beacon_node = null
+	current_quests.clear()
+	hide()
 
 func start_tutorial_for_class(class_id: int):
 	active_class_id = class_id

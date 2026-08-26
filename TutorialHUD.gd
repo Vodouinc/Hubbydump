@@ -50,23 +50,28 @@ const QUESTS_TECHPRIEST: Array[Dictionary] = [
 	},
 	{
 		"id": "tp_combat",
-		"task": "Perform weapon attack [LMB / RMB]",
+		"task": "Test Power-Axe [LMB] & Plasma Caliver [RMB]",
 		"type": "ATTACK"
 	},
 	{
-		"id": "tp_build",
-		"task": "Construct a structure [B / 1-7]",
-		"type": "BUILD"
+		"id": "tp_defense",
+		"task": "Build Cognis Turret [4] & deploy 2nd Servo-Skull [C]",
+		"type": "TP_DEFENSE"
 	},
 	{
-		"id": "tp_servo",
-		"task": "Deploy Servo-Skull repair drone [C]",
-		"type": "SERVO_SKULL"
+		"id": "tp_economy",
+		"task": "Build Plasma Dynamo [3] & Scrap Smelter [5] over Deposit",
+		"type": "TP_ECONOMY"
 	},
 	{
-		"id": "tp_map",
-		"task": "Open Map [M] or access Base [E]",
-		"type": "MAP_OR_BASE"
+		"id": "tp_radar",
+		"task": "Access Main Sanctum Base [E] -> Research Cartograph",
+		"type": "TP_RADAR"
+	},
+	{
+		"id": "tp_specialize",
+		"task": "Approach Turret [E] -> Upgrade to Max & Select Specialization",
+		"type": "TP_TURRET_SPEC"
 	}
 ]
 
@@ -99,21 +104,51 @@ const QUESTS_MARSHAL: Array[Dictionary] = [
 	}
 ]
 
+const QUESTS_SISTER: Array[Dictionary] = [
+	{
+		"id": "sob_move_dash",
+		"task": "Thrust into marked beacon using Seraphim Dash [SPACE]",
+		"type": "BEACON",
+		"offset": Vector2(160, 60)
+	},
+	{
+		"id": "sob_combat",
+		"task": "Spray Holy Flamer [LMB] & Fire Multi-Melta [RMB]",
+		"type": "ATTACK"
+	},
+	{
+		"id": "sob_upgrade",
+		"task": "Level up & allocate a Miracle Point [CTRL + 1-4 / SPACE]",
+		"type": "SOB_ALLOCATE"
+	},
+	{
+		"id": "sob_relic",
+		"task": "Throw Holy Hand Grenade [2] or deploy Sanctuary Dome [1]",
+		"type": "SOB_CAST_RELIC"
+	},
+	{
+		"id": "sob_act_faith",
+		"task": "Activate Act of Faith Shield [3] & prepare Righteous Pyre [4]",
+		"type": "SOB_ACT_OF_FAITH"
+	}
+]
+
 # ==============================================================================
 # LIFECYCLE & LAYOUT
 # ==============================================================================
 
 func _ready() -> void:
 	add_to_group("tutorial_hud")
+	z_index = 95
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_load_settings()
 	_build_ui()
 	_update_layout_position()
+	hide()
 
 func _load_settings():
 	var cfg = ConfigFile.new()
 	if cfg.load(SETTINGS_FILE) == OK:
-		# Reset to false if not explicitly permanently skipped
 		permanently_skipped = cfg.get_value("tutorial", "permanently_skipped", false)
 
 func _save_settings():
@@ -123,21 +158,23 @@ func _save_settings():
 
 func start_tutorial_for_class(class_id: int):
 	active_class_id = class_id
-	current_quests = QUESTS_TECHPRIEST if class_id == 0 else QUESTS_MARSHAL
+	match class_id:
+		0: current_quests = QUESTS_TECHPRIEST
+		1: current_quests = QUESTS_MARSHAL
+		2: current_quests = QUESTS_SISTER
+		_: current_quests = QUESTS_TECHPRIEST
+
 	current_step_index = 0
 	session_tutorial_completed = false
 	is_step_completed = false
+	permanently_skipped = false
 	
 	_find_local_player()
 	_cache_initial_states()
 
-	if not permanently_skipped:
-		if is_instance_valid(tut_section):
-			tut_section.show()
-		_setup_current_quest()
-	else:
-		if is_instance_valid(tut_section):
-			tut_section.hide()
+	if is_instance_valid(tut_section):
+		tut_section.show()
+	_setup_current_quest()
 
 	show()
 
@@ -174,12 +211,12 @@ func _process(delta: float) -> void:
 	_evaluate_tutorial_quest()
 
 func _update_layout_position():
-	# DOCKED DIRECTLY UNDER TOP-LEFT RESOURCE RIBBON
 	if is_instance_valid(log_panel):
 		log_panel.position = Vector2(12.0, 42.0)
+		log_panel.reset_size() # Auto-shrinks container height to content snugly
 
 # ==============================================================================
-# UI CONSTRUCTION (CLEAN & COMPACT DIRECTIVE LOG)
+# UI CONSTRUCTION (CLEAN, COMPACT, TRANSLUCENT)
 # ==============================================================================
 
 func _build_ui():
@@ -188,27 +225,28 @@ func _build_ui():
 	log_panel = PanelContainer.new()
 	log_panel.name = "DirectivesLogPanel"
 	log_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	log_panel.custom_minimum_size = Vector2(230, 0)
+	log_panel.custom_minimum_size = Vector2(240, 0)
 
+	# Semi-transparent glassmorphic StyleBox
 	var sb = StyleBoxFlat.new()
-	sb.bg_color = Color(0.04, 0.05, 0.08, 0.90)
-	sb.border_color = Color(0.24, 0.28, 0.35)
+	sb.bg_color = Color(0.02, 0.03, 0.05, 0.55)
+	sb.border_color = Color(0.20, 0.88, 1.0, 0.35)
 	sb.set_border_width_all(1)
 	sb.set_corner_radius_all(3)
 	sb.content_margin_left = 8
 	sb.content_margin_right = 8
-	sb.content_margin_top = 6
-	sb.content_margin_bottom = 6
-	sb.shadow_color = Color(0, 0, 0, 0.5)
-	sb.shadow_size = 4
+	sb.content_margin_top = 5
+	sb.content_margin_bottom = 5
+	sb.shadow_color = Color(0, 0, 0, 0.3)
+	sb.shadow_size = 3
 	log_panel.add_theme_stylebox_override("panel", sb)
 	add_child(log_panel)
 
 	var root_vbox = VBoxContainer.new()
-	root_vbox.add_theme_constant_override("separation", 5)
+	root_vbox.add_theme_constant_override("separation", 3)
 	log_panel.add_child(root_vbox)
 
-	# --- 1. TUTORIAL SECTION ---
+	# --- 1. ACTIVE TUTORIAL DIRECTIVE ---
 	tut_section = VBoxContainer.new()
 	tut_section.name = "TutorialSection"
 	tut_section.add_theme_constant_override("separation", 2)
@@ -218,15 +256,15 @@ func _build_ui():
 	tut_section.add_child(tut_header_hbox)
 
 	tut_title_lbl = Label.new()
-	tut_title_lbl.text = "🎓 TUTORIAL (1/5)"
+	tut_title_lbl.text = "🎓 DIRECTIVE (1/6)"
 	tut_title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tut_title_lbl.add_theme_font_size_override("font_size", 8)
-	tut_title_lbl.add_theme_color_override("font_color", Color(0.82, 0.62, 0.24))
+	tut_title_lbl.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
 	tut_header_hbox.add_child(tut_title_lbl)
 
 	skip_btn = Button.new()
 	skip_btn.text = "✕ SKIP"
-	skip_btn.custom_minimum_size = Vector2(42, 16)
+	skip_btn.custom_minimum_size = Vector2(36, 14)
 	skip_btn.mouse_filter = Control.MOUSE_FILTER_STOP
 	skip_btn.add_theme_font_size_override("font_size", 7)
 	skip_btn.pressed.connect(_on_skip_all_pressed)
@@ -236,20 +274,20 @@ func _build_ui():
 	tut_task_lbl.text = "● Move into marked beacon"
 	tut_task_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tut_task_lbl.add_theme_font_size_override("font_size", 8)
-	tut_task_lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.30))
+	tut_task_lbl.add_theme_color_override("font_color", Color(1.0, 0.88, 0.35))
 	tut_section.add_child(tut_task_lbl)
 
 	var sep1 = ColorRect.new()
 	sep1.name = "TutSep"
 	sep1.custom_minimum_size = Vector2(0, 1)
-	sep1.color = Color(0.25, 0.30, 0.38, 0.4)
-	tut_section.add_child(sep1)
+	sep1.color = Color(0.25, 0.30, 0.38, 0.35)
+	root_vbox.add_child(sep1)
 
-	# --- 2. PRIMARY WIN-CONDITION OBJECTIVES ---
+	# --- 2. PRIMARY OBJECTIVES ---
 	var prim_title = Label.new()
-	prim_title.text = "◆ PRIMARY DIRECTIVES ◆"
+	prim_title.text = "◆ PRIMARY OBJECTIVES"
 	prim_title.add_theme_font_size_override("font_size", 8)
-	prim_title.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
+	prim_title.add_theme_color_override("font_color", Color(0.82, 0.62, 0.24))
 	root_vbox.add_child(prim_title)
 
 	primary_wave_lbl = Label.new()
@@ -266,12 +304,12 @@ func _build_ui():
 
 	var sep2 = ColorRect.new()
 	sep2.custom_minimum_size = Vector2(0, 1)
-	sep2.color = Color(0.25, 0.30, 0.38, 0.4)
+	sep2.color = Color(0.25, 0.30, 0.38, 0.35)
 	root_vbox.add_child(sep2)
 
-	# --- 3. BONUS & EXPLORATION OBJECTIVES ---
+	# --- 3. TACTICAL EXPEDITION OBJECTIVES ---
 	var bonus_title = Label.new()
-	bonus_title.text = "◆ TACTICAL EXPEDITION ◆"
+	bonus_title.text = "◆ TACTICAL EXPEDITION"
 	bonus_title.add_theme_font_size_override("font_size", 8)
 	bonus_title.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
 	root_vbox.add_child(bonus_title)
@@ -296,7 +334,6 @@ func _refresh_campaign_objectives():
 	var main_node = get_tree().get_first_node_in_group("main")
 	if not main_node: return
 
-	# 1. Primary: Wave Defense Status
 	var cur_w = main_node.get("current_wave") if "current_wave" in main_node else 1
 	var max_w = main_node.get("max_waves") if "max_waves" in main_node else 15
 	if is_instance_valid(primary_wave_lbl):
@@ -306,7 +343,6 @@ func _refresh_campaign_objectives():
 		else:
 			primary_wave_lbl.text = "[ ] Defend Forge: Wave %02d/%02d" % [cur_w, max_w]
 
-	# 2. Primary: Citadel / Warboss Status
 	var citadel = get_tree().get_first_node_in_group("ork_citadel")
 	if is_instance_valid(primary_citadel_lbl):
 		if not is_instance_valid(citadel) and main_node.get("is_warboss_spawned"):
@@ -318,7 +354,6 @@ func _refresh_campaign_objectives():
 		else:
 			primary_citadel_lbl.text = "[ ] Strike: Destroy Citadel"
 
-	# 3. Bonus: STC Relic Cleansing Count
 	var stc_vaults = get_tree().get_nodes_in_group("stc_vaults")
 	var cleansed_count = 0
 	for v in stc_vaults:
@@ -332,7 +367,6 @@ func _refresh_campaign_objectives():
 		else:
 			bonus_stc_lbl.text = "[ ] Recover STC Relics (%d/2)" % cleansed_count
 
-	# 4. Bonus: Satellite Outpost Destruction
 	var destroyed_sats = 0
 	if not main_node.get("has_squig_pit"): destroyed_sats += 1
 	if not main_node.get("has_stormboy_pad"): destroyed_sats += 1
@@ -351,6 +385,8 @@ func _evaluate_tutorial_quest():
 		return
 
 	var q = current_quests[current_step_index]
+	var main_node = get_tree().get_first_node_in_group("main")
+
 	match q["type"]:
 		"BEACON":
 			if is_instance_valid(active_beacon_node):
@@ -359,17 +395,47 @@ func _evaluate_tutorial_quest():
 					_complete_current_quest()
 
 		"ATTACK":
-			if local_player.get("is_attacking_anim") or not local_player.get("can_plasma_attack") or not local_player.get("can_attack"):
+			var is_attacking = local_player.get("is_attacking_anim") == true
+			var can_plasma = local_player.get("can_plasma_attack") if "can_plasma_attack" in local_player else true
+			var can_att = local_player.get("can_attack") if "can_attack" in local_player else true
+			var is_flamer = local_player.get("flamer_active") == true
+			if is_attacking or not can_plasma or not can_att or is_flamer:
 				_complete_current_quest()
 
-		"BUILD":
-			var cur_buildings = get_tree().get_nodes_in_group("buildings").size()
-			if cur_buildings > initial_building_count:
+		"TP_DEFENSE":
+			var has_turret = false
+			for b in get_tree().get_nodes_in_group("buildings"):
+				if is_instance_valid(b) and not b.get("is_preview") and int(b.get("building_type")) == 2:
+					has_turret = true
+					break
+			var skull_count = get_tree().get_nodes_in_group("ServoSkull").size()
+			if has_turret and skull_count >= 2:
 				_complete_current_quest()
 
-		"SERVO_SKULL":
-			var cur_skulls = get_tree().get_nodes_in_group("ServoSkull").size()
-			if cur_skulls > initial_skull_count:
+		"TP_ECONOMY":
+			var has_generator = false
+			var has_smelter = false
+			for b in get_tree().get_nodes_in_group("buildings"):
+				if is_instance_valid(b) and not b.get("is_preview"):
+					var bt = int(b.get("building_type"))
+					if bt == 1: has_generator = true
+					elif bt == 3: has_smelter = true
+			if has_generator and has_smelter:
+				_complete_current_quest()
+
+		"TP_RADAR":
+			var radar_lvl = main_node.get("base_radar_level") if main_node else 0
+			if radar_lvl >= 1:
+				_complete_current_quest()
+
+		"TP_TURRET_SPEC":
+			var has_spec_or_max_turret = false
+			for b in get_tree().get_nodes_in_group("buildings"):
+				if is_instance_valid(b) and not b.get("is_preview") and int(b.get("building_type")) == 2:
+					if b.get("turret_spec") != 0 or b.get("turret_upgrade_level") >= 3:
+						has_spec_or_max_turret = true
+						break
+			if has_spec_or_max_turret:
 				_complete_current_quest()
 
 		"DOCTRINA":
@@ -385,15 +451,29 @@ func _evaluate_tutorial_quest():
 			if Input.is_key_pressed(KEY_V):
 				_complete_current_quest()
 
-		"MAP_OR_BASE":
-			var m_ui = get_tree().get_first_node_in_group("minimap_ui")
-			var b_ui = get_tree().get_first_node_in_group("base_upgrade_ui")
-			if (m_ui and m_ui.get("is_fullscreen")) or (b_ui and b_ui.visible):
-				_complete_current_quest()
-
 		"MAP_JUMP":
 			var m_ui = get_tree().get_first_node_in_group("minimap_ui")
 			if (m_ui and m_ui.get("is_fullscreen")) or (m_ui and m_ui.get("is_dragging_minimap")):
+				_complete_current_quest()
+
+		"SOB_ALLOCATE":
+			var r_int = local_player.get("rank_intervention") if "rank_intervention" in local_player else 0
+			var r_gren = local_player.get("rank_grenade") if "rank_grenade" in local_player else 0
+			var r_shld = local_player.get("rank_shield") if "rank_shield" in local_player else 0
+			var r_dash = local_player.get("rank_dash") if "rank_dash" in local_player else 1
+			if r_int > 0 or r_gren > 0 or r_shld > 0 or r_dash > 1:
+				_complete_current_quest()
+
+		"SOB_CAST_RELIC":
+			var gren_cd = local_player.get("holy_grenade_cooldown") if "holy_grenade_cooldown" in local_player else 0.0
+			var int_cd = local_player.get("holy_intervention_cooldown") if "holy_intervention_cooldown" in local_player else 0.0
+			if gren_cd > 0.0 or int_cd > 0.0:
+				_complete_current_quest()
+
+		"SOB_ACT_OF_FAITH":
+			var shld_cd = local_player.get("miracle_act_cooldown") if "miracle_act_cooldown" in local_player else 0.0
+			var ult_cd = local_player.get("sister_ultimate_cooldown") if "sister_ultimate_cooldown" in local_player else 0.0
+			if shld_cd > 0.0 or ult_cd > 0.0:
 				_complete_current_quest()
 
 func _complete_current_quest():
@@ -424,9 +504,9 @@ func _setup_current_quest():
 		active_beacon_node = null
 
 	var q = current_quests[current_step_index]
-	tut_title_lbl.text = "🎓 TUTORIAL (%d/%d)" % [current_step_index + 1, current_quests.size()]
+	tut_title_lbl.text = "🎓 DIRECTIVE (%d/%d)" % [current_step_index + 1, current_quests.size()]
 	tut_task_lbl.text = "● " + q["task"]
-	tut_task_lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.30))
+	tut_task_lbl.add_theme_color_override("font_color", Color(1.0, 0.88, 0.35))
 
 	if q["type"] == "BEACON":
 		var base_node = get_tree().get_first_node_in_group("base")
@@ -466,7 +546,7 @@ func _on_skip_all_pressed():
 	AudioManager.play_sfx("hit", Vector2.ZERO, -6.0, 1.2)
 
 # ==============================================================================
-# IN-WORLD GLOWING BEACON FOR QUEST 1
+# IN-WORLD GLOWING BEACON
 # ==============================================================================
 class TutorialObjectiveBeacon extends Node2D:
 	var anim_time: float = 0.0

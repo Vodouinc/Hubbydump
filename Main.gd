@@ -66,6 +66,8 @@ var stc_aegis_unlocked: bool = false
 var stc_volkite_unlocked: bool = false
 var is_warboss_spawned: bool = false
 
+var base_auto_builder_node: Node2D = null
+
 var stc_aegis_core_unlocked: bool = false # STC Vault 2
 
 var scrap_amount: int = 75
@@ -167,10 +169,12 @@ var lan_udp_peer: PacketPeerUDP = null
 var lan_broadcast_timer: float = 0.0
 var lan_found_hosts: Dictionary = {}
 
+var upnp_instance: UPNP = null
 var upnp_thread: Thread = null
 var public_ip_cached: String = ""
 var is_upnp_active: bool = false
 var host_vox_code: String = ""
+var upnp_port_cached: int = DEFAULT_PORT
 
 var vox_code_edit: LineEdit = null
 var copy_vox_btn: Button = null
@@ -203,6 +207,10 @@ func _ready():
 	_build_procedural_lobby_ui()
 	
 	_show_title_screen()
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_safe_cleanup_peer()
 
 func _process(delta: float) -> void:
 	if (not multiplayer.has_multiplayer_peer()) or multiplayer.is_server():
@@ -608,17 +616,18 @@ func _build_singleplayer_menu_ui():
 
 func _select_sp_class(c_class: CharacterClass):
 	my_selected_class = c_class
-	var data = CLASS_DATA[c_class]
+	var data: Dictionary = CLASS_DATA.get(c_class, {})
+	if data.is_empty(): return
 
-	if sp_class_name_lbl: sp_class_name_lbl.text = "◆ " + data.name.to_upper() + " ◆"
-	if sp_role_lbl: sp_role_lbl.text = data.faction + "\n" + data.role
-	if sp_stats_lbl: sp_stats_lbl.text = data.stats
-	if sp_desc_lbl: sp_desc_lbl.text = data.desc
-	if sp_arsenal_lbl: sp_arsenal_lbl.text = data.arsenal
-	if sp_flavor_lbl: sp_flavor_lbl.text = data.flavor
+	if sp_class_name_lbl: sp_class_name_lbl.text = "◆ " + data.get("name", "").to_upper() + " ◆"
+	if sp_role_lbl: sp_role_lbl.text = data.get("faction", "") + "\n" + data.get("role", "")
+	if sp_stats_lbl: sp_stats_lbl.text = data.get("stats", "")
+	if sp_desc_lbl: sp_desc_lbl.text = data.get("desc", "")
+	if sp_arsenal_lbl: sp_arsenal_lbl.text = data.get("arsenal", "")
+	if sp_flavor_lbl: sp_flavor_lbl.text = data.get("flavor", "")
 
 	if sp_sprite_preview:
-		sp_sprite_preview.unit_type = data.unit_type_id as UnitSprite.UnitType
+		sp_sprite_preview.unit_type = data.get("unit_type_id", 0) as UnitSprite.UnitType
 		sp_sprite_preview.update_facing(sp_sprite_preview.global_position + Vector2(20, 35))
 		sp_sprite_preview.queue_redraw()
 
@@ -842,43 +851,6 @@ func _build_procedural_lobby_ui():
 # ==============================================================================
 # 5. NETWORKING (UPnP, LAN, WEBSOCKETS/ENET)
 # ==============================================================================
-func _discover_public_ip_and_upnp(port: int):
-	var http = HTTPRequest.new()
-	add_child(http)
-	http.request_completed.connect(func(_res, code, _headers, body):
-		if code == 200:
-			public_ip_cached = body.get_string_from_utf8().strip_edges()
-			_update_host_vox_code(port)
-		http.queue_free()
-	)
-	http.request("https://api.ipify.org")
-
-	upnp_thread = Thread.new()
-	upnp_thread.start(_run_upnp_task.bind(port))
-
-func _run_upnp_task(port: int):
-	var upnp = UPNP.new()
-	var discover_res = upnp.discover()
-	
-	if discover_res == UPNP.UPNP_RESULT_SUCCESS and upnp.get_gateway() and upnp.get_gateway().is_valid_gateway():
-		var map_res = upnp.add_port_mapping(port, port, "Godot_AdMech_Game", "UDP")
-		is_upnp_active = (map_res == UPNP.UPNP_RESULT_SUCCESS)
-	else:
-		is_upnp_active = false
-
-	call_deferred("_on_upnp_completed")
-
-func _on_upnp_completed():
-	if upnp_thread and upnp_thread.is_started():
-		upnp_thread.wait_to_finish()
-
-	if upnp_status_lbl:
-		if is_upnp_active:
-			upnp_status_lbl.text = "⚡ UPnP: PORT FORWARDED (ONLINE READY)"
-			upnp_status_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
-		else:
-			upnp_status_lbl.text = "⚠️ UPnP: UNAVAILABLE (LAN / Manual Forwarding)"
-			upnp_status_lbl.add_theme_color_override("font_color", Color(0.95, 0.75, 0.20))
 
 func _update_host_vox_code(port: int):
 	if public_ip_cached.is_empty():
@@ -979,6 +951,12 @@ func _refresh_lan_ui_list():
 
 		lan_list_container.add_child(row)
 
+func _get_local_ip() -> String:
+	for ip in IP.get_local_addresses():
+		if ip.begins_with("192.168.") or ip.begins_with("10.") or (ip.begins_with("172.") and not ip.begins_with("172.16.")):
+			return ip
+	return "127.0.0.1"
+
 func _cleanup_lan_socket():
 	if lan_udp_peer:
 		lan_udp_peer.close()
@@ -996,6 +974,8 @@ func _on_host_pressed():
 	_safe_cleanup_peer()
 	
 	var port = int(lobby_port_edit.text) if (lobby_port_edit and lobby_port_edit.text != "") else DEFAULT_PORT
+	upnp_port_cached = port
+
 	peer = ENetMultiplayerPeer.new()
 	var error = peer.create_server(port, 4)
 	if error != OK:
@@ -1012,12 +992,85 @@ func _on_host_pressed():
 	player_classes[1] = my_selected_class
 	player_ready[1] = false
 
-	_set_session_text("◆ SANCTUM ACTIVE ◆ Copy Vox Code or broadcast to LAN.")
+	# Show busy state until the real external IP is verified
+	if vox_code_edit:
+		vox_code_edit.text = "Generating Vox Code (Negotiating UPnP)..."
+	if copy_vox_btn:
+		copy_vox_btn.disabled = true
+
+	if upnp_status_lbl:
+		upnp_status_lbl.text = "UPnP: Probing Gateway & Forwarding Port..."
+		upnp_status_lbl.add_theme_color_override("font_color", Color(0.95, 0.75, 0.20))
+
+	_set_session_text("◆ SANCTUM INITIALIZING ◆ Forwarding port & resolving IP...")
 	_update_connection_buttons(true)
 	_refresh_lobby_roster()
 	_broadcast_lobby_state()
 
 	_discover_public_ip_and_upnp(port)
+
+func _discover_public_ip_and_upnp(port: int):
+	# Run UPnP discovery in a background thread to prevent game stutter [1]
+	upnp_thread = Thread.new()
+	upnp_thread.start(_run_upnp_task.bind(port))
+
+func _run_upnp_task(port: int):
+	upnp_instance = UPNP.new()
+	var discover_res = upnp_instance.discover(2000, 2, "InternetGatewayDevice")
+	
+	var found_ip: String = ""
+	var port_mapped: bool = false
+	
+	if discover_res == UPNP.UPNP_RESULT_SUCCESS:
+		var gateway = upnp_instance.get_gateway()
+		if gateway and gateway.is_valid_gateway():
+			var map_res = upnp_instance.add_port_mapping(port, port, "Godot_AdMech_Game", "UDP")
+			if map_res == UPNP.UPNP_RESULT_SUCCESS:
+				port_mapped = true
+				found_ip = upnp_instance.query_external_address()
+				print("[UPnP] Successfully mapped UDP port ", port, " on router external IP: ", found_ip)
+			else:
+				print("[UPnP] Port mapping failed with code: ", map_res)
+		else:
+			print("[UPnP] No valid UPnP gateway found.")
+	else:
+		print("[UPnP] UPnP discovery failed with code: ", discover_res)
+
+	# Deliver result back to the main thread
+	_on_upnp_completed.call_deferred(port_mapped, found_ip, port)
+
+func _on_upnp_completed(port_mapped: bool, external_ip: String, port: int):
+	if upnp_thread and upnp_thread.is_started():
+		upnp_thread.wait_to_finish()
+		upnp_thread = null
+
+	is_upnp_active = port_mapped
+
+	if is_upnp_active and not external_ip.is_empty():
+		public_ip_cached = external_ip
+		if upnp_status_lbl:
+			upnp_status_lbl.text = "⚡ UPnP: PORT FORWARDED (ONLINE READY)"
+			upnp_status_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
+		_set_session_text("◆ SANCTUM READY ◆ Share Vox Code with your cadre.")
+		_update_host_vox_code(port)
+	else:
+		# Fallback: query public IP via HTTP if router's UPnP is disabled
+		if upnp_status_lbl:
+			upnp_status_lbl.text = "⚠️ UPnP: UNAVAILABLE (Resolving IP via Web / LAN)"
+			upnp_status_lbl.add_theme_color_override("font_color", Color(0.95, 0.75, 0.20))
+		
+		var http = HTTPRequest.new()
+		add_child(http)
+		http.request_completed.connect(func(_res, code, _headers, body):
+			if code == 200:
+				public_ip_cached = body.get_string_from_utf8().strip_edges()
+			else:
+				public_ip_cached = _get_local_ip()
+			_update_host_vox_code(port)
+			_set_session_text("◆ SANCTUM READY ◆ (Manual Port Forwarding or LAN may be required)")
+			http.queue_free()
+		)
+		http.request("https://api.ipify.org")
 
 func _on_join_pressed():
 	var code_input = vox_code_edit.text.strip_edges() if vox_code_edit else ""
@@ -1141,22 +1194,13 @@ func report_lobby_loadout(chosen_class: int, ready: bool) -> void:
 
 func _broadcast_lobby_state() -> void:
 	if not multiplayer.is_server(): return
-	var payload: Array = []
-	for id in player_classes.keys():
-		payload.append([int(id), int(player_classes[id]), player_ready.get(id, false)])
-	rpc("sync_lobby_state", payload, match_started)
+	rpc("sync_lobby_state", player_classes, player_ready, match_started)
 	_refresh_lobby_roster()
 
 @rpc("authority", "call_local", "reliable")
-func sync_lobby_state(payload: Array, started: bool) -> void:
-	player_classes.clear()
-	player_ready.clear()
-	for entry in payload:
-		if typeof(entry) == TYPE_ARRAY and entry.size() >= 3:
-			var id = int(entry[0])
-			player_classes[id] = int(entry[1])
-			player_ready[id] = bool(entry[2])
-			
+func sync_lobby_state(classes_data: Dictionary, ready_data: Dictionary, started: bool) -> void:
+	player_classes = classes_data.duplicate()
+	player_ready = ready_data.duplicate()
 	_refresh_lobby_roster()
 	if started and not match_started:
 		_begin_match_local()
@@ -1176,7 +1220,11 @@ func _begin_match() -> void:
 	_spawn_world_terrain()
 	_spawn_map_scrap_deposits()
 	_spawn_ork_mega_camp()
-	_spawn_stc_vaults()           # <-- Spawns Archeotech Relic Vaults
+	_spawn_stc_vaults()
+	
+	# --- ADD THIS LINE TO ENGAGE BASE AI IF NO TECH-PRIEST IS PLAYING ---
+	_check_and_initiate_base_ai()
+
 	request_navmesh_rebake()
 	start_next_wave()
 
@@ -1194,7 +1242,7 @@ func _begin_match_local() -> void:
 	if a_hud and a_hud.has_method("show"): 
 		a_hud.show()
 
-	# Show Wave HUD (Fixes missing Wave UI on restart)
+	# Show Wave HUD
 	var w_hud = get_tree().get_first_node_in_group("wave_hud")
 	if w_hud and w_hud.has_method("show"): 
 		w_hud.show()
@@ -1203,6 +1251,11 @@ func _begin_match_local() -> void:
 	var m_ui = get_tree().get_first_node_in_group("minimap_ui")
 	if m_ui and m_ui.has_method("show"): 
 		m_ui.show()
+
+	# --- ADD THIS: Initialize and Show Tutorial for Local Player's Chosen Class ---
+	var tut_hud = get_tree().get_first_node_in_group("tutorial_hud")
+	if tut_hud and tut_hud.has_method("start_tutorial_for_class"):
+		tut_hud.start_tutorial_for_class(int(my_selected_class))
 
 func _is_in_session() -> bool:
 	return multiplayer.has_multiplayer_peer() and multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED
@@ -1224,10 +1277,10 @@ func _update_connection_buttons(connected: bool):
 	if lobby_ready_btn: lobby_ready_btn.disabled = not connected
 
 func _update_class_ui():
-	if CLASS_DATA.has(my_selected_class) and lobby_class_desc_label:
-		var info = CLASS_DATA[my_selected_class]
-		lobby_class_desc_label.text = "◆ %s ◆\n%s\n\n%s" % [info.name.to_upper(), info.role, info.desc]
-
+	var info: Dictionary = CLASS_DATA.get(my_selected_class, {})
+	if not info.is_empty() and lobby_class_desc_label:
+		lobby_class_desc_label.text = "◆ %s ◆\n%s\n\n%s" % [info.get("name", "").to_upper(), info.get("role", ""), info.get("desc", "")]
+		
 func _refresh_lobby_roster():
 	if not lobby_roster_label: return
 
@@ -1241,21 +1294,40 @@ func _refresh_lobby_roster():
 	ids.sort()
 	var all_ready = true
 
-	for id in ids:
-		var c_id: int = int(player_classes[id])
-		var info = CLASS_DATA.get(c_id, {"name": "Acolyte"})
-		var rdy = player_ready.get(id, false)
+	for peer_id in ids:
+		var c_id: int = int(player_classes.get(peer_id, 0))
+		var info: Dictionary = CLASS_DATA.get(c_id, {"name": "Acolyte"})
+		var rdy: bool = bool(player_ready.get(peer_id, false))
 		if not rdy: all_ready = false
 		
-		var tag = " (You)" if (id == multiplayer.get_unique_id() or (id == 1 and not multiplayer.has_multiplayer_peer())) else ""
+		var my_id = multiplayer.get_unique_id() if multiplayer.has_multiplayer_peer() else 1
+		var tag = " (You)" if int(peer_id) == my_id else ""
 		var status_str = "[READY]" if rdy else "[STANDBY]"
-		lines.append("%s %s %s%s" % [status_str, info.name, ("#%d" % id), tag])
+		lines.append("%s %s #%d%s" % [status_str, info.get("name", "Acolyte"), int(peer_id), tag])
 
 	lobby_roster_label.text = "\n".join(lines)
 	
 	if lobby_start_btn and multiplayer.is_server():
 		lobby_start_btn.disabled = not all_ready
 		lobby_start_btn.text = "INITIATE CRUSADE" if all_ready else "WAITING ON CADRE..."
+
+func _check_and_initiate_base_ai():
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+		return
+
+	var has_techpriest = false
+	for peer_id in player_classes.keys():
+		if int(player_classes[peer_id]) == CharacterClass.ADMECH_TECHPRIEST:
+			has_techpriest = true
+			break
+
+	if not has_techpriest:
+		print("◆ ENGAGING SANCTUM AUTOMATED COGITATOR DEFENSE SUBROUTINE ◆")
+		if not is_instance_valid(base_auto_builder_node):
+			var builder_script = load("res://BaseAutoBuilder.gd")
+			base_auto_builder_node = builder_script.new()
+			base_auto_builder_node.name = "SanctumAutoBuilder"
+			add_child(base_auto_builder_node)
 
 # ==============================================================================
 # 6. SPAWNER & ENTITY ROUTING
@@ -1350,19 +1422,24 @@ func spawn_player(peer_id: int):
 		if tut and tut.has_method("start_tutorial_for_class"):
 			tut.start_tutorial_for_class(int(chosen_class))
 
-func _custom_spawner(data) -> Node:
-	if typeof(data) == TYPE_ARRAY and data.size() > 0: data = data[0]
-	if typeof(data) != TYPE_DICTIONARY: return null
+func _custom_spawner(data: Variant) -> Node:
+	var dict_data: Dictionary = {}
+	if data is Array and not data.is_empty():
+		if data[0] is Dictionary:
+			dict_data = data[0]
+	elif data is Dictionary:
+		dict_data = data
+	else:
+		return null
 
-	var obj_type = data.get("type", "")
+	var obj_type = dict_data.get("type", "")
 	match obj_type:
 		"player":
 			var player = player_scene.instantiate()
-			var peer_id = data["peer_id"]
+			var peer_id = dict_data.get("peer_id", 1)
 			player.name = str(peer_id)
-			var chosen_class = data.get("class", CharacterClass.ADMECH_TECHPRIEST)
+			var chosen_class = dict_data.get("class", CharacterClass.ADMECH_TECHPRIEST)
 			
-			# Assign the selected class ID directly
 			player.current_class = int(chosen_class)
 			if player.has_method("set_player_class"):
 				player.set_player_class(player.current_class)
@@ -1375,19 +1452,19 @@ func _custom_spawner(data) -> Node:
 
 		"world_obstacle":
 			var obs = WorldObstacle.new()
-			obs.name = str(data["name"])
-			obs.position = data["position"]
-			obs.obstacle_type = data.get("obstacle_type", WorldObstacle.ObstacleType.MOUNTAIN_CRAG)
-			obs.radius = data.get("radius", 36.0)
+			obs.name = str(dict_data.get("name", "Obstacle"))
+			obs.position = dict_data.get("position", Vector2.ZERO)
+			obs.obstacle_type = dict_data.get("obstacle_type", WorldObstacle.ObstacleType.MOUNTAIN_CRAG)
+			obs.radius = dict_data.get("radius", 36.0)
 			return obs
 
 		"cohort_infantry":
 			var inf_script = load("res://SkitariiInfantry.gd")
 			var inf = CharacterBody2D.new()
 			inf.set_script(inf_script)
-			inf.name = str(data["name"])
-			inf.position = data["position"]
-			inf.unit_type = data.get("unit_type", GameData.CohortUnitType.VANGUARD)
+			inf.name = str(dict_data.get("name", "Infantry"))
+			inf.position = dict_data.get("position", Vector2.ZERO)
+			inf.unit_type = dict_data.get("unit_type", GameData.CohortUnitType.VANGUARD)
 			inf.set_multiplayer_authority(1)
 			return inf
 
@@ -1395,49 +1472,49 @@ func _custom_spawner(data) -> Node:
 			var kata_script = load("res://KataphronUnit.gd")
 			var kata = CharacterBody2D.new()
 			kata.set_script(kata_script)
-			kata.name = str(data["name"])
-			kata.position = data["position"]
+			kata.name = str(dict_data.get("name", "Kataphron"))
+			kata.position = dict_data.get("position", Vector2.ZERO)
 			kata.set_multiplayer_authority(1)
 			return kata
 
 		"building":
 			var building = building_scene.instantiate()
-			building.name = str(data["name"])
-			building.position = data["position"]
-			if "building_type" in data:
-				building.building_type = data["building_type"]
+			building.name = str(dict_data.get("name", "Building"))
+			building.position = dict_data.get("position", Vector2.ZERO)
+			if "building_type" in dict_data:
+				building.building_type = dict_data["building_type"]
 			return building
 
 		"enemy":
 			var enemy = enemy_scene.instantiate()
-			enemy.name = str(data["name"])
-			enemy.position = data["position"]
-			if "enemy_type" in data: enemy.type = int(data["enemy_type"])
-			if "is_objective_guard" in data: enemy.is_objective_guard = data["is_objective_guard"]
-			if "guard_anchor" in data: enemy.guard_anchor = data["guard_anchor"]
-			if "counts_toward_wave" in data: enemy.counts_toward_wave = data["counts_toward_wave"]
+			enemy.name = str(dict_data.get("name", "Enemy"))
+			enemy.position = dict_data.get("position", Vector2.ZERO)
+			if "enemy_type" in dict_data: enemy.type = int(dict_data["enemy_type"])
+			if "is_objective_guard" in dict_data: enemy.is_objective_guard = dict_data["is_objective_guard"]
+			if "guard_anchor" in dict_data: enemy.guard_anchor = dict_data["guard_anchor"]
+			if "counts_toward_wave" in dict_data: enemy.counts_toward_wave = dict_data["counts_toward_wave"]
 			return enemy
 
 		"bullet":
 			var bullet = bullet_scene.instantiate()
-			bullet.name = str(data["name"])
-			bullet.position = data["position"]
-			bullet.direction = data["direction"]
-			bullet.rotation = data["direction"].angle()
-			if "damage" in data: bullet.damage = data["damage"]
-			if "bullet_type" in data: bullet.bullet_type = int(data["bullet_type"])
-			if "is_enemy_bullet" in data: bullet.is_enemy_bullet = data["is_enemy_bullet"]
-			if "is_plasma_caliver" in data: bullet.is_plasma_caliver = data["is_plasma_caliver"]
+			bullet.name = str(dict_data.get("name", "Bullet"))
+			bullet.position = dict_data.get("position", Vector2.ZERO)
+			bullet.direction = dict_data.get("direction", Vector2.RIGHT)
+			bullet.rotation = bullet.direction.angle()
+			if "damage" in dict_data: bullet.damage = dict_data["damage"]
+			if "bullet_type" in dict_data: bullet.bullet_type = int(dict_data["bullet_type"])
+			if "is_enemy_bullet" in dict_data: bullet.is_enemy_bullet = dict_data["is_enemy_bullet"]
+			if "is_plasma_caliver" in dict_data: bullet.is_plasma_caliver = dict_data["is_plasma_caliver"]
 			return bullet
 
 		"kastelan_robot":
 			var robot_script = load("res://KastelanRobot.gd")
 			var robot = CharacterBody2D.new()
 			robot.set_script(robot_script)
-			robot.name = str(data["name"])
-			robot.position = data["position"]
+			robot.name = str(dict_data.get("name", "Kastelan"))
+			robot.position = dict_data.get("position", Vector2.ZERO)
 			robot.set_multiplayer_authority(1)
-			var owner_id = data["owner_id"]
+			var owner_id = dict_data.get("owner_id", 1)
 			var p_node = get_node_or_null(str(owner_id))
 			if not p_node:
 				p_node = get_tree().get_first_node_in_group("players")
@@ -1448,60 +1525,60 @@ func _custom_spawner(data) -> Node:
 
 		"scrap":
 			var scrap = scrap_scene.instantiate()
-			scrap.name = str(data["name"])
-			scrap.position = data["position"]
+			scrap.name = str(dict_data.get("name", "Scrap"))
+			scrap.position = dict_data.get("position", Vector2.ZERO)
 			return scrap
 
 		"scrap_deposit":
 			var dep = StaticBody2D.new()
 			dep.set_script(load("res://ScrapDeposit.gd"))
-			dep.name = str(data["name"])
-			dep.position = data["position"]
+			dep.name = str(dict_data.get("name", "ScrapDeposit"))
+			dep.position = dict_data.get("position", Vector2.ZERO)
 			return dep
 
 		"ork_citadel":
 			var cit = StaticBody2D.new()
 			cit.set_script(load("res://OrkCitadel.gd"))
-			cit.name = str(data["name"])
-			cit.position = data["position"]
+			cit.name = str(dict_data.get("name", "OrkCitadel"))
+			cit.position = dict_data.get("position", Vector2.ZERO)
 			return cit
 
 		"stc_vault":
 			var vault = STCVault.new()
-			vault.name = str(data["name"])
-			vault.position = data["position"]
-			vault.relic_id = data.get("relic_id", 0)
+			vault.name = str(dict_data.get("name", "STCVault"))
+			vault.position = dict_data.get("position", Vector2.ZERO)
+			vault.relic_id = dict_data.get("relic_id", 0)
 			return vault
 
 		"ork_satellite":
 			var sat = OrkSatelliteCamp.new()
-			sat.name = str(data["name"])
-			sat.position = data["position"]
-			sat.sub_type = data.get("sub_type", "squig_pit")
+			sat.name = str(dict_data.get("name", "Satellite"))
+			sat.position = dict_data.get("position", Vector2.ZERO)
+			sat.sub_type = dict_data.get("sub_type", "squig_pit")
 			return sat
 
 		"ork_scrap_heap":
 			var heap = StaticBody2D.new()
 			heap.set_script(load("res://OrkScrapHeap.gd"))
-			heap.name = str(data["name"])
-			heap.position = data["position"]
+			heap.name = str(dict_data.get("name", "ScrapHeap"))
+			heap.position = dict_data.get("position", Vector2.ZERO)
 			return heap
 
 		"waaagh_idol":
 			var idol = waaagh_idol_scene.instantiate()
-			idol.name = str(data["name"])
-			idol.position = data["position"]
+			idol.name = str(dict_data.get("name", "WaaaghIdol"))
+			idol.position = dict_data.get("position", Vector2.ZERO)
 			return idol
 
 		"bodyguard":
 			var bodyguard_scene = preload("res://SkitariiBodyguard.tscn")
 			var bg = bodyguard_scene.instantiate()
-			bg.name = str(data["name"])
-			bg.position = data["position"]
-			if "guard_role" in data:
-				bg.guard_role = int(data["guard_role"])
+			bg.name = str(dict_data.get("name", "Bodyguard"))
+			bg.position = dict_data.get("position", Vector2.ZERO)
+			if "guard_role" in dict_data:
+				bg.guard_role = int(dict_data["guard_role"])
 			bg.set_multiplayer_authority(1)
-			var owner_id = data["owner_id"]
+			var owner_id = dict_data.get("owner_id", 1)
 			var p_node = get_node_or_null(str(owner_id))
 			if not p_node:
 				p_node = get_tree().get_first_node_in_group("players")
@@ -1514,10 +1591,10 @@ func _custom_spawner(data) -> Node:
 		"servo_skull":
 			var servoskull_scene = preload("res://ServoSkull.tscn")
 			var skull = servoskull_scene.instantiate()
-			skull.name = str(data["name"])
-			skull.position = data["position"]
+			skull.name = str(dict_data.get("name", "ServoSkull"))
+			skull.position = dict_data.get("position", Vector2.ZERO)
 			skull.set_multiplayer_authority(1)
-			var owner_id = data["owner_id"]
+			var owner_id = dict_data.get("owner_id", 1)
 			var p_node = get_node_or_null(str(owner_id))
 			if not p_node:
 				p_node = get_tree().get_first_node_in_group("players")
@@ -1735,21 +1812,20 @@ func _get_wave_break_duration(wave: int) -> float:
 				return 10.0 # Rapid relentless pressure
 			return 14.0     # Standard break
 
-# TAB Procedural Horde Generator for Endless / Custom Waves
 func _generate_procedural_tab_horde(squads_array: Array[Dictionary], budget: int, player_count: int) -> void:
 	# 1. Fast Screen
 	var screen_count = clampi(int(budget * 0.25 / 2.0), 6, 24)
 	var screen_units = []
 	for i in range(screen_count):
 		screen_units.append(1 if i % 2 == 0 else 0)
-	_add_squad(squads_array, screen_units, player_count, 1.5)
+	_add_squad(squads_array, screen_units, 1.5, player_count)
 
 	# 2. Main Line & Air Support
 	var main_count = clampi(int(budget * 0.40 / 4.0), 4, 16)
 	var main_units = []
 	for i in range(main_count):
 		main_units.append(3 if i % 3 == 0 else 2)
-	_add_squad(squads_array, main_units, player_count, 3.0)
+	_add_squad(squads_array, main_units, 3.0, player_count)
 
 	# 3. Nob Siege Vanguard
 	var nob_count = clampi(int(budget * 0.35 / 8.0), 2, 10)
@@ -1757,7 +1833,7 @@ func _generate_procedural_tab_horde(squads_array: Array[Dictionary], budget: int
 	for i in range(nob_count):
 		heavy_units.append(4)
 		heavy_units.append(2)
-	_add_squad(squads_array, heavy_units, player_count, 4.5)
+	_add_squad(squads_array, heavy_units, 4.5, player_count)
 
 func _spawn_flanker_raid():
 	var base_node = get_tree().get_first_node_in_group("base")
@@ -1916,6 +1992,19 @@ func notify_satellite_destroyed(sub_type: String):
 		"mek_foundry":
 			has_mek_foundry = false
 			_announce_tactical_update("🔥 MEKBOY FOUNDRY DESTROYED — ENEMY WAVE SIZES REDUCED!")
+
+	# Calculate remaining satellite camps (0, 1, 2, or 3)
+	var remaining_outposts = int(has_squig_pit) + int(has_stormboy_pad) + int(has_mek_foundry)
+	
+	var cit = get_tree().get_first_node_in_group("ork_citadel")
+	if is_instance_valid(cit) and cit.has_method("update_shield_state"):
+		cit.update_shield_state(remaining_outposts)
+
+	if remaining_outposts == 0:
+		_announce_tactical_update("⚡ KUSTOM FORCE FIELD COLLAPSED — ORK CITADEL IS NOW VULNERABLE! ⚡")
+		AudioManager.play_sfx("orbital_strike", Vector2.ZERO, 3.0, 0.8)
+	else:
+		_announce_tactical_update("⚠️ CITADEL SHIELD WEAKENED (%d/3 OUTPOSTS REMAINING)" % remaining_outposts)
 
 func notify_citadel_destroyed():
 	# If Warboss hasn't spawned yet, spawn him for the final climactic duel
@@ -2097,8 +2186,7 @@ func _build_wave_squads(wave: int, player_count: int) -> Array[Dictionary]:
 
 	return squads
 
-# Helper to scale squads dynamically when playing with 2, 3, or 4 players
-func _add_squad(squads_array: Array[Dictionary], base_units: Array, player_count: int, delay: float = 3.0) -> void:
+func _add_squad(squads_array: Array[Dictionary], base_units: Array, delay: float, player_count: int = 1) -> void:
 	var final_units = base_units.duplicate()
 	
 	# Add extra screening/line units per additional player
@@ -2111,8 +2199,7 @@ func _add_squad(squads_array: Array[Dictionary], base_units: Array, player_count
 		"units": final_units,
 		"delay": delay
 	})
-
-
+	
 func _get_available_squad_templates(wave: int) -> Array[Dictionary]:
 	var t: Array[Dictionary] = [{"cost": 6, "units": [0, 0, 0, 0, 0], "delay": 3.5}]
 	if wave >= 2: t.append({"cost": 8, "units": [1, 1, 1, 1], "delay": 4.0})
@@ -2536,6 +2623,10 @@ func execute_rematch():
 	is_ready = false
 	for peer_id in player_ready.keys():
 		player_ready[peer_id] = false
+
+	if is_instance_valid(base_auto_builder_node):
+		base_auto_builder_node.queue_free()
+		base_auto_builder_node = null
 
 	_show_title_screen()
 

@@ -1109,9 +1109,63 @@ func setup_as_preview():
 		light.queue_free()
 
 func _draw() -> void:
-	if building_type == Type.CYBERNETICA_FORGE and not is_preview:
-		if rally_point_world != Vector2.ZERO:
-			_draw_rally_point_beacon()
+	if is_preview:
+		_draw_holographic_placement_preview()
+	elif building_type == Type.CYBERNETICA_FORGE and rally_point_world != Vector2.ZERO:
+		_draw_rally_point_beacon()
+
+func _draw_holographic_placement_preview() -> void:
+	var pulse = 0.75 + sin(Time.get_ticks_msec() * 0.008) * 0.25
+
+	match building_type:
+		Type.TURRET:
+			# 1. Turret 300px Range Ring & Transparent Targeting Field
+			var r_range = 280.0
+			draw_circle(Vector2.ZERO, r_range, Color(0.20, 0.88, 1.0, 0.06 * pulse))
+			draw_arc(Vector2.ZERO, r_range, 0.0, TAU, 48, Color(0.20, 0.88, 1.0, 0.55 * pulse), 1.8)
+			draw_arc(Vector2.ZERO, 36.0, 0.0, TAU, 24, Color(0.82, 0.62, 0.24, 0.8), 1.4)
+
+		Type.BARRICADE:
+			# 2. Barricade Link Guides (Cyan connection lines to nearby walls)
+			var nearby_walls = 0
+			for b in get_tree().get_nodes_in_group("buildings"):
+				if is_instance_valid(b) and b != self and not b.get("is_preview") and int(b.get("building_type")) == 0:
+					var d = global_position.distance_to(b.global_position)
+					if d <= WALL_LINK_RANGE and d > 8.0:
+						var local_target = to_local(b.global_position)
+						draw_line(Vector2.ZERO, local_target, Color(0.20, 0.88, 1.0, 0.85 * pulse), 2.2)
+						draw_circle(local_target, 4.0, Color(0.35, 0.95, 0.45, 0.9))
+						nearby_walls += 1
+
+			# Snap preview ring
+			var snap_col = Color(0.35, 0.95, 0.45, 0.8) if nearby_walls > 0 else Color(0.20, 0.88, 1.0, 0.6)
+			draw_arc(Vector2.ZERO, WALL_LINK_RANGE, 0.0, TAU, 36, Color(snap_col.r, snap_col.g, snap_col.b, 0.25 * pulse), 1.2)
+
+		Type.DISTRIBUTOR, Type.NOOSPHERE_ANTENNA:
+			# 3. Noosphere 240px Grid Coverage Ring
+			var grid_r = NOOSPHERE_BROADCAST_RADIUS
+			draw_circle(Vector2.ZERO, grid_r, Color(0.20, 0.88, 1.0, 0.05 * pulse))
+			draw_arc(Vector2.ZERO, grid_r, 0.0, TAU, 40, Color(0.20, 0.88, 1.0, 0.6 * pulse), 1.8)
+
+		Type.MANUFACTORUM:
+			# 4. Scrap Smelter Deposit Snapping Validity
+			var has_deposit = false
+			for dep in get_tree().get_nodes_in_group("scrap_deposits"):
+				if is_instance_valid(dep) and global_position.distance_to(dep.global_position) <= 38.0:
+					has_deposit = true
+					var local_dep = to_local(dep.global_position)
+					draw_circle(local_dep, 28.0, Color(0.35, 0.95, 0.45, 0.25 * pulse))
+					draw_arc(local_dep, 28.0, 0.0, TAU, 24, Color(0.35, 0.95, 0.45, 0.85), 2.0)
+					break
+
+			if not has_deposit:
+				draw_arc(Vector2.ZERO, 32.0, 0.0, TAU, 24, Color(0.92, 0.22, 0.18, 0.85 * pulse), 2.2)
+				var font = ThemeDB.fallback_font
+				draw_string(font, Vector2(-48, -36), "⚠️ REQUIRES DEPOSIT", HORIZONTAL_ALIGNMENT_CENTER, 96, 8, Color(0.92, 0.22, 0.18, pulse))
+
+		Type.GENERATOR, Type.RESEARCH_SHRINE, Type.CYBERNETICA_FORGE:
+			# 5. Facility Foundation Footprint Ring
+			draw_arc(Vector2.ZERO, 38.0, 0.0, TAU, 32, Color(0.82, 0.62, 0.24, 0.65 * pulse), 1.5)
 
 func _draw_cybernetica_forge():
 	# (You can remove this from Building.gd since VisualBuildingSprite now draws it)

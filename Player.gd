@@ -8,7 +8,7 @@ enum Doctrina { CONQUEROR, PROTECTOR }
 @export var tech_priest_data: PlayerClassData
 @export var skitarii_marshal_data: PlayerClassData
 
-var speed: float = 300.0
+var speed: float = 240.0
 var max_health: int = 100
 var current_health: int = 100
 
@@ -54,10 +54,10 @@ const WALL_LINK_RANGE: float = 95.0
 
 # --- SISTER OF BATTLE PROGRESSION & MIRACLE POINTS ---
 var current_level: int = 1
-const MAX_SISTER_LEVEL: int = 6
+const MAX_SISTER_LEVEL: int = 14
 var current_exp: int = 0
-var exp_to_next_level: int = 80
-var miracle_points: int = 1
+var exp_to_next_level: int = 60
+var miracle_points: int = 0
 var faith_shield_max: float = 80.0
 var faith_shield_current: float = 80.0
 var faith_shield_regen_rate: float = 12.0
@@ -186,14 +186,12 @@ func _ready():
 		if hud and hud.has_method("setup_hud_for_player"):
 			hud.setup_hud_for_player(self)
 			
-		# --- ADD THIS LINE HERE ---
 		AudioManager.switch_soundtrack_for_class(int(current_class))
 	else:
 		if camera:
 			camera.enabled = false
 
 	if multiplayer.is_server() and current_class == PlayerClass.SISTER_OF_BATTLE:
-		# Wait one frame for all clients to be ready
 		await get_tree().process_frame
 		rpc("sync_full_sister_state", 
 			current_level, 
@@ -221,18 +219,18 @@ func set_player_class(new_class: int):
 
 func apply_class_stats():
 	if current_class == PlayerClass.MELEE:
-		speed = 250.0
+		speed = 240.0
 		max_health = 150
 		bullet_damage = 25
 		if visual_sprite: visual_sprite.unit_type = UnitSprite.UnitType.ADMECH_TECHPRIEST
 	elif current_class == PlayerClass.RANGED:
-		speed = 340.0
+		speed = 290.0
 		max_health = 90
 		bullet_damage = 20
 		if visual_sprite: visual_sprite.unit_type = UnitSprite.UnitType.SKITARII_MARSHAL
 	elif current_class == PlayerClass.SISTER_OF_BATTLE:
 		if visual_sprite: visual_sprite.unit_type = UnitSprite.UnitType.SISTER_OF_BATTLE
-		apply_sister_level_stats() # FIXED: Removed duplicate elif so Level 1 stats apply cleanly
+		apply_sister_level_stats()
 
 	if visual_sprite and visual_sprite.has_method("queue_redraw"):
 		visual_sprite.queue_redraw()
@@ -244,13 +242,12 @@ func apply_class_stats():
 func apply_sister_level_stats():
 	var lvl_idx = current_level - 1
 	max_health = 95 + (lvl_idx * 12)
-	speed = 265.0 + (lvl_idx * 10.0)
-	bullet_damage = 14 + (lvl_idx * 3)
+	speed = 270.0 + (lvl_idx * 2.0)
+	bullet_damage = 14 + (lvl_idx * 2)
 	
-	# Faith Shield scales with both character level and [3] Miracle Shield rank
-	faith_shield_max = 40.0 + (lvl_idx * 10.0) + (rank_shield * 25.0)
+	faith_shield_max = 40.0 + (lvl_idx * 8.0) + (rank_shield * 25.0)
 	faith_shield_regen_rate = 10.0 + (rank_shield * 6.0)
-	faith_dodge_chance = 0.15 + (rank_shield * 0.05) # +5% dodge per rank
+	faith_dodge_chance = 0.15 + (rank_shield * 0.05)
 	
 	current_health = max_health
 	faith_shield_current = faith_shield_max
@@ -269,11 +266,17 @@ func gain_exp(amount: int):
 
 	current_exp += amount
 	var leveled_up = false
+	
 	while current_level < MAX_SISTER_LEVEL and current_exp >= exp_to_next_level:
 		current_exp -= exp_to_next_level
 		current_level += 1
 		miracle_points += 1
-		exp_to_next_level = EXP_REQUIREMENTS[current_level] if current_level < MAX_SISTER_LEVEL else 999999
+		
+		if current_level < MAX_SISTER_LEVEL:
+			exp_to_next_level = int(50.0 + pow(current_level, 1.65) * 18.0)
+		else:
+			exp_to_next_level = 999999
+			
 		leveled_up = true
 
 	if multiplayer.has_multiplayer_peer():
@@ -284,20 +287,33 @@ func gain_exp(amount: int):
 	if leveled_up:
 		AudioManager.play_sfx("binary_canticle", global_position, 3.0, 1.2)
 		add_camera_trauma(0.35)
+		
 		var label = Label.new()
 		label.script = load("res://DamageNumber.gd")
-		label.global_position = global_position + Vector2(-50, -45)
+		label.global_position = global_position + Vector2(-60, -45)
 		get_parent().add_child(label)
+		label.label_settings = LabelSettings.new()
+
 		if current_level == MAX_SISTER_LEVEL:
-			label.text = "⚡ LEVEL 6 MAX: SAINT CELESTINE UNLOCKED! ⚡"
-			label.label_settings = LabelSettings.new()
+			label.text = "👑 LEVEL 14 MAX: DIVINE PERFECTION! 👑"
 			label.label_settings.font_color = Color(1.0, 0.88, 0.25)
 			label.label_settings.font_size = 15
+		elif current_level == 10:
+			label.text = "⚡ LEVEL 10: LIVING SAINT MARTYRDOM UNLOCKED! ⚡"
+			label.label_settings.font_color = Color(1.0, 0.75, 0.20)
+			label.label_settings.font_size = 14
+		elif current_level == 6:
+			label.text = "🔥 LEVEL 6: RIGHTEOUS PYRE ULTIMATE UNLOCKED! 🔥"
+			label.label_settings.font_color = Color(0.20, 0.88, 1.00)
+			label.label_settings.font_size = 14
 		else:
 			label.text = "✨ LEVEL %d! (+1 MIRACLE POINT) ✨" % current_level
-			label.label_settings = LabelSettings.new()
 			label.label_settings.font_color = Color(0.35, 0.95, 0.45)
-			label.label_settings.font_size = 14
+			label.label_settings.font_size = 13
+
+		var hud = get_tree().get_first_node_in_group("ability_hud")
+		if hud and hud.has_method("refresh_hud_display"):
+			hud.refresh_hud_display()
 
 @rpc("any_peer", "call_local", "reliable")
 func sync_sister_progression(lvl: int, exp_val: int, next_exp: int, pts: int) -> void:
@@ -305,93 +321,91 @@ func sync_sister_progression(lvl: int, exp_val: int, next_exp: int, pts: int) ->
 	current_exp = exp_val
 	exp_to_next_level = next_exp
 	miracle_points = pts
-	apply_sister_level_stats()   # also fixes stats not recalculating on remote peers
+	apply_sister_level_stats()
 
 @rpc("any_peer", "call_local", "reliable")
 func request_upgrade_sister_ability(ability_id: int) -> void:
 	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
 		return
-	if miracle_points <= 0:
+	if current_class != PlayerClass.SISTER_OF_BATTLE or miracle_points <= 0:
 		return
 
-	var success = false
+	var upgraded: bool = false
+	var skill_name: String = ""
+	var new_rank: int = 0
+
 	match ability_id:
-		0:
+		0: # Holy Intervention Dome
 			if rank_intervention < 3:
 				rank_intervention += 1
-				success = true
-		1:
+				new_rank = rank_intervention
+				skill_name = "HOLY INTERVENTION"
+				upgraded = true
+		1: # Holy Hand Grenade
 			if rank_grenade < 3:
 				rank_grenade += 1
-				success = true
-		2:
+				new_rank = rank_grenade
+				skill_name = "HOLY HAND GRENADE"
+				upgraded = true
+		2: # Act of Faith Shield
 			if rank_shield < 3:
 				rank_shield += 1
-				success = true
-		3:
-			if current_level >= 3 and rank_ultimate < 2:
+				faith_shield_max += 25
+				faith_shield_current = faith_shield_max
+				new_rank = rank_shield
+				skill_name = "ACT OF FAITH"
+				upgraded = true
+		3: # Righteous Pyre Ultimate (Req: Lv 6 for Rank 1, Lv 12 for Rank 2)
+			var req_lvl = 6 if rank_ultimate == 0 else 12
+			if current_level >= req_lvl and rank_ultimate < 2:
 				rank_ultimate += 1
-				success = true
-		4:
+				new_rank = rank_ultimate
+				skill_name = "RIGHTEOUS PYRE"
+				upgraded = true
+		4: # Seraphim Dash
 			if rank_dash < 3:
 				rank_dash += 1
-				success = true
-
-	if success:
-		miracle_points -= 1
-		if multiplayer.has_multiplayer_peer():
-			rpc("sync_sister_ranks", rank_intervention, rank_grenade, rank_shield, rank_ultimate, rank_dash, miracle_points)
-		else:
-			sync_sister_ranks(rank_intervention, rank_grenade, rank_shield, rank_ultimate, rank_dash, miracle_points)
-
-@rpc("any_peer", "call_local", "reliable")
-func request_quick_upgrade_sister_ability(ability_id: int) -> void:
-	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
-		return
-
-	var max_rank_for_ability = 2 if ability_id == 3 else 3
-	var upgraded = false
-
-	while miracle_points > 0:
-		var rank_now = _get_sister_ability_rank(ability_id)
-		if rank_now >= max_rank_for_ability:
-			break
-		if ability_id == 3 and current_level < 3:
-			break
-
-		match ability_id:
-			0: rank_intervention += 1
-			1: rank_grenade += 1
-			2: rank_shield += 1
-			3: rank_ultimate += 1
-			4: rank_dash += 1
-		miracle_points -= 1
-		upgraded = true
+				new_rank = rank_dash
+				skill_name = "SERAPHIM DASH"
+				upgraded = true
 
 	if upgraded:
+		miracle_points -= 1
+		
 		if multiplayer.has_multiplayer_peer():
-			rpc("sync_sister_ranks", rank_intervention, rank_grenade, rank_shield, rank_ultimate, rank_dash, miracle_points)
+			rpc("sync_sister_abilities", rank_intervention, rank_grenade, rank_shield, rank_ultimate, rank_dash, miracle_points, faith_shield_max, faith_shield_current)
+			rpc("show_skill_upgraded_popup", skill_name, new_rank)
 		else:
-			sync_sister_ranks(rank_intervention, rank_grenade, rank_shield, rank_ultimate, rank_dash, miracle_points)
+			sync_sister_abilities(rank_intervention, rank_grenade, rank_shield, rank_ultimate, rank_dash, miracle_points, faith_shield_max, faith_shield_current)
+			show_skill_upgraded_popup(skill_name, new_rank)
 
-func _get_sister_ability_rank(ability_id: int) -> int:
-	match ability_id:
-		0: return rank_intervention
-		1: return rank_grenade
-		2: return rank_shield
-		3: return rank_ultimate
-		4: return rank_dash
-	return 0
-
-@rpc("any_peer", "call_local", "reliable")
-func sync_sister_ranks(r_int: int, r_gren: int, r_shld: int, r_ult: int, r_dash: int, pts: int) -> void:
+@rpc("call_local", "reliable")
+func sync_sister_abilities(r_int: int, r_gren: int, r_shld: int, r_ult: int, r_dsh: int, pts: int, max_s: int, cur_s: int) -> void:
 	rank_intervention = r_int
 	rank_grenade = r_gren
 	rank_shield = r_shld
 	rank_ultimate = r_ult
-	rank_dash = r_dash
+	rank_dash = r_dsh
 	miracle_points = pts
-	apply_sister_level_stats()   # rank_shield changes faith_shield_max/regen/dodge — recompute now
+	faith_shield_max = max_s
+	faith_shield_current = cur_s
+
+	var hud = get_tree().get_first_node_in_group("ability_hud")
+	if hud and hud.has_method("refresh_hud_display"):
+		hud.refresh_hud_display()
+
+@rpc("call_local", "unreliable")
+func show_skill_upgraded_popup(s_name: String, rank: int) -> void:
+	AudioManager.play_sfx("volkite_beam", global_position, 1.0, 1.5)
+	
+	var label = Label.new()
+	label.script = load("res://DamageNumber.gd")
+	label.global_position = global_position + Vector2(-60, -40)
+	get_parent().add_child(label)
+	label.text = "⚡ %s (RANK %d) ⚡" % [s_name, rank]
+	label.label_settings = LabelSettings.new()
+	label.label_settings.font_color = Color(0.20, 0.88, 1.00)
+	label.label_settings.font_size = 13
 
 # ------------------------------------------------------------------------------
 # DAMAGE & HEALTH HANDLING
@@ -425,8 +439,8 @@ func take_damage(amount: int, _knockback: Vector2 = Vector2.ZERO):
 	if dmg_left > 0.0:
 		var new_health = max(0, current_health - int(dmg_left))
 
-# 3. Saint Celestine Martyrdom Rebirth (Unlocked at Level 6)
-		if new_health <= 0 and current_class == PlayerClass.SISTER_OF_BATTLE and current_level >= MAX_SISTER_LEVEL and not has_used_celestine_revive:
+		# 3. Saint Celestine Martyrdom Rebirth (Unlocked at Level 10)
+		if new_health <= 0 and current_class == PlayerClass.SISTER_OF_BATTLE and current_level >= 10 and not has_used_celestine_revive:
 			_trigger_celestine_ascension()
 			return
 
@@ -543,7 +557,7 @@ func sync_respawn(respawn_pos: Vector2):
 			_add_unit_to_selection(self)
 
 # ------------------------------------------------------------------------------
-# SISTER OF BATTLE VISUAL EFFECTS (MELTA, PYRE, DASH BURST, SCORCH TRAIL)
+# SISTER OF BATTLE VISUAL EFFECTS
 # ------------------------------------------------------------------------------
 
 class MeltaBeamFX extends Node2D:
@@ -601,20 +615,17 @@ class RighteousPyreFX extends Node2D:
 		var alpha = 1.0 - t
 		var pulse = 0.7 + sin(elapsed * 18.0) * 0.3
 
-		# 1. Divine Vertical Heaven-to-Ground Cathedral Pillar
 		var pillar_w = lerpf(110.0, 0.0, pow(t, 0.5))
 		var sky_start = target_pos + Vector2(0, -900)
 		draw_line(sky_start, target_pos, Color(1.0, 0.88, 0.3, alpha * 0.55 * pulse), pillar_w)
 		draw_line(sky_start, target_pos, Color(1.0, 0.95, 0.8, alpha * 0.85), pillar_w * 0.45)
 		draw_line(sky_start, target_pos, Color.WHITE, pillar_w * 0.15)
 
-		# 2. Consecrated Ground Blast Zone & Expanding Holy Shockwaves
 		var curr_r = max_radius * (1.0 - pow(1.0 - t, 3.0))
 		draw_circle(target_pos, curr_r, Color(1.0, 0.85, 0.25, 0.18 * alpha))
 		draw_arc(target_pos, curr_r, 0, TAU, 32, Color(1.0, 0.90, 0.3, alpha * pulse), 2.5)
 		draw_arc(target_pos, curr_r * 0.65, 0, TAU, 24, Color(1.0, 0.6, 0.15, alpha * 0.8), 1.8)
 
-		# 3. Rotating Golden Sunburst Crosshair Glyph
 		var rot = elapsed * 3.0
 		for i in range(8):
 			var a = (float(i) * TAU / 8.0) + rot
@@ -696,7 +707,6 @@ func _process_wasd_movement(delta: float) -> void:
 		dash_timer -= delta
 		velocity = dash_dir * (speed * 2.8)
 		
-		# Spawn burning scorch patches along the jetpack dash trail
 		dash_scorch_spawn_timer += delta
 		if dash_scorch_spawn_timer >= 0.04:
 			dash_scorch_spawn_timer = 0.0
@@ -815,7 +825,8 @@ func _calculate_corner_nudge(move_dir: Vector2) -> Vector2:
 # ------------------------------------------------------------------------------
 
 func toggle_build_mode(building_type_idx: int = 0):
-	if is_building_mode and selected_building_type == building_type_idx:
+	# If -1 is passed or the same building is selected again, cancel build mode
+	if building_type_idx == -1 or (is_building_mode and selected_building_type == building_type_idx):
 		_cancel_build_mode()
 		return
 		
@@ -1053,13 +1064,13 @@ func _apply_facing(target_pos: Vector2):
 
 @rpc("any_peer", "call_local", "reliable")
 func perform_holy_intervention(target_pos: Vector2):
-	var cd = 14.0 - (rank_intervention * 2.0) # 12s -> 10s -> 8s
+	var cd = 14.0 - (rank_intervention * 2.0)
 	holy_intervention_cooldown = cd
 	AudioManager.play_sfx("binary_canticle", target_pos, 2.0, 1.0)
 	
 	var relic = HolyRelicSanctuary.new()
 	relic.global_position = target_pos
-	relic.max_absorption = 150 + (rank_intervention * 100) # 250 -> 350 -> 450 DMG
+	relic.max_absorption = 150 + (rank_intervention * 100)
 	get_parent().add_child(relic)
 	
 func _validate_structure_placement(target_pos: Vector2, b_type: int) -> Dictionary:
@@ -1409,6 +1420,10 @@ func _handle_sister_input(event: InputEvent):
 		return
 
 	if event is InputEventKey and event.pressed:
+		# If Ctrl is held, do NOT cast abilities (let AbilityHUD handle the Quick-Unlock)
+		if event.ctrl_pressed or Input.is_key_pressed(KEY_CTRL):
+			return
+
 		# [SPACE] Seraphim Dash Mobility
 		if event.keycode == KEY_SPACE:
 			if rank_dash > 0 and dash_cooldown_timer <= 0.0:
@@ -1491,7 +1506,6 @@ func perform_melta_blast(target_pos: Vector2):
 	var dir = (target_pos - global_position).normalized()
 	var blast_end = global_position + (dir * 280.0)
 
-	# Spawn Melta Beam VFX
 	var m_fx = MeltaBeamFX.new()
 	m_fx.start_pos = global_position + Vector2(0, -2)
 	m_fx.end_pos = blast_end
@@ -1515,7 +1529,6 @@ func perform_melta_blast(target_pos: Vector2):
 
 @rpc("any_peer", "call_local", "reliable")
 func perform_seraphim_dash(d_dir: Vector2):
-	# Cooldown scales with rank: 3.8s -> 3.1s -> 2.4s
 	dash_cooldown_timer = 4.5 - (rank_dash * 0.7)
 	is_dashing = true
 	dash_timer = dash_duration
@@ -1530,16 +1543,14 @@ func perform_seraphim_dash(d_dir: Vector2):
 
 @rpc("any_peer", "call_local", "reliable")
 func perform_holy_grenade(target_pos: Vector2):
-	# Cooldown scales with rank: 10s -> 8.5s -> 7s
 	holy_grenade_cooldown = 11.5 - (rank_grenade * 1.5)
 	AudioManager.play_sfx("binary_canticle", target_pos, 2.0, 1.4)
 	
 	var hg = HolyGrenadeFX.new()
 	hg.start_pos = global_position
 	hg.target_pos = target_pos
-	# Blast radius and damage scale with rank
-	hg.blast_radius = 120.0 + (rank_grenade * 20.0) # 140px -> 160px -> 180px
-	hg.blast_damage = 120 + (rank_grenade * 50)      # 170 -> 220 -> 270 DMG
+	hg.blast_radius = 120.0 + (rank_grenade * 20.0)
+	hg.blast_damage = 120 + (rank_grenade * 50)
 	get_parent().add_child(hg)
 
 @rpc("any_peer", "call_local", "reliable")
@@ -1558,7 +1569,6 @@ func perform_miracle_act():
 
 @rpc("any_peer", "call_local", "reliable")
 func perform_sister_ultimate(target_pos: Vector2):
-	# Cooldown scales with rank: 34s -> 28s
 	sister_ultimate_cooldown = 40.0 - (rank_ultimate * 6.0)
 	is_ultimate_active = true
 	ultimate_duration_left = 6.0
@@ -1569,7 +1579,7 @@ func perform_sister_ultimate(target_pos: Vector2):
 	pyre_fx.target_pos = target_pos
 	get_parent().add_child(pyre_fx)
 
-	var ult_dmg = 220 + (rank_ultimate * 90) # Rank 1: 310 DMG, Rank 2: 400 DMG
+	var ult_dmg = 220 + (rank_ultimate * 90)
 
 	var space = get_world_2d().direct_space_state
 	var shape = CircleShape2D.new()
@@ -1732,14 +1742,19 @@ func _designate_priority_target(enemy: Node2D):
 	add_camera_trauma(0.20)
 
 func _handle_techpriest_arpg_input(event: InputEvent):
+	# 1. Right-Click: Cancel Build Mode OR Fire Plasma Secondary
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 		if is_building_mode:
 			_cancel_build_mode()
+			var hud = get_tree().get_first_node_in_group("ability_hud")
+			if hud and hud.has_method("refresh_hud_display"):
+				hud.refresh_hud_display()
 		elif can_plasma_attack:
 			rpc("perform_plasma_attack", get_global_mouse_position())
 		get_viewport().set_input_as_handled()
 		return
 
+	# 2. Left-Click: Place Structure OR Melee Axe Cleave
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		if is_building_mode:
 			if preview_is_valid and is_instance_valid(preview_instance):
@@ -1758,26 +1773,62 @@ func _handle_techpriest_arpg_input(event: InputEvent):
 		get_viewport().set_input_as_handled()
 		return
 
-	if event is InputEventKey and event.pressed:
-		if event.keycode == KEY_E:
-			request_interact_nearby_structure()
+	# 3. Keyboard Shortcuts: Tabs [1, 2], Buildings [Q, E, R, F], Interact [E], Drone [C]
+	if event is InputEventKey and event.pressed and not event.echo:
+		var code = event.keycode if event.keycode != 0 else event.physical_keycode
+		var hud = get_tree().get_first_node_in_group("ability_hud")
+
+		# [1] & [2]: Switch Category Tabs
+		if code in [KEY_1, KEY_KP_1] or event.unicode == 49:
+			if hud and hud.has_method("set_tp_tab"):
+				hud.set_tp_tab(0) # Switch to [1] DEFENSES
 			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_C:
+			return
+		elif code in [KEY_2, KEY_KP_2] or event.unicode == 50:
+			if hud and hud.has_method("set_tp_tab"):
+				hud.set_tp_tab(1) # Switch to [2] INDUSTRY
+			get_viewport().set_input_as_handled()
+			return
+
+		# [C]: Deploy Servo-Skull Drone
+		if code == KEY_C:
 			if multiplayer.has_multiplayer_peer():
 				rpc_id(1, "request_spawn_servo_skull")
 			else:
 				request_spawn_servo_skull()
 			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_B or event.keycode == KEY_TAB:
-			toggle_build_mode(selected_building_type)
+			return
+
+		# [E]: Interact with nearby structures if not in building mode
+		if code == KEY_E and not is_building_mode:
+			var nearby = _get_closest_interactable_structure()
+			if is_instance_valid(nearby):
+				request_interact_nearby_structure()
+				get_viewport().set_input_as_handled()
+				return
+
+		# [Q, E, R, F]: Pick Building in Active Tab (Zero WASD conflict)
+		var active_tab = hud.get_tp_tab() if (hud and hud.has_method("get_tp_tab")) else 0
+		var structure_to_build: int = -1
+
+		if active_tab == 0: # --- DEFENSES TAB ---
+			match code:
+				KEY_Q: structure_to_build = 0 # Aegis Blast Rampart (Wall)
+				KEY_E: structure_to_build = 2 # Cognis Defense Battery (Turret)
+				KEY_R: structure_to_build = 4 # Electro-Relay Substation
+		elif active_tab == 1: # --- INDUSTRY TAB ---
+			match code:
+				KEY_Q: structure_to_build = 1 # Imperial Plasma Dynamo
+				KEY_E: structure_to_build = 3 # Scrap Smelter
+				KEY_R: structure_to_build = 6 # Omnissian Reliquary (Tech Shrine)
+				KEY_F: structure_to_build = 7 # Cybernetica Manufactorum
+
+		if structure_to_build != -1:
+			toggle_build_mode(structure_to_build)
+			if hud and hud.has_method("refresh_hud_display"):
+				hud.refresh_hud_display()
 			get_viewport().set_input_as_handled()
-		elif event.keycode in [KEY_1, KEY_KP_1]: toggle_build_mode(0); get_viewport().set_input_as_handled()
-		elif event.keycode in [KEY_2, KEY_KP_2]: toggle_build_mode(4); get_viewport().set_input_as_handled()
-		elif event.keycode in [KEY_3, KEY_KP_3]: toggle_build_mode(1); get_viewport().set_input_as_handled()
-		elif event.keycode in [KEY_4, KEY_KP_4]: toggle_build_mode(2); get_viewport().set_input_as_handled()
-		elif event.keycode in [KEY_5, KEY_KP_5]: toggle_build_mode(3); get_viewport().set_input_as_handled()
-		elif event.keycode in [KEY_6, KEY_KP_6]: toggle_build_mode(6); get_viewport().set_input_as_handled()
-		elif event.keycode in [KEY_7, KEY_KP_7]: toggle_build_mode(7); get_viewport().set_input_as_handled()
+			return
 
 # ------------------------------------------------------------------------------
 # WORLD-SPACE BOX SELECTION
@@ -2530,7 +2581,6 @@ class HolyRelicSanctuary extends Node2D:
 	func _process(delta: float) -> void:
 		elapsed += delta
 		
-		# Bullet Absorption (Checks both direct proximity & physics areas)
 		for bullet in get_tree().get_nodes_in_group("enemy_bullets"):
 			if is_instance_valid(bullet) and global_position.distance_to(bullet.global_position) <= radius:
 				var dmg = bullet.get("damage") if "damage" in bullet else 10
@@ -2565,11 +2615,9 @@ class HolyRelicSanctuary extends Node2D:
 		var pulse = 0.7 + sin(elapsed * 8.0) * 0.3
 		var alpha = clampf(1.0 - (float(current_absorbed) / float(max_absorption)), 0.2, 1.0)
 		
-		# Golden Shield Dome
 		draw_circle(Vector2.ZERO, radius, Color(1.0, 0.85, 0.2, 0.12 * alpha))
 		draw_arc(Vector2.ZERO, radius, 0, TAU, 32, Color(1.0, 0.88, 0.3, 0.75 * pulse * alpha), 1.8)
 		
-		# Holy Censer Relic at Center
 		draw_circle(Vector2.ZERO, 6.0, Color(0.82, 0.62, 0.24))
 		draw_line(Vector2(-4, 0), Vector2(4, 0), Color.WHITE, 1.5)
 		draw_line(Vector2(0, -6), Vector2(0, 4), Color.WHITE, 1.5)

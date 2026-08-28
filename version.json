@@ -1,8 +1,7 @@
 {
   "current_version": "1.0.0",
-  "patch_url": "https://github.com/Vodouinc/Hubbydump/releases/download/v1.0.0/patch_v1.0.0.pck",
+  "patch_url": "",
   "unreleased_patches": {
-    "VOX-DEV-TEST": "https://github.com/Vodouinc/Hubbydump/releases/download/v1.1.0-beta/patch_v1.1.0_beta.pck",
-    "SISTER-REWORK-PASS": "https://github.com/Vodouinc/Hubbydump/releases/download/v1.0.5-test/patch_sister_test.pck"
+    "VOX-TEST": "https://github.com/Vodouinc/Hubbydump/releases/download/v1.1.0-test/patch_test.pck"
   }
 }

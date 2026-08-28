@@ -34,6 +34,13 @@ static func make() -> Theme:
 	panel.content_margin_bottom = 10
 	theme.set_stylebox("panel", "PanelContainer", panel)
 
+	var sb_focus = StyleBoxFlat.new()
+	sb_focus.bg_color = Color(0.08, 0.16, 0.24, 0.95)
+	sb_focus.border_color = Color(0.20, 0.88, 1.00) # Glowing Cyan Focus Border
+	sb_focus.set_border_width_all(2)
+	sb_focus.set_corner_radius_all(3)
+	theme.set_stylebox("focus", "Button", sb_focus)
+
 	# Ability HUD Slot Panel Styling with generous padding
 	var slot := _box(Color(0.07, 0.08, 0.11, 0.90), BRASS_DIM, 1, 3)
 	slot.content_margin_left = 10

@@ -46,17 +46,26 @@ const CLASS_DATA = {
 
 @export var max_waves: int = 15
 
-var player_scene = preload("res://Player.tscn")
-var enemy_scene = preload("res://Enemy.tscn")
-var bullet_scene = preload("res://Bullet.tscn")
-var scrap_scene = preload("res://Scrap.tscn")
-var building_scene = preload("res://Building.tscn")
-var waaagh_idol_scene = preload("res://WaaaghIdol.tscn")
+var player_scene = load("res://Player.tscn")
+var enemy_scene = load("res://Enemy.tscn")
+var bullet_scene = load("res://Bullet.tscn")
+var scrap_scene = load("res://Scrap.tscn")
+var building_scene = load("res://Building.tscn")
+var waaagh_idol_scene = load("res://WaaaghIdol.tscn")
+
+func _init() -> void:
+	# Mount downloaded patch BEFORE anything else compiles into memory!
+	if FileAccess.file_exists("user://game_patch.pck"):
+		var success = ProjectSettings.load_resource_pack("user://game_patch.pck", true)
+		if success:
+			print("[Main] Mounted active patch on boot from user://game_patch.pck")
 
 var peer: ENetMultiplayerPeer = null
 var enemy_count: int = 0
 var bullet_count: int = 0
 var building_count: int = 0
+
+var patcher_node: Patcher = null
 
 var has_squig_pit: bool = true
 var has_stormboy_pad: bool = true
@@ -198,6 +207,9 @@ func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	add_to_group("main")
 	
+	# Register Gamepad buttons to Godot's UI Navigation Map
+	_setup_gamepad_ui_navigation()
+
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	multiplayer.connected_to_server.connect(_on_connected_to_server)
@@ -213,6 +225,31 @@ func _ready():
 	_build_procedural_lobby_ui()
 	
 	_show_title_screen()
+
+	if is_instance_valid(patcher_node):
+		patcher_node.check_for_updates()
+
+func _setup_gamepad_ui_navigation() -> void:
+	# 1. Map Gamepad A / ✕ (Cross) to UI Accept (Click button)
+	_add_joy_button_to_ui_action("ui_accept", JOY_BUTTON_A)
+	# 2. Map Gamepad B / ○ (Circle) to UI Cancel (Back / Close)
+	_add_joy_button_to_ui_action("ui_cancel", JOY_BUTTON_B)
+	# 3. Map D-Pad to UI Up/Down/Left/Right
+	_add_joy_button_to_ui_action("ui_up", JOY_BUTTON_DPAD_UP)
+	_add_joy_button_to_ui_action("ui_down", JOY_BUTTON_DPAD_DOWN)
+	_add_joy_button_to_ui_action("ui_left", JOY_BUTTON_DPAD_LEFT)
+	_add_joy_button_to_ui_action("ui_right", JOY_BUTTON_DPAD_RIGHT)
+
+func _add_joy_button_to_ui_action(action_name: String, button_idx: int) -> void:
+	if not InputMap.has_action(action_name):
+		InputMap.add_action(action_name)
+	var ev = InputEventJoypadButton.new()
+	ev.button_index = button_idx
+	# Check if already added to avoid duplicates
+	for existing in InputMap.action_get_events(action_name):
+		if existing is InputEventJoypadButton and existing.button_index == button_idx:
+			return
+	InputMap.action_add_event(action_name, ev)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
@@ -255,6 +292,7 @@ func _create_menu_action_btn(txt: String, callable: Callable) -> Button:
 	var btn = Button.new()
 	btn.text = txt
 	btn.custom_minimum_size = Vector2(360, 38)
+	btn.focus_mode = Control.FOCUS_ALL # Allows Arrow keys & Gamepad D-pad to select
 	btn.pressed.connect(callable)
 	return btn
 
@@ -294,28 +332,38 @@ func _create_lobby_sub_card(card_title: String, parent_hbox: Container) -> VBoxC
 func _show_title_screen():
 	match_started = false
 	DisplayServer.mouse_set_mode(DisplayServer.MOUSE_MODE_VISIBLE)
-	if title_root_control: title_root_control.show()
 	if singleplayer_root_control: singleplayer_root_control.hide()
 	if lobby_root_control: lobby_root_control.hide()
 
-	# Hide all in-game HUDs and clean up beacons
-	get_tree().call_group("tutorial_hud", "reset_tutorial")
-	var a_hud = get_tree().get_first_node_in_group("ability_hud")
-	if a_hud: a_hud.hide()
-	var w_hud = get_tree().get_first_node_in_group("wave_hud")
-	if w_hud: w_hud.hide()
-	var m_ui = get_tree().get_first_node_in_group("minimap_ui")
-	if m_ui: m_ui.hide()
+	if title_root_control:
+		title_root_control.show()
+		await get_tree().process_frame
+		# Focus the first button (SOLO CRUSADE) for instant Controller / Arrow navigation
+		var first_btn = title_root_control.find_children("*", "Button", true, false)
+		if not first_btn.is_empty():
+			(first_btn[0] as Control).grab_focus()
 
 func _show_singleplayer_menu():
 	if title_root_control: title_root_control.hide()
-	if singleplayer_root_control: singleplayer_root_control.show()
 	if lobby_root_control: lobby_root_control.hide()
+
+	if singleplayer_root_control:
+		singleplayer_root_control.show()
+		await get_tree().process_frame
+		var first_btn = singleplayer_root_control.find_children("*", "Button", true, false)
+		if not first_btn.is_empty():
+			(first_btn[0] as Control).grab_focus()
 
 func _show_multiplayer_menu():
 	if title_root_control: title_root_control.hide()
 	if singleplayer_root_control: singleplayer_root_control.hide()
-	if lobby_root_control: lobby_root_control.show()
+
+	if lobby_root_control:
+		lobby_root_control.show()
+		await get_tree().process_frame
+		var first_btn = lobby_root_control.find_children("*", "Button", true, false)
+		if not first_btn.is_empty():
+			(first_btn[0] as Control).grab_focus()
 
 func _hide_all_menus():
 	if title_root_control: title_root_control.hide()
@@ -369,6 +417,13 @@ func _setup_core_sub_uis():
 		m_ui.name = "MinimapUI"
 		$UI.add_child(m_ui)
 
+	if not has_node("Patcher"):
+		var p_script = load("res://Patcher.gd")
+		if p_script:
+			patcher_node = p_script.new()
+			patcher_node.name = "Patcher"
+			add_child(patcher_node)
+
 	if not has_node("UI/BaseUpgradeUI"):
 		var b_ui = load("res://BaseUpgradeUI.gd").new()
 		b_ui.name = "BaseUpgradeUI"
@@ -378,12 +433,6 @@ func _setup_core_sub_uis():
 		var t_ui = load("res://TurretUpgradeUI.gd").new()
 		t_ui.name = "TurretUpgradeUI"
 		$UI.add_child(t_ui)
-
-	if not has_node("UI/SettingsUI"):
-		var s_ui = load("res://SettingsUI.gd").new()
-		s_ui.name = "SettingsUI"
-		$UI.add_child(s_ui)
-		settings_ui_node = s_ui
 
 	if not has_node("UI/PauseMenuUI"):
 		var p_ui = load("res://PauseMenuUI.gd").new()
@@ -398,9 +447,8 @@ func _setup_core_sub_uis():
 		research_ui_node = r_ui
 
 # ==============================================================================
-# 2. TITLE UI BUILDER
+# 2. TITLE UI BUILDER (With Update & Patch Code Support)
 # ==============================================================================
-
 
 func _build_title_menu_ui():
 	if not ui_layer: return
@@ -422,11 +470,11 @@ func _build_title_menu_ui():
 	title_root_control.add_child(center)
 
 	var main_panel = PanelContainer.new()
-	main_panel.custom_minimum_size = Vector2(560, 460)
+	main_panel.custom_minimum_size = Vector2(580, 500)
 	center.add_child(main_panel)
 
 	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 14)
+	vbox.add_theme_constant_override("separation", 10)
 	main_panel.add_child(vbox)
 
 	var header = Label.new()
@@ -455,8 +503,9 @@ func _build_title_menu_ui():
 	menu_desc.add_theme_color_override("font_color", Color(0.75, 0.78, 0.82))
 	vbox.add_child(menu_desc)
 
+	# --- MAIN ACTION BUTTONS ---
 	var btn_vbox = VBoxContainer.new()
-	btn_vbox.add_theme_constant_override("separation", 10)
+	btn_vbox.add_theme_constant_override("separation", 8)
 	btn_vbox.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	vbox.add_child(btn_vbox)
 
@@ -470,11 +519,65 @@ func _build_title_menu_ui():
 	btn_vbox.add_child(opt_btn)
 	btn_vbox.add_child(exit_btn)
 
+	var sep2 = ColorRect.new()
+	sep2.custom_minimum_size = Vector2(0, 1)
+	sep2.color = Color(0.25, 0.28, 0.35, 0.4)
+	vbox.add_child(sep2)
+
+	# --- AUTO-PATCHER & SECRET VOX-CODE SECTION ---
+	var patch_hbox = HBoxContainer.new()
+	patch_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	patch_hbox.add_theme_constant_override("separation", 8)
+	vbox.add_child(patch_hbox)
+
+	var patch_code_edit = LineEdit.new()
+	patch_code_edit.placeholder_text = "Secret Beta / Patch Code..."
+	patch_code_edit.custom_minimum_size = Vector2(190, 28)
+	patch_code_edit.add_theme_font_size_override("font_size", 9)
+	patch_hbox.add_child(patch_code_edit)
+
+	var check_patch_btn = Button.new()
+	check_patch_btn.text = "⚡ CHECK UPDATES"
+	check_patch_btn.custom_minimum_size = Vector2(140, 28)
+	check_patch_btn.add_theme_font_size_override("font_size", 9)
+	patch_hbox.add_child(check_patch_btn)
+
+	var patch_status_lbl = Label.new()
+	var active_patch = Patcher.get_active_patch_name()
+	if not active_patch.is_empty():
+		patch_status_lbl.text = "⚡ ACTIVE PATCH: [%s] (Running Live)" % active_patch
+		patch_status_lbl.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
+	else:
+		patch_status_lbl.text = "Build v1.0.0 (Optimal)"
+		patch_status_lbl.add_theme_color_override("font_color", Color(0.55, 0.60, 0.68))
+	patch_status_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	patch_status_lbl.add_theme_font_size_override("font_size", 8)
+	patch_status_lbl.add_theme_color_override("font_color", Color(0.55, 0.60, 0.68))
+	vbox.add_child(patch_status_lbl)
+
+	# Connect Patcher Signals
+	if is_instance_valid(patcher_node):
+		patcher_node.patch_status_changed.connect(func(status_msg: String):
+			patch_status_lbl.text = status_msg
+			if "Update" in status_msg or "Patch" in status_msg:
+				patch_status_lbl.add_theme_color_override("font_color", Color(0.20, 0.88, 1.0))
+			elif "Failed" in status_msg or "Invalid" in status_msg:
+				patch_status_lbl.add_theme_color_override("font_color", Color(0.92, 0.22, 0.18))
+			else:
+				patch_status_lbl.add_theme_color_override("font_color", Color(0.35, 0.95, 0.45))
+		)
+
+	check_patch_btn.pressed.connect(func():
+		if is_instance_valid(patcher_node):
+			var code = patch_code_edit.text.strip_edges()
+			patcher_node.check_for_updates(code)
+	)
+
 	var footer = Label.new()
 	footer.text = "\"From the Motive Force we draw life. To the Omnissiah we return all.\""
 	footer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	footer.add_theme_color_override("font_color", Color(0.55, 0.50, 0.40))
-	footer.add_theme_font_size_override("font_size", 9)
+	footer.add_theme_font_size_override("font_size", 8)
 	vbox.add_child(footer)
 
 # ==============================================================================
@@ -2721,6 +2824,28 @@ func _unhandled_input(event: InputEvent) -> void:
 		if go_ui and go_ui.visible and event.keycode == KEY_ESCAPE:
 			_on_restart_pressed()
 			get_viewport().set_input_as_handled()
+
+	# 1. Controller D-Pad / Stick Menu Focus Recovery
+	if not match_started:
+		if event is InputEventJoypadButton or event is InputEventJoypadMotion:
+			if get_viewport().gui_get_focus_owner() == null:
+				var active_root = title_root_control if title_root_control and title_root_control.visible else (singleplayer_root_control if singleplayer_root_control and singleplayer_root_control.visible else lobby_root_control)
+				if active_root:
+					var buttons = active_root.find_children("*", "Button", true, false)
+					if not buttons.is_empty():
+						(buttons[0] as Control).grab_focus()
+
+		# Gamepad B / Circle (Back to Title)
+		if event is InputEventJoypadButton and event.pressed and event.button_index == JOY_BUTTON_B:
+			if singleplayer_root_control and singleplayer_root_control.visible:
+				_show_title_screen()
+				get_viewport().set_input_as_handled()
+				return
+			elif lobby_root_control and lobby_root_control.visible:
+				_on_disconnect_pressed()
+				_show_title_screen()
+				get_viewport().set_input_as_handled()
+				return
 
 func _on_restart_pressed():
 	if not multiplayer.has_multiplayer_peer():

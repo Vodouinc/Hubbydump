@@ -68,6 +68,13 @@ func open_modal(turret_node: Node2D):
 	target_turret = turret_node
 	show()
 	_refresh_cards()
+	# Auto-focus the first specialization button for controller
+	await get_tree().process_frame
+	for card in cards_container.get_children():
+		var btn = card.find_child("COMMISSION*", true, false)
+		if btn and btn is Button and not btn.disabled:
+			btn.grab_focus()
+			break
 
 func close_modal():
 	hide()

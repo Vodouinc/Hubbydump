@@ -53,6 +53,12 @@ var hovered_interact_building: Node2D = null
 const GRID_SIZE: float = 32.0
 const WALL_LINK_RANGE: float = 95.0
 
+# --- GAMEPAD & TWIN-STICK SUPPORT ---
+var is_using_gamepad: bool = false
+var gamepad_aim_dir: Vector2 = Vector2.RIGHT
+var virtual_aim_pos: Vector2 = Vector2.ZERO
+const STICK_DEADZONE: float = 0.20
+
 # --- SISTER OF BATTLE PROGRESSION & MIRACLE POINTS ---
 var current_level: int = 1
 const MAX_SISTER_LEVEL: int = 14
@@ -204,6 +210,16 @@ func _ready():
 			rank_grenade,
 			rank_shield,
 			rank_ultimate)
+
+func get_current_aim_pos() -> Vector2:
+	if is_using_gamepad and virtual_aim_pos != Vector2.ZERO:
+		return virtual_aim_pos
+	return get_global_mouse_position()
+
+func get_current_aim_dir() -> Vector2:
+	if is_using_gamepad:
+		return gamepad_aim_dir
+	return (get_global_mouse_position() - global_position).normalized()
 
 func set_player_class(new_class: int):
 	current_class = new_class as PlayerClass
@@ -721,11 +737,20 @@ func _process_wasd_movement(delta: float) -> void:
 			is_dashing = false
 		return
 
+	# 1. Keyboard Input
 	var direction = Vector2.ZERO
 	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT): direction.x -= 1
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): direction.x += 1
 	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP): direction.y -= 1
 	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN): direction.y += 1
+
+	# 2. Gamepad Left Stick Analog Movement
+	var stick_x = Input.get_joy_axis(0, JOY_AXIS_LEFT_X)
+	var stick_y = Input.get_joy_axis(0, JOY_AXIS_LEFT_Y)
+	var stick_vec = Vector2(stick_x, stick_y)
+	if stick_vec.length() > STICK_DEADZONE:
+		direction = stick_vec
+		is_using_gamepad = true
 
 	var current_move_speed = speed
 	if is_ultimate_active: current_move_speed *= 1.35
@@ -970,12 +995,63 @@ func _process(delta: float):
 		hovered_interact_building = _get_closest_interactable_structure()
 		_process_camera_shake(delta)
 
+		# --- TWIN-STICK GAMEPAD AIM POLLING (Sticky Aim) ---
+		var r_stick_x = Input.get_joy_axis(0, JOY_AXIS_RIGHT_X)
+		var r_stick_y = Input.get_joy_axis(0, JOY_AXIS_RIGHT_Y)
+		var r_stick_vec = Vector2(r_stick_x, r_stick_y)
+
+		if r_stick_vec.length() > STICK_DEADZONE:
+			is_using_gamepad = true
+			gamepad_aim_dir = r_stick_vec.normalized()
+			virtual_aim_pos = global_position + (gamepad_aim_dir * 180.0)
+		# (Note: Removed velocity snap! Aim now stays locked on the enemy while you retreat)
+
+		# --- ANALOG TRIGGER POLLING (R2/RT & L2/LT) ---
+		var rt_axis = Input.get_joy_axis(0, JOY_AXIS_TRIGGER_RIGHT)
+		var lt_axis = Input.get_joy_axis(0, JOY_AXIS_TRIGGER_LEFT)
+
+		if is_using_gamepad:
+			# R2 / Right Trigger: Primary Fire (Flamer / Melee)
+			if current_class == PlayerClass.SISTER_OF_BATTLE:
+				var should_flame = (rt_axis > 0.30)
+				if should_flame != flamer_active:
+					flamer_active = should_flame
+					rpc("sync_flamer_fx", flamer_active)
+			elif current_class == PlayerClass.MELEE and rt_axis > 0.45 and can_attack and not is_building_mode:
+				rpc("perform_attack", get_current_aim_pos())
+
+			# L2 / Left Trigger: Secondary Fire (Heavy Bolter 3-Round Burst / Plasma)
+			if current_class == PlayerClass.SISTER_OF_BATTLE and lt_axis > 0.45 and bolter_cooldown_timer <= 0.0:
+				if multiplayer.has_multiplayer_peer():
+					rpc("perform_heavy_bolter_burst", get_current_aim_pos())
+				else:
+					perform_heavy_bolter_burst(get_current_aim_pos())
+			elif current_class == PlayerClass.MELEE and lt_axis > 0.45 and can_plasma_attack and not is_building_mode:
+				rpc("perform_plasma_attack", get_current_aim_pos())
+
 		if current_class == PlayerClass.SISTER_OF_BATTLE:
 			_process_sister_systems(delta)
 
 		if is_box_selecting:
 			box_select_current_world = get_global_mouse_position()
 			queue_redraw()
+
+		if current_class == PlayerClass.RANGED and is_instance_valid(camera):
+			_process_rts_camera_panning(delta)
+
+		if is_building_mode:
+			_update_building_preview_position()
+			queue_redraw()
+
+		# Sync facing across network using unified aim position
+		var aim_pt = get_current_aim_pos()
+		facing_sync_timer += delta
+		if facing_sync_timer >= FACING_SYNC_INTERVAL:
+			facing_sync_timer = 0.0
+			if multiplayer.has_multiplayer_peer():
+				rpc("sync_facing", aim_pt)
+			else:
+				_apply_facing(aim_pt)
 
 	if orbital_strike_cooldown > 0.0:
 		orbital_strike_cooldown = maxf(0.0, orbital_strike_cooldown - delta)
@@ -996,23 +1072,6 @@ func _process(delta: float):
 				visual_sprite.set_attack_state(false, 0.0, 0.0)
 
 		queue_redraw()
-
-	if _is_local_authority():
-		if current_class == PlayerClass.RANGED and is_instance_valid(camera):
-			_process_rts_camera_panning(delta)
-
-		if is_building_mode:
-			_update_building_preview_position()
-			queue_redraw()
-
-		var mouse_pos = get_global_mouse_position()
-		facing_sync_timer += delta
-		if facing_sync_timer >= FACING_SYNC_INTERVAL:
-			facing_sync_timer = 0.0
-			if multiplayer.has_multiplayer_peer():
-				rpc("sync_facing", mouse_pos)
-			else:
-				_apply_facing(mouse_pos)
 
 func _process_sister_systems(delta: float):
 	if dash_cooldown_timer > 0.0: dash_cooldown_timer = maxf(0.0, dash_cooldown_timer - delta)
@@ -1038,11 +1097,11 @@ func _process_sister_systems(delta: float):
 		flamer_tick_timer -= delta
 		if flamer_tick_timer <= 0.0:
 			flamer_tick_timer = FLAMER_TICK_RATE
-			var mouse_world = get_global_mouse_position()
+			var aim_pos = get_current_aim_pos() # <-- Now uses Right Stick / Unified Aim!
 			if multiplayer.has_multiplayer_peer():
-				rpc("perform_flamer_tick", mouse_world)
+				rpc("perform_flamer_tick", aim_pos)
 			else:
-				_execute_flamer_cone_tick(mouse_world)
+				_execute_flamer_cone_tick(aim_pos)
 
 func _update_building_preview_position():
 	if not is_instance_valid(preview_instance):
@@ -1183,8 +1242,7 @@ func _draw():
 			_draw_flamer_cone_visual()
 
 func _draw_flamer_cone_visual() -> void:
-	var mouse_world = get_global_mouse_position()
-	var aim_angle = (mouse_world - global_position).angle()
+	var aim_angle = get_current_aim_dir().angle()
 	var half_angle_rad = deg_to_rad(FLAMER_CONE_ANGLE * 0.5)
 
 	var pulse = 0.88 + sin(Time.get_ticks_msec() * 0.04) * 0.12
@@ -1430,6 +1488,104 @@ func _process_rts_camera_panning(delta: float):
 func _unhandled_input(event: InputEvent):
 	if not _is_local_authority(): return
 
+	# Switch back to mouse mode whenever mouse moves
+	if event is InputEventMouseMotion:
+		is_using_gamepad = false
+
+# --- CONTROLLER BUTTON MAPPINGS (PlayStation & Xbox) ---
+	if event is InputEventJoypadButton and event.pressed:
+		is_using_gamepad = true
+		var aim_target = get_current_aim_pos()
+		var is_l1_held = Input.is_joy_button_pressed(0, JOY_BUTTON_LEFT_SHOULDER)
+		var sister_pts = miracle_points if "miracle_points" in self else 0
+
+		# Start / Options (Pause Menu)
+		if event.button_index == JOY_BUTTON_START:
+			var p_ui = get_tree().get_first_node_in_group("pause_menu")
+			if p_ui and p_ui.has_method("toggle_pause"): p_ui.toggle_pause()
+			get_viewport().set_input_as_handled()
+			return
+
+		# Back / Share / Touchpad (Toggle Minimap)
+		if event.button_index == JOY_BUTTON_BACK:
+			var m_ui = get_tree().get_first_node_in_group("minimap_ui")
+			if m_ui and m_ui.has_method("toggle_fullscreen_map"): m_ui.toggle_fullscreen_map()
+			get_viewport().set_input_as_handled()
+			return
+
+		# ======================================================================
+		# SISTER OF BATTLE CONTROLLER BINDINGS & QUICK UPGRADES
+		# ======================================================================
+		if current_class == PlayerClass.SISTER_OF_BATTLE:
+			# --- QUICK UPGRADE SHORTCUTS (D-Pad OR L1 + Button) ---
+			if sister_pts > 0:
+				if is_l1_held:
+					match event.button_index:
+						JOY_BUTTON_A: request_upgrade_sister_ability(4); get_viewport().set_input_as_handled(); return # L1 + A: Dash
+						JOY_BUTTON_X: request_upgrade_sister_ability(0); get_viewport().set_input_as_handled(); return # L1 + X: Sanctuary
+						JOY_BUTTON_Y: request_upgrade_sister_ability(1); get_viewport().set_input_as_handled(); return # L1 + Y: Grenade
+						JOY_BUTTON_B: request_upgrade_sister_ability(2); get_viewport().set_input_as_handled(); return # L1 + B: Shield
+						JOY_BUTTON_RIGHT_SHOULDER: request_upgrade_sister_ability(3); get_viewport().set_input_as_handled(); return # L1 + R1: Pyre
+				else:
+					match event.button_index:
+						JOY_BUTTON_DPAD_LEFT:  request_upgrade_sister_ability(4); get_viewport().set_input_as_handled(); return # D-Pad Left: Dash
+						JOY_BUTTON_DPAD_UP:    request_upgrade_sister_ability(0); get_viewport().set_input_as_handled(); return # D-Pad Up: Sanctuary
+						JOY_BUTTON_DPAD_RIGHT: request_upgrade_sister_ability(1); get_viewport().set_input_as_handled(); return # D-Pad Right: Grenade
+						JOY_BUTTON_DPAD_DOWN:  request_upgrade_sister_ability(2); get_viewport().set_input_as_handled(); return # D-Pad Down: Shield
+
+			# --- STANDARD ABILITY CASTS ---
+			match event.button_index:
+				JOY_BUTTON_A: # ✕ (Cross) / A: Smart Directional Dash
+					if rank_dash > 0 and dash_cooldown_timer <= 0.0:
+						# Dash in movement direction if moving; aim direction if standing still!
+						var move_dir = velocity.normalized() if velocity.length_squared() > 100.0 else get_current_aim_dir()
+						rpc("perform_seraphim_dash", move_dir)
+				JOY_BUTTON_X: # □ (Square) / X: Sanctuary Relic [1]
+					if rank_intervention > 0 and holy_intervention_cooldown <= 0.0:
+						rpc("perform_holy_intervention", aim_target)
+				JOY_BUTTON_Y: # △ (Triangle) / Y: Holy Hand Grenade [2]
+					if rank_grenade > 0 and holy_grenade_cooldown <= 0.0:
+						rpc("perform_holy_grenade", aim_target)
+				JOY_BUTTON_B: # ○ (Circle) / B: Act of Faith [3]
+					if rank_shield > 0 and miracle_act_cooldown <= 0.0:
+						rpc("perform_miracle_act")
+				JOY_BUTTON_RIGHT_SHOULDER: # R1 / RB: Ultimate [4] (Righteous Pyre)
+					if rank_ultimate > 0 and sister_ultimate_cooldown <= 0.0:
+						rpc("perform_sister_ultimate", aim_target)
+				JOY_BUTTON_LEFT_SHOULDER: # L1 / LB: Interact with nearby structure [E]
+					request_interact_nearby_structure()
+
+			get_viewport().set_input_as_handled()
+			return
+
+		# ======================================================================
+		# TECH-PRIEST CONTROLLER BINDINGS
+		# ======================================================================
+		elif current_class == PlayerClass.MELEE:
+			match event.button_index:
+				JOY_BUTTON_A: # ✕ (Cross) / A: Confirm Build
+					if is_building_mode and preview_is_valid and is_instance_valid(preview_instance):
+						var main_node = get_tree().get_first_node_in_group("main")
+						if main_node:
+							main_node.rpc_id(1, "request_build_structure", preview_instance.global_position, selected_building_type)
+						AudioManager.play_sfx("building_place", preview_instance.global_position, 0.0)
+						_cancel_build_mode()
+				JOY_BUTTON_B: # ○ (Circle) / B: Cancel Build Mode
+					if is_building_mode: _cancel_build_mode()
+				JOY_BUTTON_X: # □ (Square) / X: Build Barricade [1]
+					toggle_build_mode(0)
+				JOY_BUTTON_Y: # △ (Triangle) / Y: Build Cognis Turret [2]
+					toggle_build_mode(2)
+				JOY_BUTTON_RIGHT_SHOULDER: # R1 / RB: Deploy Servo-Skull [C]
+					if multiplayer.has_multiplayer_peer(): rpc_id(1, "request_spawn_servo_skull")
+					else: request_spawn_servo_skull()
+				JOY_BUTTON_LEFT_SHOULDER: # L1 / LB: Interact [E]
+					if is_building_mode: _cancel_build_mode()
+					else: request_interact_nearby_structure()
+			get_viewport().set_input_as_handled()
+			return
+
+	# --- KEYBOARD & MOUSE INPUT ---
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
 			if _handle_modal_esc_close():
@@ -1440,9 +1596,6 @@ func _unhandled_input(event: InputEvent):
 			var m_ui = get_tree().get_first_node_in_group("minimap_ui")
 			if m_ui and m_ui.has_method("toggle_fullscreen_map"):
 				m_ui.toggle_fullscreen_map()
-			elif m_ui and "is_fullscreen" in m_ui:
-				m_ui.is_fullscreen = not m_ui.is_fullscreen
-				m_ui.queue_redraw()
 			get_viewport().set_input_as_handled()
 			return
 
